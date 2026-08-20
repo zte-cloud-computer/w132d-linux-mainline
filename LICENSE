@@ -1,0 +1,16 @@
+# Licensing notice
+
+This repository is not distributed under one blanket license.
+
+Files carrying `SPDX-License-Identifier: MIT` are available under the MIT
+License in `LICENSES/MIT`.
+
+The W132D device tree carries
+`SPDX-License-Identifier: (GPL-2.0+ OR MIT)` and may be used under either of
+those terms. Kernel and third-party driver patches carrying
+`SPDX-License-Identifier: GPL-2.0-only` are available under the GNU General
+Public License version 2 only; see `LICENSES/GPL-2.0-only`.
+
+This notice does not relicense third-party projects, firmware, boot firmware,
+calibration data, generated binaries, or any other material not included in
+this repository. See `THIRD_PARTY.md` before redistributing a build.

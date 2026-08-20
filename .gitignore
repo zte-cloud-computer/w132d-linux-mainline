@@ -1,0 +1,47 @@
+# Build outputs and disk images
+*.img
+*.img.*
+*.xz
+*.7z
+*.zip
+*.bin
+*.dtb
+*.ko
+*.o
+*.a
+*.so
+*.so.*
+*.elf
+*.map
+out/
+build/
+release/
+
+# Device backups, proprietary inputs, firmware, and calibration
+w132d-a9/
+vendor-blobs/
+private/
+firmware/
+wcnmodem.bin
+wifimac.txt
+wifi_board_config.ini
+wifi_*ant.ini
+bt_configure_pskey.ini
+bt_configure_rf.ini
+rk3528_spl_loader*.bin
+
+# Local research clones and diagnostics
+.research-*/
+*.log
+*.pcap
+*.pcapng
+*.journal
+*.nmconnection
+
+# Editor and operating-system files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*~
+*.swp

@@ -1,0 +1,188 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * ZTE Cloud Computer W132D
+ * Rockchip RK3528 quad-core Cortex-A53, 2GB DDR4, 32GB eMMC
+ *
+ * The vendor firmware is based on the Rockchip "rk3528-demo4-ddr4-v11"
+ * board (Android boot image header identifies rk3528-demo4-ddr4-v11).
+ * This device tree is therefore based on the mainline-style
+ * rk3528-demo4-ddr4-v10 board support in the Armbian 6.1 Rockchip BSP
+ * kernel, adjusted to the W132D hardware:
+ *   - GMAC0 with the RK3528 internal 10/100 PHY (RMII)
+ *   - 1x USB3 host (DWC3, high-speed only) + EHCI/OHCI USB2 ports
+ *   - HDMI output (VOP + DW-HDMI + HDMI PHY)
+ *   - eMMC HS400, no SD card slot
+ *   - Unisoc UWE5622 WiFi and Bluetooth over the shared WCN SDIO link
+ */
+
+/dts-v1/;
+
+#include "rk3528-demo4-ddr4-v10.dtsi"
+#include "rk3528-linux.dtsi"
+#include <dt-bindings/clock/rk3528-cru.h>
+#include <dt-bindings/display/rockchip_vop.h>
+
+/ {
+	model = "ZTE Cloud Computer W132D";
+	compatible = "zte,w132d", "rockchip,rk3528-demo4-ddr4-v10", "rockchip,rk3528";
+
+	chosen {
+		bootargs = "earlycon=uart8250,mmio32,0xff9f0000 console=ttyS0,115200n8 root=UUID=b921b045-1df0-41c3-af44-4c6f280d3fae rw rootwait";
+	};
+
+	memory@0 {
+		device_type = "memory";
+		reg = <0x0 0x0 0x0 0x80000000>; /* 2GB DDR4 */
+	};
+};
+
+/* GM8220S USB2 hub reset is active-low; keep it deasserted. */
+&gpio4 {
+	usb_hub_reset_hog: usb-hub-reset-hog {
+		gpio-hog;
+		gpios = <RK_PB5 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "usb-hub-reset";
+	};
+};
+
+/* Keep the non-secure WDT available without its unused pretimeout IRQ. */
+&wdt {
+	/delete-property/ interrupts;
+	resets = <&cru SRST_PRESETN_WDT_NS>;
+	reset-names = "reset";
+	status = "okay";
+};
+
+/*
+ * The Android 9 board DT leaves runtime DMC scaling disabled. Keep the DDR
+ * at the rate initialized by the vendor SPL/BL31 instead of issuing SCMI/SMC
+ * frequency changes through the 6.1 BSP DMC driver.
+ */
+&dmc {
+	status = "disabled";
+};
+
+/* W132D does not use the demo-board PWM infrared receiver. */
+&pwm3 {
+	status = "disabled";
+};
+
+/* Use the standard 8250 UART0 console instead of the Rockchip FIQ debugger. */
+&{/fiq-debugger} {
+	status = "disabled";
+};
+
+/* Match the RK3528 VOP settings used by the Android 9 v11 firmware. */
+&vop {
+	esmart_lb_mode = /bits/ 8 <3>;
+	support-multi-area;
+
+	ports {
+		port@0 {
+			rockchip,plane-mask = <(1 << ROCKCHIP_VOP2_CLUSTER0 |
+						1 << ROCKCHIP_VOP2_ESMART0)>;
+			rockchip,primary-plane = <ROCKCHIP_VOP2_CLUSTER0>;
+		};
+	};
+};
+
+&uart0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart0m0_xfer>;
+	status = "okay";
+};
+
+/* The W132D has no SD card slot. */
+&sdmmc {
+	status = "disabled";
+};
+
+/*
+ * Power the UWE5622 before the non-removable SDIO host probes. The vendor
+ * WCN driver's Rockchip card-detect hook is a no-op in this BSP, so initial
+ * enumeration must not depend on a later software rescan.
+ */
+&sdio_pwrseq {
+	pinctrl-0 = <&wifi_enable_w132d &wifi_reset_w132d>;
+	reset-gpios = <&gpio3 RK_PB2 GPIO_ACTIVE_LOW>;
+	status = "okay";
+};
+
+&sdio1 {
+	max-frequency = <200000000>;
+	mmc-pwrseq = <&sdio_pwrseq>;
+	status = "okay";
+};
+
+&pinctrl {
+	sdio-pwrseq {
+		wifi_enable_w132d: wifi-enable-w132d {
+			rockchip,pins = <3 RK_PB2 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+
+		wifi_reset_w132d: wifi-reset-w132d {
+			rockchip,pins = <3 RK_PC4 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+};
+
+/ {
+	sprd_wlan: sprd-wlan {
+		compatible = "sprd,unisoc-wifi";
+		status = "okay";
+	};
+
+	mtty {
+		compatible = "sprd,mtty";
+		sprd,name = "ttyBT";
+		status = "okay";
+	};
+
+	 uwe_bsp: uwe-bsp {
+		compatible = "unisoc,uwe_bsp";
+		bt-reg-on = <&gpio3 RK_PC2 GPIO_ACTIVE_HIGH>;
+		sdio-ext-int-gpio = <&gpio3 RK_PC3 GPIO_ACTIVE_HIGH>;
+		bt-wake-host;
+		bt-wake-host-gpio = <&gpio3 RK_PC1 GPIO_ACTIVE_HIGH>;
+		unisoc,btwf-file-name = "/lib/firmware/uwe5622/wcnmodem.bin";
+		data-irq;
+		blksz-512;
+		keep-power-on;
+		status = "okay";
+	};
+};
+
+/* Bluetooth data uses WCN SDIO ttyBT, not a physical UART. */
+&uart2 {
+	status = "disabled";
+};
+
+&wireless_wlan {
+	status = "disabled";
+};
+
+&wireless_bluetooth {
+	status = "disabled";
+};
+
+/* The USB3 port is host-only (Type-A); no OTG role switching. */
+&usbdrd_dwc3 {
+	dr_mode = "host";
+	/delete-property/ extcon;
+};
+
+/* The box only exposes power-red and power-green LEDs. */
+&leds {
+	ir {
+		status = "disabled";
+	};
+
+	net-red {
+		status = "disabled";
+	};
+
+	net-green {
+		status = "disabled";
+	};
+};

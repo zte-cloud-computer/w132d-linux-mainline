@@ -1,0 +1,152 @@
+SPDX-License-Identifier: GPL-2.0-only
+
+diff --git a/BT/tty-sdio/sdio.c b/BT/tty-sdio/sdio.c
+index 63a185e..453f11c 100644
+--- a/BT/tty-sdio/sdio.c
++++ b/BT/tty-sdio/sdio.c
+@@ -75,23 +75,51 @@ static int marlin_sdio_tx_cb(int chn, struct mbuf_t *head, struct mbuf_t *tail,
+ 
+ static int marlin_sdio_rx_cb(int chn, struct mbuf_t *head, struct mbuf_t *tail, int num)
+ {
+-    int block_size;
++    int block_size = 0;
++    int ret = 0;
+ 
+-    block_size = ((head->buf[2] & 0x7F) << 9) + (head->buf[1] << 1) + (head->buf[0] >> 7);
+     BT_VER("%s +++\n", __func__);
+ 
+-    if (bt_data_if_cb == NULL)
++    if (!head || !tail || num <= 0 || !head->buf || head->len <= 0)
++    {
++        pr_err("BT_RX_BOUNDS invalid list head=%p tail=%p num=%d\n",
++               head, tail, num);
++        ret = -EINVAL;
++        goto recycle;
++    }
++
++    block_size = ((head->buf[2] & 0x7F) << 9) +
++                 (head->buf[1] << 1) + (head->buf[0] >> 7);
++    /* head->len is the payload length; the public header is extra. */
++    if (block_size <= 0 || block_size > head->len)
+     {
+-        return -1;
++        pr_err("BT_RX_BOUNDS reject block=%d mbuf_len=%d num=%d\n",
++               block_size, head->len, num);
++        ret = -EPROTO;
++        goto recycle;
++    }
++
++    if (bt_data_if_cb == NULL || bt_data_if_cb->recv == NULL)
++    {
++        pr_err("BT_RX_BOUNDS receive callback unavailable\n");
++        ret = -ENODEV;
++        goto recycle;
+     }
+ 
+     BT_VERDUMP((unsigned char *)head->buf + BT_SDIO_HEAD_LEN, block_size);
+ 
+     bt_data_if_cb->recv((unsigned char *)head->buf + BT_SDIO_HEAD_LEN, block_size);
+-    sprdwcn_bus_push_list(chn, head, tail, num);
++
++recycle:
++    if (head && tail && num > 0 &&
++        sprdwcn_bus_push_list(chn, head, tail, num))
++    {
++        pr_err("BT_RX_BOUNDS failed to recycle RX list\n");
++        return -EIO;
++    }
+     BT_VER("%s ---\n", __func__);
+ 
+-    return 0;
++    return ret;
+ }
+ 
+ 
+diff --git a/BT/tty-sdio/sitm.c b/BT/tty-sdio/sitm.c
+index 9126c5a..a5b50cf 100644
+--- a/BT/tty-sdio/sitm.c
++++ b/BT/tty-sdio/sitm.c
+@@ -31,12 +31,21 @@ int sitm_init(void)
+ {
+     rd = kmalloc(sizeof(struct packet_receive_data_t),
+                  GFP_KERNEL);
++    if (!rd)
++    {
++        pr_err("SITM_BOUNDS no memory for parser state\n");
++        return -ENOMEM;
++    }
++
+     memset(rd, 0, sizeof(struct packet_receive_data_t));
+ 
+     if (kfifo_alloc(&rd->fifo,
+                     HCI_HAL_SERIAL_BUFFER_SIZE, GFP_KERNEL))
+     {
+-        pr_err("no memory for sitm ring buf");
++        pr_err("SITM_BOUNDS no memory for ring buffer\n");
++        kfree(rd);
++        rd = NULL;
++        return -ENOMEM;
+     }
+ 
+     return 0;
+@@ -69,6 +78,12 @@ void parse_frame(data_ready_cb data_ready, frame_complete_cb frame_complete)
+     uint8_t byte;
+     size_t buffer_size, bytes_read;
+ 
++    if (!rd || !data_ready || !frame_complete)
++    {
++        pr_err("SITM_BOUNDS parser callback unavailable\n");
++        return;
++    }
++
+     while (data_ready(&byte, 1) == 1)
+     {
+         switch (rd->state)
+@@ -102,6 +117,15 @@ void parse_frame(data_ready_cb data_ready, frame_complete_cb frame_complete)
+                     : byte;
+                 buffer_size = rd->index
+                               + rd->bytes_remaining;
++                if (buffer_size > HCI_HAL_SERIAL_BUFFER_SIZE)
++                {
++                    pr_err("SITM_BOUNDS drop HCI type=%u frame=%zu limit=%u\n",
++                           rd->type, buffer_size,
++                           HCI_HAL_SERIAL_BUFFER_SIZE);
++                    rd->state = rd->bytes_remaining > 0 ?
++                                IGNORE : BRAND_NEW;
++                    break;
++                }
+                 memcpy(rd->buffer,
+                        rd->preamble,
+                        rd->index);
+@@ -113,6 +137,16 @@ void parse_frame(data_ready_cb data_ready, frame_complete_cb frame_complete)
+             break;
+ 
+         case BODY:
++            if (rd->index >= HCI_HAL_SERIAL_BUFFER_SIZE ||
++                rd->bytes_remaining >
++                HCI_HAL_SERIAL_BUFFER_SIZE - rd->index)
++            {
++                pr_err("SITM_BOUNDS invalid body index=%u remaining=%u\n",
++                       rd->index, rd->bytes_remaining);
++                rd->state = rd->bytes_remaining > 0 ?
++                            IGNORE : BRAND_NEW;
++                break;
++            }
+             rd->buffer[rd->index] = byte;
+             rd->index++;
+             rd->bytes_remaining--;
+@@ -174,10 +208,11 @@ int sitm_write(const uint8_t *buf, int count, frame_complete_cb frame_complete)
+ {
+     int ret;
+ 
+-    if (!rd)
++    if (!rd || !buf || !frame_complete || count <= 0)
+     {
+-        pr_err("hci fifo no memory\n");
+-        return count;
++        pr_err("SITM_BOUNDS invalid write state=%p buf=%p count=%d\n",
++               rd, buf, count);
++        return -EINVAL;
+     }
+ 
+     ret = kfifo_avail(&rd->fifo);

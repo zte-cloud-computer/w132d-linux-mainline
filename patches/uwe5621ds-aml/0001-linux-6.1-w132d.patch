@@ -1,0 +1,1866 @@
+SPDX-License-Identifier: GPL-2.0-only
+
+diff --git a/unisocwcn/Makefile b/unisocwcn/Makefile
+index 918660f..63190fa 100644
+--- a/unisocwcn/Makefile
++++ b/unisocwcn/Makefile
+@@ -68,8 +68,7 @@ endif
+ ifeq ($(CONFIG_RK_WIFI_DEVICE_UWE5622),y)
+ export CONFIG_WCN_SDIO = y
+ #export CONFIG_WCN_USB = y
+-#ccflags-y += -DCONFIG_CHECK_DRIVER_BY_CHIPID
+-ccflags-y += -DCONFIG_UWE5622
++ccflags-y += -DCONFIG_CHECK_DRIVER_BY_CHIPID
+ BSP_CHIP_ID := uwe5622
+ WCN_HW_TYPE := sdio
+ endif
+diff --git a/unisocwcn/platform/rdc_debug.c b/unisocwcn/platform/rdc_debug.c
+index 75d455e..04a2f98 100644
+--- a/unisocwcn/platform/rdc_debug.c
++++ b/unisocwcn/platform/rdc_debug.c
+@@ -1,6 +1,7 @@
+ #include <linux/file.h>
+ #include <linux/fs.h>
+ #include <linux/kthread.h>
++#include <linux/namei.h>
+ #include <linux/version.h>
+ #include <linux/vmalloc.h>
+ #include <marlin_platform.h>
+@@ -69,6 +70,24 @@ static char debug_inited;
+ static char debug_user_inited;
+ static char config_inited;
+ 
++static int wcn_stat_path(const char *name, struct kstat *stat)
++{
++#if KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE
++	struct path path;
++	int ret;
++
++	ret = kern_path(name, LOOKUP_FOLLOW, &path);
++	if (ret)
++		return ret;
++	ret = vfs_getattr(&path, stat, STATX_BASIC_STATS,
++			  AT_STATX_SYNC_AS_STAT);
++	path_put(&path);
++	return ret;
++#else
++	return vfs_stat(name, stat);
++#endif
++}
++
+ static int wcn_mkdir(char *path)
+ {
+ 	int result = 0;
+@@ -95,7 +114,9 @@ static int wcn_find_cp2_file_num(char *path, loff_t *pos)
+ {
+ 	int i;
+ 	struct kstat config_stat;
++#if KERNEL_VERSION(5, 10, 0) > LINUX_VERSION_CODE
+ 	mm_segment_t fs_old;
++#endif
+ 	int ret = 0;
+ 	/*first file whose size less than wcn_cp2_log_limit_size*/
+ 	int first_small_file = 0;
+@@ -106,13 +127,15 @@ static int wcn_find_cp2_file_num(char *path, loff_t *pos)
+ 	int num = 0;
+ 	int exist_file_num = 0;
+ 
++#if KERNEL_VERSION(5, 10, 0) > LINUX_VERSION_CODE
+ 	fs_old = get_fs();
+ 	set_fs(KERNEL_DS);
++#endif
+ 
+ 	if (wcn_cp2_log_cover_old) {
+ 		for (i = 0; i < wcn_cp2_file_max_num; i++) {
+ 			sprintf(wcn_cp2_file_path, path, i);
+-			ret = vfs_stat(wcn_cp2_file_path, &config_stat);
++			ret = wcn_stat_path(wcn_cp2_file_path, &config_stat);
+ 			if (ret)
+ 				break;
+ 			exist_file_num++;
+@@ -172,7 +195,9 @@ static int wcn_find_cp2_file_num(char *path, loff_t *pos)
+ 		} else
+ 			filp_close(fp, NULL);
+ 	}
++#if KERNEL_VERSION(5, 10, 0) > LINUX_VERSION_CODE
+ 	set_fs(fs_old);
++#endif
+ 	return num;
+ }
+ 
+@@ -441,7 +466,9 @@ static void wcn_config_log_file(void)
+ 	struct kstat config_stat;
+ 	int config_size = 0;
+ 	int read_len = 0;
++#if KERNEL_VERSION(5, 10, 0) > LINUX_VERSION_CODE
+ 	mm_segment_t fs_old;
++#endif
+ 	int ret;
+ 	char *buf;
+ 	char *buf_end;
+@@ -454,10 +481,12 @@ static void wcn_config_log_file(void)
+ 	int config_max_num = 0;
+ 	int index = 0;
+ 
++#if KERNEL_VERSION(5, 10, 0) > LINUX_VERSION_CODE
+ 	fs_old = get_fs();
+ 	set_fs(KERNEL_DS);
++#endif
+ 	for (index = 0; index < WCN_DEBUG_CFG_MAX_PATH_NUM; index++) {
+-		ret = vfs_stat(wcn_cp2_config_path[index], &config_stat);
++		ret = wcn_stat_path(wcn_cp2_config_path[index], &config_stat);
+ 		if (!ret) {
+ 			config_size = (int)config_stat.size;
+ 			WCN_INFO("%s: find config file:%s size:%d\n",
+@@ -466,7 +495,9 @@ static void wcn_config_log_file(void)
+ 			break;
+ 		}
+ 	}
++#if KERNEL_VERSION(5, 10, 0) > LINUX_VERSION_CODE
+ 	set_fs(fs_old);
++#endif
+ 	if (index == WCN_DEBUG_CFG_MAX_PATH_NUM) {
+ 		WCN_INFO("%s: there is no unisoc_cp2log_config.txt\n",
+ 			 __func__);
+diff --git a/unisocwcn/platform/wcn_boot.c b/unisocwcn/platform/wcn_boot.c
+index 540e6d9..f12f1b6 100644
+--- a/unisocwcn/platform/wcn_boot.c
++++ b/unisocwcn/platform/wcn_boot.c
+@@ -325,8 +325,6 @@ static struct regmap *reg_map;
+ #define AFC_CALI_READ_FINISH 0x12121212
+ #define WCN_AFC_CALI_PATH "/productinfo/wcn/tsx_bt_data.txt"
+ 
+-#define BIT(nr) (1UL << (nr))
+-
+ #ifdef CONFIG_WCN_DOWNLOAD_FIRMWARE_FROM_HEX
+ #define POWER_WQ_DELAYED_MS 0
+ #else
+diff --git a/unisocwcn/platform/wcn_misc.c b/unisocwcn/platform/wcn_misc.c
+index dd6bb03..9037ad3 100644
+--- a/unisocwcn/platform/wcn_misc.c
++++ b/unisocwcn/platform/wcn_misc.c
+@@ -18,6 +18,8 @@
+ #include <linux/mutex.h>
+ #include <linux/version.h>
+ #include <linux/time.h>
++#include <linux/ktime.h>
++#include <linux/timekeeping.h>
+ #if KERNEL_VERSION(4, 14, 0) <= LINUX_VERSION_CODE
+ #include <linux/sched/clock.h>
+ #endif
+@@ -27,6 +29,12 @@
+ #include "wcn_txrx.h"
+ #include "mdbg_type.h"
+ 
++#if KERNEL_VERSION(5, 6, 0) <= LINUX_VERSION_CODE
++typedef struct timespec64 wcn_timespec_t;
++#else
++typedef struct timespec wcn_timespec_t;
++#endif
++
+ static struct atcmd_fifo s_atcmd_owner;
+ static unsigned long int s_marlin_bootup_time;
+ 
+@@ -100,7 +108,7 @@ long int mdbg_send_atcmd(char *buf, long int len, enum atcmd_owner owner)
+ }
+ 
+ /* copy from function: kdb_gmtime */
+-static void wcn_gmtime(struct timespec *tv, struct wcn_tm *tm)
++static void wcn_gmtime(wcn_timespec_t *tv, struct wcn_tm *tm)
+ {
+ 	/* This will work from 1970-2099, 2100 is not a leap year */
+ 	static int mon_day[] = { 31, 29, 31, 30, 31, 30, 31,
+@@ -130,13 +138,17 @@ static void wcn_gmtime(struct timespec *tv, struct wcn_tm *tm)
+ /* AP notify BTWF time by at+aptime=... cmd */
+ long int wcn_ap_notify_btwf_time(void)
+ {
+-	struct timespec now;
++	wcn_timespec_t now;
+ 	struct wcn_tm tm;
+ 	char aptime[64];
+ 	long int send_cnt = 0;
+ 
+ 	/* get ap kernel time and transfer to China-BeiJing Time */
++#if KERNEL_VERSION(5, 6, 0) <= LINUX_VERSION_CODE
++	ktime_get_real_ts64(&now);
++#else
+ 	now = current_kernel_time();
++#endif
+ 	wcn_gmtime(&now, &tm);
+ 	tm.tm_hour = (tm.tm_hour + WCN_BTWF_TIME_OFFSET) % 24;
+ 
+diff --git a/unisocwcn/platform/wcn_parn_parser.c b/unisocwcn/platform/wcn_parn_parser.c
+index 0a61282..b729147 100644
+--- a/unisocwcn/platform/wcn_parn_parser.c
++++ b/unisocwcn/platform/wcn_parn_parser.c
+@@ -142,7 +142,10 @@ static int prefixcmp(const char *str, const char *prefix)
+ 			return (unsigned char)*prefix - (unsigned char)*str;
+ }
+ 
+-#if KERNEL_VERSION(3, 19, 0) <= LINUX_VERSION_CODE
++#if KERNEL_VERSION(6, 1, 0) <= LINUX_VERSION_CODE
++static bool find_callback(struct dir_context *ctx, const char *name, int namlen,
++		     loff_t offset, u64 ino, unsigned int d_type)
++#elif KERNEL_VERSION(3, 19, 0) <= LINUX_VERSION_CODE
+ static int find_callback(struct dir_context *ctx, const char *name, int namlen,
+ 		     loff_t offset, u64 ino, unsigned int d_type)
+ #else
+@@ -159,7 +162,11 @@ static int find_callback(void *ctx, const char *name, int namlen,
+ 		WCN_INFO("full fstab name %s\n", fstab_name);
+ 	}
+ 
++#if KERNEL_VERSION(6, 1, 0) <= LINUX_VERSION_CODE
++	return true;
++#else
+ 	return 0;
++#endif
+ }
+ 
+ static struct dir_context ctx =  {
+@@ -183,7 +190,7 @@ int parse_firmware_path(char *firmware_path)
+ 			continue;
+ 		}
+ 		memset(fstab_name, 0, sizeof(fstab_name));
+-		strncpy(fstab_name, fstab_dir[loop], sizeof(fstab_dir[loop]));
++		strscpy(fstab_name, fstab_dir[loop], sizeof(fstab_name));
+ 		if (strlen(fstab_name) > 1)
+ 			fstab_name[strlen(fstab_name)] = '/';
+ 		iterate_dir(file1, &ctx);
+diff --git a/unisocwcn/platform/wcn_procfs.c b/unisocwcn/platform/wcn_procfs.c
+index e912021..098967f 100644
+--- a/unisocwcn/platform/wcn_procfs.c
++++ b/unisocwcn/platform/wcn_procfs.c
+@@ -179,7 +179,6 @@ static int mdbg_assert_read(int channel, struct mbuf_t *head,
+ #endif
+ 	return 0;
+ }
+-EXPORT_SYMBOL_GPL(mdbg_assert_read);
+ 
+ static int mdbg_loopcheck_read(int channel, struct mbuf_t *head,
+ 			struct mbuf_t *tail, int num)
+@@ -209,7 +208,6 @@ static int mdbg_loopcheck_read(int channel, struct mbuf_t *head,
+ 
+ 	return 0;
+ }
+-EXPORT_SYMBOL_GPL(mdbg_loopcheck_read);
+ 
+ static int mdbg_at_cmd_read(int channel, struct mbuf_t *head,
+ 		     struct mbuf_t *tail, int num)
+@@ -263,7 +261,6 @@ static int mdbg_at_cmd_read(int channel, struct mbuf_t *head,
+ 
+ 	return 0;
+ }
+-EXPORT_SYMBOL_GPL(mdbg_at_cmd_read);
+ 
+ #ifdef CONFIG_WCN_PCIE
+ static int mdbg_tx_comptele_cb(int chn, int timeout)
+@@ -420,6 +417,15 @@ static int mdbg_snap_shoot_seq_open(struct inode *inode, struct file *file)
+ 	return seq_open(file, &mdbg_snap_shoot_seq_ops);
+ }
+ 
++#if KERNEL_VERSION(5, 6, 0) <= LINUX_VERSION_CODE
++static const struct proc_ops mdbg_snap_shoot_seq_fops = {
++	.proc_open = mdbg_snap_shoot_seq_open,
++	.proc_read = seq_read,
++	.proc_write = mdbg_snap_shoot_seq_write,
++	.proc_lseek = seq_lseek,
++	.proc_release = seq_release
++};
++#else
+ static const struct file_operations mdbg_snap_shoot_seq_fops = {
+ 	.open = mdbg_snap_shoot_seq_open,
+ 	.read = seq_read,
+@@ -427,11 +433,16 @@ static const struct file_operations mdbg_snap_shoot_seq_fops = {
+ 	.llseek = seq_lseek,
+ 	.release = seq_release
+ };
++#endif
+ 
+ static int mdbg_proc_open(struct inode *inode, struct file *filp)
+ {
+ 	struct mdbg_proc_entry *entry =
++#if KERNEL_VERSION(5, 17, 0) <= LINUX_VERSION_CODE
++		(struct mdbg_proc_entry *)pde_data(inode);
++#else
+ 		(struct mdbg_proc_entry *)PDE_DATA(inode);
++#endif
+ 	filp->private_data = entry;
+ 
+ 	return 0;
+@@ -1007,6 +1018,15 @@ static unsigned int mdbg_proc_poll(struct file *filp, poll_table *wait)
+ 	return mask;
+ }
+ 
++#if KERNEL_VERSION(5, 6, 0) <= LINUX_VERSION_CODE
++static const struct proc_ops mdbg_proc_fops = {
++	.proc_open	= mdbg_proc_open,
++	.proc_release	= mdbg_proc_release,
++	.proc_read	= mdbg_proc_read,
++	.proc_write	= mdbg_proc_write,
++	.proc_poll	= mdbg_proc_poll,
++};
++#else
+ static const struct file_operations mdbg_proc_fops = {
+ 	.open		= mdbg_proc_open,
+ 	.release	= mdbg_proc_release,
+@@ -1014,6 +1034,7 @@ static const struct file_operations mdbg_proc_fops = {
+ 	.write		= mdbg_proc_write,
+ 	.poll		= mdbg_proc_poll,
+ };
++#endif
+ 
+ int mdbg_memory_alloc(void)
+ {
+diff --git a/unisocwcn/sdio/sdiohal.h b/unisocwcn/sdio/sdiohal.h
+index 0dbaaac..3845848 100644
+--- a/unisocwcn/sdio/sdiohal.h
++++ b/unisocwcn/sdio/sdiohal.h
+@@ -5,6 +5,8 @@
+ #include <linux/device.h>
+ #include <linux/scatterlist.h>
+ #include <linux/slab.h>
++#include <linux/ktime.h>
++#include <linux/timekeeping.h>
+ #include <linux/version.h>
+ #if KERNEL_VERSION(4, 14, 0) <= LINUX_VERSION_CODE
+ #include <linux/wakelock.h>
+@@ -13,6 +15,16 @@
+ #include <linux/sched.h>
+ #endif
+ #include <wcn_bus.h>
++
++#if KERNEL_VERSION(5, 6, 0) <= LINUX_VERSION_CODE
++typedef struct timespec64 sdiohal_timespec;
++#define sdiohal_get_time(ts) ktime_get_real_ts64(ts)
++#define sdiohal_time_to_ns(ts) timespec64_to_ns(ts)
++#else
++typedef struct timespec sdiohal_timespec;
++#define sdiohal_get_time(ts) getnstimeofday(ts)
++#define sdiohal_time_to_ns(ts) timespec_to_ns(ts)
++#endif
+ #ifdef CONFIG_WCN_SLP
+ #include "../sleep/sdio_int.h"
+ #include "../sleep/slp_mgr.h"
+@@ -361,10 +373,10 @@ struct sdiohal_data_t {
+ 	char *dtbs_buf;
+ 
+ 	/* for performance statics */
+-	struct timespec tm_begin_sch;
+-	struct timespec tm_end_sch;
+-	struct timespec tm_begin_irq;
+-	struct timespec tm_end_irq;
++	sdiohal_timespec tm_begin_sch;
++	sdiohal_timespec tm_end_sch;
++	sdiohal_timespec tm_begin_irq;
++	sdiohal_timespec tm_end_irq;
+ 
+ #if KERNEL_VERSION(4, 14, 0) <= LINUX_VERSION_CODE
+ 	struct wake_lock scan_wl;
+diff --git a/unisocwcn/sdio/sdiohal_common.c b/unisocwcn/sdio/sdiohal_common.c
+index b571467..4aba2e4 100644
+--- a/unisocwcn/sdio/sdiohal_common.c
++++ b/unisocwcn/sdio/sdiohal_common.c
+@@ -684,7 +684,7 @@ int sdiohal_tx_list_denq(struct sdiohal_list_t *data_list)
+ 	struct mutex *chn_callback = p_data->callback_lock;
+ 	struct mchn_ops_t *sdiohal_ops;
+ 
+-	struct timespec tm_begin, tm_end;
++	sdiohal_timespec tm_begin, tm_end;
+ 	static long time_total_ns;
+ 	static int times_count;
+ 
+@@ -708,7 +708,7 @@ int sdiohal_tx_list_denq(struct sdiohal_list_t *data_list)
+ 			continue;
+ 		}
+ 
+-		getnstimeofday(&tm_begin);
++		sdiohal_get_time(&tm_begin);
+ 
+ 		sdiohal_callback_lock(&chn_callback[channel]);
+ 		sdiohal_ops = chn_ops(channel);
+@@ -744,9 +744,9 @@ int sdiohal_tx_list_denq(struct sdiohal_list_t *data_list)
+ 		tx_list->node_num = 0;
+ 		sdiohal_callback_unlock(&chn_callback[channel]);
+ 
+-		getnstimeofday(&tm_end);
+-		time_total_ns += timespec_to_ns(&tm_end)
+-			- timespec_to_ns(&tm_begin);
++		sdiohal_get_time(&tm_end);
++		time_total_ns += sdiohal_time_to_ns(&tm_end)
++			- sdiohal_time_to_ns(&tm_begin);
+ 		times_count++;
+ 		if (!(times_count % PERFORMANCE_COUNT)) {
+ 			sdiohal_pr_perf("tx pop callback,avg time:%ld\n",
+@@ -768,7 +768,7 @@ int sdiohal_rx_list_dispatch(void)
+ 	struct mutex *chn_callback = p_data->callback_lock;
+ 	struct mchn_ops_t *sdiohal_ops;
+ 
+-	struct timespec tm_begin, tm_end;
++	sdiohal_timespec tm_begin, tm_end;
+ 	static long time_total_ns;
+ 	static int times_count;
+ 
+@@ -793,7 +793,7 @@ int sdiohal_rx_list_dispatch(void)
+ 			continue;
+ 		}
+ 
+-		getnstimeofday(&tm_begin);
++		sdiohal_get_time(&tm_begin);
+ 
+ 		sdiohal_callback_lock(&chn_callback[channel]);
+ 		sdiohal_ops = chn_ops(channel);
+@@ -834,9 +834,9 @@ int sdiohal_rx_list_dispatch(void)
+ 		rx_list->node_num = 0;
+ 		sdiohal_callback_unlock(&chn_callback[channel]);
+ 
+-		getnstimeofday(&tm_end);
+-		time_total_ns += timespec_to_ns(&tm_end)
+-			- timespec_to_ns(&tm_begin);
++		sdiohal_get_time(&tm_end);
++		time_total_ns += sdiohal_time_to_ns(&tm_end)
++			- sdiohal_time_to_ns(&tm_begin);
+ 		times_count++;
+ 		if (!(times_count % PERFORMANCE_COUNT)) {
+ 			sdiohal_pr_perf("rx pop callback,avg time:%ld\n",
+@@ -872,6 +872,7 @@ int sdiohal_rx_list_free(struct mbuf_t *mbuf_head,
+ {
+ 	struct sdiohal_data_t *p_data = sdiohal_get_data();
+ 	void *data = NULL;
++	struct page *page;
+ 	struct mbuf_t *mbuf_node;
+ 	int i;
+ 
+@@ -879,25 +880,16 @@ int sdiohal_rx_list_free(struct mbuf_t *mbuf_head,
+ 	for (i = 0; i < num; i++, mbuf_node = mbuf_node->next) {
+ 		if (mbuf_node->buf) {
+ 			data = mbuf_node->buf;
++			page = virt_to_head_page(data);
+ 			sdiohal_debug("%s, before put page addr:%p,count:%d\n",
+-				__func__, virt_to_head_page(data),
++				__func__, page,
+ #if KERNEL_VERSION(4, 7, 0) <= LINUX_VERSION_CODE
+-				atomic_read(
+-					&virt_to_head_page(data)->_refcount));
++				atomic_read(&page->_refcount));
+ #else
+-				atomic_read(&virt_to_head_page(data)->_count));
++				atomic_read(&page->_count));
+ #endif
+-			put_page(virt_to_head_page(data));
+-			/* After put_page, count will be subtracted 1. */
+-			sdiohal_debug("%s, after put page addr:%p,count:%d\n",
+-				__func__, virt_to_head_page(data),
+-#if KERNEL_VERSION(4, 7, 0) <= LINUX_VERSION_CODE
+-				atomic_read(
+-					&virt_to_head_page(data)->_refcount));
+-#else
+-				atomic_read(&virt_to_head_page(data)->_count));
+-#endif
+-
++			/* Do not inspect the page after put_page(); it may be freed. */
++			put_page(page);
+ 			mbuf_node->buf = NULL;
+ 		}
+ 		mbuf_node->len = 0;
+@@ -1206,13 +1198,13 @@ int sdiohal_list_push(int channel, struct mbuf_t *head,
+ 		      struct mbuf_t *tail, int num)
+ {
+ 	struct sdiohal_data_t *p_data = sdiohal_get_data();
+-	struct timespec tm_begin, tm_end;
++	sdiohal_timespec tm_begin, tm_end;
+ 	static long time_total_ns;
+ 	static int times_count;
+ 	struct mbuf_t *mbuf_node;
+ 	int i;
+ 
+-	getnstimeofday(&tm_begin);
++	sdiohal_get_time(&tm_begin);
+ 
+ 	if (unlikely(p_data->flag_init != true))
+ 		return -ENODEV;
+@@ -1268,9 +1260,9 @@ int sdiohal_list_push(int channel, struct mbuf_t *head,
+ 
+ 		sdiohal_tx_list_enq(channel, head, tail, num);
+ 
+-		getnstimeofday(&tm_end);
+-		time_total_ns += timespec_to_ns(&tm_end)
+-			- timespec_to_ns(&tm_begin);
++		sdiohal_get_time(&tm_end);
++		time_total_ns += sdiohal_time_to_ns(&tm_end)
++			- sdiohal_time_to_ns(&tm_begin);
+ 		times_count++;
+ 		if (!(times_count % PERFORMANCE_COUNT)) {
+ 			sdiohal_pr_perf("tx avg time:%ld\n",
+@@ -1278,7 +1270,7 @@ int sdiohal_list_push(int channel, struct mbuf_t *head,
+ 			time_total_ns = 0;
+ 			times_count = 0;
+ 		}
+-		getnstimeofday(&p_data->tm_begin_sch);
++		sdiohal_get_time(&p_data->tm_begin_sch);
+ 
+ 		sdiohal_tx_up();
+ 	} else
+diff --git a/unisocwcn/sdio/sdiohal_ctl.c b/unisocwcn/sdio/sdiohal_ctl.c
+index 31ede2a..64bf53a 100644
+--- a/unisocwcn/sdio/sdiohal_ctl.c
++++ b/unisocwcn/sdio/sdiohal_ctl.c
+@@ -96,8 +96,8 @@ char *tp_tx_buf[TP_TX_BUF_CNT];
+ 
+ struct mchn_ops_t at_tx_ops;
+ struct mchn_ops_t at_rx_ops;
+-struct timeval tp_tx_start_time;
+-struct timeval tp_tx_stop_time;
++sdiohal_timespec tp_tx_start_time;
++sdiohal_timespec tp_tx_stop_time;
+ int tp_tx_cnt;
+ int tp_tx_flag;
+ int tp_tx_buf_cnt = TP_TX_BUF_CNT;
+@@ -229,13 +229,13 @@ static void sdiohal_throughput_tx_compute_time(void)
+ 	/* throughput test */
+ 	tp_tx_cnt++;
+ 	if (tp_tx_cnt % 500 == 0) {
+-		do_gettimeofday(&tp_tx_stop_time);
+-		times_count = timeval_to_ns(&tp_tx_stop_time) -
+-			timeval_to_ns(&tp_tx_start_time);
++		sdiohal_get_time(&tp_tx_stop_time);
++		times_count = sdiohal_time_to_ns(&tp_tx_stop_time) -
++			sdiohal_time_to_ns(&tp_tx_start_time);
+ 		sdiohal_info("tx->times(500c) is %lldns, tx %d, rx %d\n",
+ 			     times_count, tp_tx_cnt, rx_pop_cnt);
+ 		tp_tx_cnt = 0;
+-		do_gettimeofday(&tp_tx_start_time);
++		sdiohal_get_time(&tp_tx_start_time);
+ 	}
+ 	sdiohal_throughput_tx();
+ }
+@@ -539,9 +539,9 @@ int at_list_tx_pop(int channel, struct mbuf_t *head,
+ }
+ 
+ int tp_rx_cnt;
+-struct timeval tp_rx_start_time;
+-struct timeval tp_rx_stop_time;
+-struct timespec tp_tm_begin;
++sdiohal_timespec tp_rx_start_time;
++sdiohal_timespec tp_rx_stop_time;
++sdiohal_timespec tp_tm_begin;
+ int at_list_rx_pop(int channel, struct mbuf_t *head,
+ 		   struct mbuf_t *tail, int num)
+ {
+@@ -562,15 +562,15 @@ int at_list_rx_pop(int channel, struct mbuf_t *head,
+ 	/* throughput test */
+ 	tp_rx_cnt += num;
+ 	if (tp_rx_cnt / (500*64) == 1) {
+-		do_gettimeofday(&tp_rx_stop_time);
+-		times_count = timeval_to_ns(&tp_rx_stop_time)
+-			- timeval_to_ns(&tp_rx_start_time);
++		sdiohal_get_time(&tp_rx_stop_time);
++		times_count = sdiohal_time_to_ns(&tp_rx_stop_time)
++			- sdiohal_time_to_ns(&tp_rx_start_time);
+ 		sdiohal_info("rx->times(%dc) is %lldns, tx %d, rx %d\n",
+ 			     tp_rx_cnt, times_count, tp_tx_cnt, rx_pop_cnt);
+ 		tp_rx_cnt = 0;
+-		do_gettimeofday(&tp_rx_start_time);
++		sdiohal_get_time(&tp_rx_start_time);
+ 	}
+-	getnstimeofday(&tp_tm_begin);
++	sdiohal_get_time(&tp_tm_begin);
+ 
+ 	return 0;
+ }
+@@ -1116,7 +1116,7 @@ static ssize_t at_cmd_write(struct file *filp,
+ 			__func__, tp_tx_buf_cnt, tp_tx_buf_len);
+ 		tp_tx_flag = 1;
+ 		tp_tx_cnt = 0;
+-		do_gettimeofday(&tp_tx_start_time);
++		sdiohal_get_time(&tp_tx_start_time);
+ 		if ((tp_tx_buf_cnt <= TP_TX_BUF_CNT) &&
+ 			(tp_tx_buf_len <= TP_TX_BUF_LEN)) {
+ 			sprdwcn_bus_chn_deinit(&at_tx_ops);
+diff --git a/unisocwcn/sdio/sdiohal_main.c b/unisocwcn/sdio/sdiohal_main.c
+index 02fbb99..ff8ce79 100644
+--- a/unisocwcn/sdio/sdiohal_main.c
++++ b/unisocwcn/sdio/sdiohal_main.c
+@@ -236,11 +236,11 @@ int sdiohal_sdio_pt_write(unsigned char *src, unsigned int datalen)
+ {
+ 	struct sdiohal_data_t *p_data = sdiohal_get_data();
+ 	int ret = 0;
+-	struct timespec tm_begin, tm_end;
++	sdiohal_timespec tm_begin, tm_end;
+ 	static long time_total_ns;
+ 	static int times_count;
+ 
+-	getnstimeofday(&tm_begin);
++	sdiohal_get_time(&tm_begin);
+ 	if (unlikely(p_data->card_dump_flag == true)) {
+ 		sdiohal_err("%s line %d dump happened\n", __func__, __LINE__);
+ 		return -ENODEV;
+@@ -267,8 +267,8 @@ int sdiohal_sdio_pt_write(unsigned char *src, unsigned int datalen)
+ 	sdiohal_op_leave();
+ 	sdiohal_card_unlock(p_data);
+ 
+-	getnstimeofday(&tm_end);
+-	time_total_ns += timespec_to_ns(&tm_end) - timespec_to_ns(&tm_begin);
++	sdiohal_get_time(&tm_end);
++	time_total_ns += sdiohal_time_to_ns(&tm_end) - sdiohal_time_to_ns(&tm_begin);
+ 	times_count++;
+ 	if (!(times_count % PERFORMANCE_COUNT)) {
+ 		sdiohal_pr_perf("tx avg time:%ld len=%d\n",
+@@ -284,11 +284,11 @@ int sdiohal_sdio_pt_read(unsigned char *src, unsigned int datalen)
+ {
+ 	struct sdiohal_data_t *p_data = sdiohal_get_data();
+ 	int ret = 0;
+-	struct timespec tm_begin, tm_end;
++	sdiohal_timespec tm_begin, tm_end;
+ 	static long time_total_ns;
+ 	static int times_count;
+ 
+-	getnstimeofday(&tm_begin);
++	sdiohal_get_time(&tm_begin);
+ 
+ 	if (unlikely(p_data->card_dump_flag == true)) {
+ 		sdiohal_err("%s line %d dump happened\n", __func__, __LINE__);
+@@ -309,8 +309,8 @@ int sdiohal_sdio_pt_read(unsigned char *src, unsigned int datalen)
+ 	sdiohal_op_leave();
+ 	sdiohal_card_unlock(p_data);
+ 
+-	getnstimeofday(&tm_end);
+-	time_total_ns += timespec_to_ns(&tm_end) - timespec_to_ns(&tm_begin);
++	sdiohal_get_time(&tm_end);
++	time_total_ns += sdiohal_time_to_ns(&tm_end) - sdiohal_time_to_ns(&tm_begin);
+ 	times_count++;
+ 	if (!(times_count % PERFORMANCE_COUNT)) {
+ 		sdiohal_pr_perf("rx avg time:%ld len=%d\n",
+@@ -456,11 +456,11 @@ int sdiohal_adma_pt_write(struct sdiohal_list_t *data_list)
+ {
+ 	struct sdiohal_data_t *p_data = sdiohal_get_data();
+ 	int ret = 0;
+-	struct timespec tm_begin, tm_end;
++	sdiohal_timespec tm_begin, tm_end;
+ 	static long time_total_ns;
+ 	static int times_count;
+ 
+-	getnstimeofday(&tm_begin);
++	sdiohal_get_time(&tm_begin);
+ 
+ 	if (unlikely(p_data->card_dump_flag == true)) {
+ 		sdiohal_err("%s line %d dump happened\n", __func__, __LINE__);
+@@ -483,8 +483,8 @@ int sdiohal_adma_pt_write(struct sdiohal_list_t *data_list)
+ 	sdiohal_op_leave();
+ 	sdiohal_card_unlock(p_data);
+ 
+-	getnstimeofday(&tm_end);
+-	time_total_ns += timespec_to_ns(&tm_end) - timespec_to_ns(&tm_begin);
++	sdiohal_get_time(&tm_end);
++	time_total_ns += sdiohal_time_to_ns(&tm_end) - sdiohal_time_to_ns(&tm_begin);
+ 	times_count++;
+ 	if (!(times_count % PERFORMANCE_COUNT)) {
+ 		sdiohal_pr_perf("tx avg time:%ld\n",
+@@ -500,11 +500,11 @@ int sdiohal_adma_pt_read(struct sdiohal_list_t *data_list)
+ {
+ 	struct sdiohal_data_t *p_data = sdiohal_get_data();
+ 	int ret = 0;
+-	struct timespec tm_begin, tm_end;
++	sdiohal_timespec tm_begin, tm_end;
+ 	static long time_total_ns;
+ 	static int times_count;
+ 
+-	getnstimeofday(&tm_begin);
++	sdiohal_get_time(&tm_begin);
+ 
+ 	if (unlikely(p_data->card_dump_flag == true)) {
+ 		sdiohal_err("%s line %d dump happened\n", __func__, __LINE__);
+@@ -525,8 +525,8 @@ int sdiohal_adma_pt_read(struct sdiohal_list_t *data_list)
+ 	sdiohal_op_leave();
+ 	sdiohal_card_unlock(p_data);
+ 
+-	getnstimeofday(&tm_end);
+-	time_total_ns += timespec_to_ns(&tm_end) - timespec_to_ns(&tm_begin);
++	sdiohal_get_time(&tm_end);
++	time_total_ns += sdiohal_time_to_ns(&tm_end) - sdiohal_time_to_ns(&tm_begin);
+ 	times_count++;
+ 	if (!(times_count % PERFORMANCE_COUNT)) {
+ 		sdiohal_pr_perf("rx avg time:%ld\n",
+@@ -1169,7 +1169,7 @@ static irqreturn_t sdiohal_irq_handler(int irq, void *para)
+ 	sdiohal_lock_rx_ws();
+ 	sdiohal_disable_rx_irq(irq);
+ 
+-	getnstimeofday(&p_data->tm_begin_irq);
++	sdiohal_get_time(&p_data->tm_begin_irq);
+ 	sdiohal_rx_up();
+ 
+ 	return IRQ_HANDLED;
+diff --git a/unisocwcn/sdio/sdiohal_rx.c b/unisocwcn/sdio/sdiohal_rx.c
+index 3ee3480..0dcb405 100644
+--- a/unisocwcn/sdio/sdiohal_rx.c
++++ b/unisocwcn/sdio/sdiohal_rx.c
+@@ -70,14 +70,18 @@ static int sdiohal_data_list_assignment(struct mbuf_t *mbuf_node,
+ 
+ /* for adma */
+ static int sdiohal_rx_list_parser(struct sdiohal_list_t *data_list,
+-				int valid_len)
++				unsigned int valid_len)
+ {
+ 	struct sdiohal_data_t *p_data = sdiohal_get_data();
+ 	struct sdio_puh_t *puh = NULL;
+ 	struct mbuf_t *mbuf_node, *mbuf_next;
+ 	unsigned int node_num, i;
+ 	int inout = 0, channel = 0;
+-	unsigned int parse_len;
++	unsigned int parse_len, packet_len, raw_len;
++	bool drop_remaining = false;
++
++	if (!data_list || !data_list->mbuf_head || !data_list->node_num)
++		return -EINVAL;
+ 
+ 	sdiohal_list_check(data_list, __func__, SDIOHAL_READ);
+ 
+@@ -85,95 +89,124 @@ static int sdiohal_rx_list_parser(struct sdiohal_list_t *data_list,
+ 	mbuf_next = data_list->mbuf_head;
+ 	parse_len = 0;
+ 	for (i = 0; i < node_num; i++) {
++		if (!mbuf_next) {
++			sdiohal_err("RX_BOUNDS adma list ended at %u/%u\n",
++				    i, node_num);
++			return -EINVAL;
++		}
+ 		mbuf_node = mbuf_next;
+ 		mbuf_next = mbuf_next->next;
+-		puh = (struct sdio_puh_t *)mbuf_node->buf;
+-		if ((puh->eof == 0) && (puh->type != 0xF)) {
+-			channel = sdiohal_hwtype_to_channel(inout,
+-				puh->type, puh->subtype);
+-			parse_len += puh->len;
+-			if (puh->check_sum)
+-				puh->len += 2;
+-			if ((channel >= SDIO_CHANNEL_NUM) || (puh->len >
+-				(MAX_PAC_SIZE - SDIO_PUB_HEADER_SIZE)) ||
+-				(puh->len == 0)) {
+-				sdiohal_rx_list_free(mbuf_node, mbuf_node, 1);
+-				sdiohal_err("%s skip type[%d]sub[%d]len[%d]\n",
+-					    __func__, puh->type, puh->subtype,
+-					    puh->len);
+-				continue;
+-			}
+-			p_data->rx_packer_cnt++;
+-			mbuf_node->len = MAX_MBUF_SIZE;
+-			sdiohal_data_list_assignment(mbuf_node, puh, channel);
+-		} else {
+-			sdiohal_debug("%s eof pac:%d,parse[%d]%s valid[%d]\n",
+-				      __func__, puh->eof, parse_len,
+-				      (parse_len < valid_len ? "<":">="),
+-				      valid_len);
+-			sdiohal_debug("%s type[%d]sub[%d]len[%d]\n", __func__,
+-				      puh->type, puh->subtype, puh->len);
++		if (drop_remaining || !mbuf_node->buf) {
++			if (!mbuf_node->buf)
++				sdiohal_err("RX_BOUNDS adma node %u has no buffer\n",
++					    i);
++			sdiohal_rx_list_free(mbuf_node, mbuf_node, 1);
++			drop_remaining = true;
++			continue;
++		}
+ 
++		puh = (struct sdio_puh_t *)mbuf_node->buf;
++		raw_len = puh->len;
++		packet_len = raw_len + (puh->check_sum ? 2 : 0);
++		channel = sdiohal_hwtype_to_channel(inout,
++			puh->type, puh->subtype);
++
++		if (puh->eof || puh->type == 0xF || raw_len == 0 ||
++		    raw_len > valid_len - min(parse_len, valid_len) ||
++		    packet_len > (MAX_PAC_SIZE - SDIO_PUB_HEADER_SIZE) ||
++		    sizeof(*puh) + SDIOHAL_ALIGN_4BYTE(packet_len) >
++			MAX_MBUF_SIZE ||
++		    channel < 0 || channel >= SDIO_CHANNEL_NUM) {
++			sdiohal_err("RX_BOUNDS adma reject node=%u eof=%u type=%u sub=%u raw=%u packet=%u parsed=%u valid=%u channel=%d\n",
++				    i, puh->eof, puh->type, puh->subtype,
++				    raw_len, packet_len, parse_len, valid_len,
++				    channel);
+ 			sdiohal_rx_list_free(mbuf_node, mbuf_node, 1);
++			drop_remaining = true;
++			continue;
+ 		}
++
++		parse_len += raw_len;
++		puh->len = packet_len;
++		p_data->rx_packer_cnt++;
++		mbuf_node->len = packet_len;
++		sdiohal_data_list_assignment(mbuf_node, puh, channel);
+ 	}
+ 
+-	return 0;
++	if (parse_len != valid_len) {
++		sdiohal_err("RX_BOUNDS adma parsed=%u valid=%u nodes=%u\n",
++			    parse_len, valid_len, node_num);
++		return -EPROTO;
++	}
++
++	return drop_remaining ? -EPROTO : 0;
+ }
+ 
+ /* for normal dma */
+-static int sdiohal_rx_buf_parser(char *data_buf, int valid_len)
++static int sdiohal_rx_buf_parser(char *data_buf, unsigned int valid_len,
++				 unsigned int data_len)
+ {
+ 	struct sdiohal_data_t *p_data = sdiohal_get_data();
+ 	struct sdio_puh_t *puh = NULL;
+ 	struct sdiohal_list_t *data_list = NULL;
+ 	int inout = 0, channel;
+-	unsigned char *p = NULL;
+-	unsigned int parse_len;
++	unsigned int parse_len = 0, offset = 0;
++	unsigned int frame_len, packet_len, raw_len;
+ 
+-	puh = (struct sdio_puh_t *)data_buf;
+-	for (parse_len = 0; parse_len < valid_len;) {
+-		if (puh->eof != 0)
+-			break;
++	if (!data_buf || valid_len > data_len) {
++		sdiohal_err("RX_BOUNDS sdma invalid buffer valid=%u capacity=%u\n",
++			    valid_len, data_len);
++		return -EINVAL;
++	}
+ 
+-		p = (unsigned char *)puh;
+-		if (puh->type != 0xF) {
+-			channel = sdiohal_hwtype_to_channel(inout,
+-				puh->type, puh->subtype);
+-			parse_len += puh->len;
+-			if (puh->check_sum)
+-				puh->len += 2;
+-			if ((channel >= SDIO_CHANNEL_NUM) || (puh->len >
+-				(MAX_PAC_SIZE - SDIO_PUB_HEADER_SIZE)) ||
+-				(puh->len == 0)) {
+-				sdiohal_err("%s skip type[%d]sub[%d]len[%d]\n",
+-					    __func__, puh->type, puh->subtype,
+-					    puh->len);
+-				continue;
+-			}
+-			p_data->rx_packer_cnt++;
+-
+-			data_list = sdiohal_get_rx_mbuf_node(1);
+-			if (!data_list)
+-				return -ENOMEM;
+-			data_list->mbuf_head = data_list->mbuf_tail;
+-			data_list->mbuf_head->buf = (unsigned char *)puh;
+-			data_list->mbuf_head->len = puh->len;
+-			data_list->node_num = 1;
+-			p_data->frag_ctl.pagecnt_bias--;
+-
+-			sdiohal_list_check(data_list, __func__, SDIOHAL_READ);
+-			sdiohal_print_list_data(channel, data_list, __func__,
+-						SDIOHAL_DATA_LEVEL);
+-
+-			sdiohal_data_list_assignment(data_list->mbuf_head,
+-						     puh, channel);
+-			kfree(data_list);
++	while (parse_len < valid_len) {
++		if (offset > data_len || data_len - offset < sizeof(*puh)) {
++			sdiohal_err("RX_BOUNDS sdma truncated header offset=%u capacity=%u parsed=%u valid=%u\n",
++				    offset, data_len, parse_len, valid_len);
++			return -EPROTO;
++		}
++
++		puh = (struct sdio_puh_t *)(data_buf + offset);
++		raw_len = puh->len;
++		packet_len = raw_len + (puh->check_sum ? 2 : 0);
++		frame_len = sizeof(*puh) + SDIOHAL_ALIGN_4BYTE(packet_len);
++		channel = sdiohal_hwtype_to_channel(inout,
++			puh->type, puh->subtype);
++
++		if (puh->eof || puh->type == 0xF || raw_len == 0 ||
++		    raw_len > valid_len - parse_len ||
++		    packet_len > (MAX_PAC_SIZE - SDIO_PUB_HEADER_SIZE) ||
++		    frame_len > data_len - offset ||
++		    channel < 0 || channel >= SDIO_CHANNEL_NUM) {
++			sdiohal_err("RX_BOUNDS sdma reject offset=%u eof=%u type=%u sub=%u raw=%u packet=%u frame=%u parsed=%u valid=%u capacity=%u channel=%d\n",
++				    offset, puh->eof, puh->type, puh->subtype,
++				    raw_len, packet_len, frame_len, parse_len,
++				    valid_len, data_len, channel);
++			return -EPROTO;
+ 		}
+-		/* pointer to next packet */
+-		p += sizeof(struct sdio_puh_t)
+-			+ SDIOHAL_ALIGN_4BYTE(puh->len);
+-		puh = (struct sdio_puh_t *)p;
++
++		data_list = sdiohal_get_rx_mbuf_node(1);
++		if (!data_list)
++			return -ENOMEM;
++
++		puh->len = packet_len;
++		data_list->mbuf_head = data_list->mbuf_tail;
++		data_list->mbuf_head->buf = (unsigned char *)puh;
++		data_list->mbuf_head->len = packet_len;
++		data_list->node_num = 1;
++		p_data->frag_ctl.pagecnt_bias--;
++		p_data->rx_packer_cnt++;
++
++		sdiohal_list_check(data_list, __func__, SDIOHAL_READ);
++		sdiohal_print_list_data(channel, data_list, __func__,
++					SDIOHAL_DATA_LEVEL);
++
++		sdiohal_data_list_assignment(data_list->mbuf_head,
++					     puh, channel);
++		kfree(data_list);
++
++		parse_len += raw_len;
++		offset += frame_len;
+ 	}
+ 
+ 	return 0;
+@@ -193,19 +226,25 @@ static void sdiohal_rx_wait(void)
+ int sdiohal_rx_thread(void *data)
+ {
+ 	struct sdiohal_data_t *p_data = sdiohal_get_data();
++#if KERNEL_VERSION(5, 9, 0) > LINUX_VERSION_CODE
+ 	struct sched_param param;
++#endif
+ 	int read_len, mbuf_num;
+ 	int ret = 0;
+ 	unsigned int rx_dtbs = 0;
+ 	unsigned int valid_len = 0;
+ 	static char *rx_buf;
+ 	struct sdiohal_list_t *data_list = NULL;
+-	struct timespec tm_begin, tm_end;
++	sdiohal_timespec tm_begin, tm_end;
+ 	static long time_total_ns;
+ 	static int times_count;
+ 
++#if KERNEL_VERSION(5, 9, 0) <= LINUX_VERSION_CODE
++	sched_set_fifo(current);
++#else
+ 	param.sched_priority = SDIO_RX_TASK_PRIO;
+ 	sched_setscheduler(current, SCHED_FIFO, &param);
++#endif
+ 	sdiohal_rx_adapt_set_dtbs(0);
+ 	sdiohal_rx_adapt_set_pac_num(1);
+ 
+@@ -223,16 +262,18 @@ int sdiohal_rx_thread(void *data)
+ 			continue;
+ 		}
+ 
+-		getnstimeofday(&p_data->tm_end_irq);
++		sdiohal_get_time(&p_data->tm_end_irq);
+ 		sdiohal_pr_perf("rx sch time:%ld\n",
+-				(long)(timespec_to_ns(&p_data->tm_end_irq)
+-				- timespec_to_ns(&p_data->tm_begin_irq)));
++				(long)(sdiohal_time_to_ns(&p_data->tm_end_irq)
++				- sdiohal_time_to_ns(&p_data->tm_begin_irq)));
+ 
+ 		sdiohal_resume_wait();
+ 		sdiohal_cp_rx_wakeup(PACKER_RX);
+ 
+ read_again:
+-		getnstimeofday(&tm_begin);
++		sdiohal_get_time(&tm_begin);
++		rx_dtbs = 0;
++		valid_len = 0;
+ 
+ 		if (p_data->adma_rx_enable) {
+ 			/* read len is packet num */
+@@ -253,9 +294,12 @@ read_again:
+ 			ret = sdiohal_adma_pt_read(data_list);
+ 			if (ret != 0) {
+ 				sdiohal_err("adma read fail ret:%d\n", ret);
+-				rx_dtbs = 0;
+-				if (p_data->irq_type != SDIOHAL_RX_POLLING)
+-					goto submit_list;
++				sdiohal_rx_list_free(data_list->mbuf_head,
++						     data_list->mbuf_tail,
++						     data_list->node_num);
++				kfree(data_list);
++				data_list = NULL;
++				goto submit_list;
+ 			}
+ 			rx_dtbs =  *((unsigned int *)(p_data->dtbs_buf
+ 				   + (SDIOHAL_DTBS_BUF_SIZE - 4)));
+@@ -263,7 +307,18 @@ read_again:
+ 				    + (SDIOHAL_DTBS_BUF_SIZE - 8)));
+ 			sdiohal_debug("%s rx_pac_num:%d, valid len:%d\n",
+ 				      __func__, rx_dtbs, valid_len);
+-			sdiohal_rx_list_parser(data_list, valid_len);
++			if (rx_dtbs > MAX_CHAIN_NODE_NUM ||
++			    valid_len > mbuf_num *
++				(MAX_MBUF_SIZE - SDIO_PUB_HEADER_SIZE)) {
++				sdiohal_err("RX_BOUNDS adma trailer reject next=%u valid=%u nodes=%d\n",
++					    rx_dtbs, valid_len, mbuf_num);
++				sdiohal_rx_list_free(data_list->mbuf_head,
++						     data_list->mbuf_tail,
++						     data_list->node_num);
++				rx_dtbs = 0;
++			} else if (sdiohal_rx_list_parser(data_list, valid_len)) {
++				rx_dtbs = 0;
++			}
+ 			kfree(data_list);
+ 			data_list = NULL;
+ 		} else {
+@@ -291,22 +346,36 @@ read_again:
+ 			ret = sdiohal_sdio_pt_read(rx_buf, read_len);
+ 			if (ret != 0) {
+ 				sdiohal_err("sdio pt read fail ret:%d\n", ret);
+-				rx_dtbs = 0;
+-				if (p_data->irq_type != SDIOHAL_RX_POLLING)
+-					goto submit_list;
++				goto submit_list;
++			}
++			if (read_len < 8) {
++				sdiohal_err("RX_BOUNDS sdma read too short: %d\n",
++					    read_len);
++				goto submit_list;
+ 			}
+ 			rx_dtbs = *((unsigned int *)(rx_buf + (read_len - 4)));
+ 			valid_len =
+ 				*((unsigned int *)(rx_buf + (read_len - 8)));
+ 			sdiohal_debug("%s rx_dtbs:%d,valid len:%d\n",
+ 				      __func__, rx_dtbs, valid_len);
+-			sdiohal_rx_buf_parser(rx_buf, valid_len);
++			if (valid_len > read_len - 8 ||
++#if (BITS_PER_LONG > 32) || (PAGE_SIZE >= 65536)
++			    rx_dtbs > SDIOHAL_RX_RECVBUF_LEN ||
++#else
++			    rx_dtbs > SDIOHAL_32_BIT_RX_RECVBUF_LEN ||
++#endif
++			    sdiohal_rx_buf_parser(rx_buf, valid_len,
++						 read_len - 8)) {
++				sdiohal_err("RX_BOUNDS sdma trailer reject next=%u valid=%u read=%d\n",
++					    rx_dtbs, valid_len, read_len);
++				rx_dtbs = 0;
++			}
+ 		}
+ 
+ submit_list:
+-		getnstimeofday(&tm_end);
+-		time_total_ns += timespec_to_ns(&tm_end)
+-			- timespec_to_ns(&tm_begin);
++		sdiohal_get_time(&tm_end);
++		time_total_ns += sdiohal_time_to_ns(&tm_end)
++			- sdiohal_time_to_ns(&tm_begin);
+ 		times_count++;
+ 		if (!(times_count % PERFORMANCE_COUNT)) {
+ 			sdiohal_pr_perf("rx list avg time:%ld\n",
+diff --git a/unisocwcn/sdio/sdiohal_tx.c b/unisocwcn/sdio/sdiohal_tx.c
+index b73d3b7..501e821 100644
+--- a/unisocwcn/sdio/sdiohal_tx.c
++++ b/unisocwcn/sdio/sdiohal_tx.c
+@@ -135,13 +135,19 @@ int sdiohal_tx_thread(void *data)
+ {
+ 	struct sdiohal_data_t *p_data = sdiohal_get_data();
+ 	struct sdiohal_list_t data_list;
++#if KERNEL_VERSION(5, 9, 0) > LINUX_VERSION_CODE
+ 	struct sched_param param;
+-	struct timespec tm_begin, tm_end;
++#endif
++	sdiohal_timespec tm_begin, tm_end;
+ 	static long time_total_ns;
+ 	static int times_count;
+ 
++#if KERNEL_VERSION(5, 9, 0) <= LINUX_VERSION_CODE
++	sched_set_fifo(current);
++#else
+ 	param.sched_priority = SDIO_TX_TASK_PRIO;
+ 	sched_setscheduler(current, SCHED_FIFO, &param);
++#endif
+ 
+ 	while (1) {
+ 		/* Wait the semaphore */
+@@ -154,10 +160,10 @@ int sdiohal_tx_thread(void *data)
+ 			continue;
+ 		}
+ 
+-		getnstimeofday(&p_data->tm_end_sch);
++		sdiohal_get_time(&p_data->tm_end_sch);
+ 		sdiohal_pr_perf("tx sch time:%ld\n",
+-			(long)(timespec_to_ns(&p_data->tm_end_sch)
+-			- timespec_to_ns(&p_data->tm_begin_sch)));
++			(long)(sdiohal_time_to_ns(&p_data->tm_end_sch)
++			- sdiohal_time_to_ns(&p_data->tm_begin_sch)));
+ 		sdiohal_lock_tx_ws();
+ 		sdiohal_resume_wait();
+ 
+@@ -165,7 +171,7 @@ int sdiohal_tx_thread(void *data)
+ 		sdiohal_cp_tx_wakeup(PACKER_TX);
+ 
+ 		while (!sdiohal_is_tx_list_empty()) {
+-			getnstimeofday(&tm_begin);
++			sdiohal_get_time(&tm_begin);
+ 
+ 			sdiohal_tx_find_data_list(&data_list);
+ 			if (p_data->adma_tx_enable) {
+@@ -174,9 +180,9 @@ int sdiohal_tx_thread(void *data)
+ 			} else
+ 				sdiohal_tx_data_list_send(&data_list, true);
+ 
+-			getnstimeofday(&tm_end);
+-			time_total_ns += timespec_to_ns(&tm_end)
+-				- timespec_to_ns(&tm_begin);
++			sdiohal_get_time(&tm_end);
++			time_total_ns += sdiohal_time_to_ns(&tm_end)
++				- sdiohal_time_to_ns(&tm_begin);
+ 			times_count++;
+ 			if (!(times_count % PERFORMANCE_COUNT)) {
+ 				sdiohal_pr_perf("tx list avg time:%ld\n",
+diff --git a/unisocwifi/Makefile b/unisocwifi/Makefile
+index fcbbe39..8f97d22 100644
+--- a/unisocwifi/Makefile
++++ b/unisocwifi/Makefile
+@@ -28,7 +28,9 @@ ccflags-y += -DATCMD_ASSERT
+ ccflags-y += -DTCPACK_DELAY_SUPPORT
+ ccflags-$(DEBUGMODE) += -DWL_CONFIG_DEBUG
+ ccflags-y += -DSPLIT_STACK
++ifneq ($(UNISOC_WIFI_USE_DTS),y)
+ ccflags-y += -DOTT_UWE
++endif
+ ccflags-y += -DCP2_RESET_SUPPORT
+ ifeq ($(UNISOC_STA_SOFTAP_SCC_MODE),y)
+ ccflags-y += -DSTA_SOFTAP_SCC_MODE
+diff --git a/unisocwifi/cfg80211.c b/unisocwifi/cfg80211.c
+index 6ccdbb0..14f8c03 100644
+--- a/unisocwifi/cfg80211.c
++++ b/unisocwifi/cfg80211.c
+@@ -25,6 +25,7 @@
+ 
+ #include "sprdwl.h"
+ #include "cfg80211.h"
++#include "compat.h"
+ #include "cmdevt.h"
+ #include "work.h"
+ #include "ibss.h"
+@@ -703,6 +704,9 @@ static int sprdwl_add_cipher_key(struct sprdwl_vif *vif, bool pairwise,
+ }
+ 
+ static int sprdwl_cfg80211_add_key(struct wiphy *wiphy, struct net_device *ndev,
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
++				   int link_id,
++#endif
+ 				   u8 key_index, bool pairwise,
+ 				   const u8 *mac_addr,
+ 				   struct key_params *params)
+@@ -725,6 +729,9 @@ static int sprdwl_cfg80211_add_key(struct wiphy *wiphy, struct net_device *ndev,
+ }
+ 
+ static int sprdwl_cfg80211_del_key(struct wiphy *wiphy, struct net_device *ndev,
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
++				   int link_id,
++#endif
+ 				   u8 key_index, bool pairwise,
+ 				   const u8 *mac_addr)
+ {
+@@ -755,6 +762,9 @@ static int sprdwl_cfg80211_del_key(struct wiphy *wiphy, struct net_device *ndev,
+ 
+ static int sprdwl_cfg80211_set_default_key(struct wiphy *wiphy,
+ 					   struct net_device *ndev,
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
++					   int link_id,
++#endif
+ 					   u8 key_index, bool unicast,
+ 					   bool multicast)
+ {
+@@ -984,7 +994,11 @@ static int sprdwl_cfg80211_change_beacon(struct wiphy *wiphy,
+ 	return sprdwl_change_beacon(vif, beacon);
+ }
+ 
+-static int sprdwl_cfg80211_stop_ap(struct wiphy *wiphy, struct net_device *ndev)
++static int sprdwl_cfg80211_stop_ap(struct wiphy *wiphy, struct net_device *ndev
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
++				   , unsigned int link_id
++#endif
++				   )
+ {
+ #ifdef DFS_MASTER
+ 	struct sprdwl_vif *vif = netdev_priv(ndev);
+@@ -2162,7 +2176,7 @@ void sprdwl_report_scan_result(struct sprdwl_vif *vif, u16 chan, s16 rssi,
+ 	struct ieee80211_mgmt *mgmt = (struct ieee80211_mgmt *)frame;
+ 	struct ieee80211_channel *channel;
+ 	struct cfg80211_bss *bss;
+-	struct timespec ts;
++	sprdwl_timespec ts;
+ 	u16 capability, beacon_interval;
+ 	u32 freq;
+ 	s32 signal;
+@@ -2210,7 +2224,7 @@ void sprdwl_report_scan_result(struct sprdwl_vif *vif, u16 chan, s16 rssi,
+ 	ie = mgmt->u.probe_resp.variable;
+ 	ielen = len - offsetof(struct ieee80211_mgmt, u.probe_resp.variable);
+ 	/* framework use system bootup time */
+-	get_monotonic_boottime(&ts);
++	sprdwl_get_boottime(&ts);
+ 	tsf = (u64)ts.tv_sec * 1000000 + div_u64(ts.tv_nsec, 1000);
+ 	beacon_interval = le16_to_cpu(mgmt->u.probe_resp.beacon_int);
+ 	capability = le16_to_cpu(mgmt->u.probe_resp.capab_info);
+@@ -2259,7 +2273,7 @@ void sprdwl_report_connection(struct sprdwl_vif *vif,
+ 	struct ieee80211_channel *channel;
+ 	struct ieee80211_mgmt *mgmt;
+ 	struct cfg80211_bss *bss = NULL;
+-	struct timespec ts;
++	sprdwl_timespec ts;
+ #ifdef WMMAC_WFA_CERTIFICATION
+ 	struct wmm_params_element *wmm_params;
+ 	int i;
+@@ -2335,7 +2349,7 @@ void sprdwl_report_connection(struct sprdwl_vif *vif,
+ 		ielen = conn_info->bea_ie_len - offsetof(struct ieee80211_mgmt,
+ 						 u.probe_resp.variable);
+ 		/* framework use system bootup time */
+-		get_monotonic_boottime(&ts);
++		sprdwl_get_boottime(&ts);
+ 		tsf = (u64)ts.tv_sec * 1000000 + div_u64(ts.tv_nsec, 1000);
+ 		beacon_interval = le16_to_cpu(mgmt->u.probe_resp.beacon_int);
+ 		capability = le16_to_cpu(mgmt->u.probe_resp.capab_info);
+@@ -2368,8 +2382,12 @@ void sprdwl_report_connection(struct sprdwl_vif *vif,
+ 	else if (vif->sm_state == SPRDWL_CONNECTED &&
+ 		 conn_info->status == SPRDWL_ROAM_SUCCESS){
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)
+-		struct cfg80211_roam_info roam_info = {
++		 struct cfg80211_roam_info roam_info = {
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
++			.links[0].bss = bss,
++#else
+ 			.bss = bss,
++#endif
+ 			.req_ie = conn_info->req_ie,
+ 			.req_ie_len = conn_info->req_ie_len,
+ 			.resp_ie = conn_info->resp_ie,
+@@ -2682,9 +2700,8 @@ static int sprdwl_cfg80211_mgmt_tx(struct wiphy *wiphy,
+ 	return ret;
+ }
+ 
+-static void sprdwl_cfg80211_mgmt_frame_register(struct wiphy *wiphy,
+-						struct wireless_dev *wdev,
+-						u16 frame_type, bool reg)
++static void sprdwl_cfg80211_update_mgmt_frame(struct wireless_dev *wdev,
++					       u16 frame_type, bool reg)
+ {
+ 	struct sprdwl_vif *vif = container_of(wdev, struct sprdwl_vif, wdev);
+ 	struct sprdwl_work *misc_work;
+@@ -2720,6 +2737,28 @@ static void sprdwl_cfg80211_mgmt_frame_register(struct wiphy *wiphy,
+ 	sprdwl_queue_work(vif->priv, misc_work);
+ }
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
++static void sprdwl_cfg80211_mgmt_frame_register(struct wiphy *wiphy,
++						struct wireless_dev *wdev,
++						struct mgmt_frame_regs *upd)
++{
++	u32 stypes = upd->global_stypes | upd->interface_stypes;
++	int subtype;
++
++	for (subtype = 0; subtype < 16; subtype++)
++		sprdwl_cfg80211_update_mgmt_frame(wdev,
++			IEEE80211_FTYPE_MGMT | (subtype << 4),
++			stypes & BIT(subtype));
++}
++#else
++static void sprdwl_cfg80211_mgmt_frame_register(struct wiphy *wiphy,
++						struct wireless_dev *wdev,
++						u16 frame_type, bool reg)
++{
++	sprdwl_cfg80211_update_mgmt_frame(wdev, frame_type, reg);
++}
++#endif
++
+ void sprdwl_report_remain_on_channel_expired(struct sprdwl_vif *vif)
+ {
+ 	wl_ndev_log(L_DBG, vif->ndev, "%s\n", __func__);
+@@ -3245,7 +3284,11 @@ static struct cfg80211_ops sprdwl_cfg80211_ops = {
+ 	.remain_on_channel = sprdwl_cfg80211_remain_on_channel,
+ 	.cancel_remain_on_channel = sprdwl_cfg80211_cancel_remain_on_channel,
+ 	.mgmt_tx = sprdwl_cfg80211_mgmt_tx,
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
++	.update_mgmt_frame_registrations = sprdwl_cfg80211_mgmt_frame_register,
++#else
+ 	.mgmt_frame_register = sprdwl_cfg80211_mgmt_frame_register,
++#endif
+ 	.set_power_mgmt = sprdwl_cfg80211_set_power_mgmt,
+ 	.set_cqm_rssi_config = sprdwl_cfg80211_set_cqm_rssi_config,
+ 	.sched_scan_start = sprdwl_cfg80211_sched_scan_start,
+diff --git a/unisocwifi/cmdevt.c b/unisocwifi/cmdevt.c
+index b8a6e2b..5ae3c6d 100644
+--- a/unisocwifi/cmdevt.c
++++ b/unisocwifi/cmdevt.c
+@@ -256,8 +256,12 @@ int sprdwl_cmd_init(void)
+ #ifdef CONFIG_WIFI_RK_PM_PRIVATE_API
+ 	cmd->wake_lock = wakeup_source_register(sprdwl_dev,
+ 						"Wi-Fi_cmd_wakelock");
++#else
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0)
++	cmd->wake_lock = wakeup_source_register(NULL, "Wi-Fi_cmd_wakelock");
+ #else
+ 	cmd->wake_lock = wakeup_source_register("Wi-Fi_cmd_wakelock");
++#endif
+ #endif
+ 	if (!cmd->wake_lock) {
+ 		wl_err("%s wakeup source register error.\n", __func__);
+@@ -3296,7 +3300,11 @@ void sprdwl_event_chan_changed(struct sprdwl_vif *vif, u8 *data, u16 len)
+ 						NL80211_CHAN_HT20);
+ 		else
+ 			wl_err("%s, ch is null!\n", __func__);
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
++		cfg80211_ch_switch_notify(vif->ndev, &chandef, 0);
++#else
+ 		cfg80211_ch_switch_notify(vif->ndev, &chandef);
++#endif
+ 	}
+ }
+ 
+diff --git a/unisocwifi/dbg_ini_util.c b/unisocwifi/dbg_ini_util.c
+index 4c6d3e2..dd0ab3e 100644
+--- a/unisocwifi/dbg_ini_util.c
++++ b/unisocwifi/dbg_ini_util.c
+@@ -21,7 +21,6 @@ static int dbg_load_ini_resource(char *path[], char *buf, int size)
+ {
+ 	int ret;
+ 	int index = 0;
+-	mm_segment_t oldfs;
+ 	struct file *filp = (struct file *)-ENOENT;
+ 
+ 	for (index = 0; index < MAX_PATH_NUM; index++) {
+@@ -34,15 +33,11 @@ static int dbg_load_ini_resource(char *path[], char *buf, int size)
+ 	if (IS_ERR(filp))
+ 		return -ENOENT;
+ 
+-	oldfs = get_fs();
+-	set_fs(KERNEL_DS);
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 1)
+ 	ret = kernel_read(filp, buf, size, &filp->f_pos);
+ #else
+ 	ret = kernel_read(filp, filp->f_pos, buf, size);
+ #endif
+-	set_fs(oldfs);
+-
+ 	filp_close(filp, NULL);
+ 
+ 	return ret;
+diff --git a/unisocwifi/main.c b/unisocwifi/main.c
+index e359609..f7ef5ce 100644
+--- a/unisocwifi/main.c
++++ b/unisocwifi/main.c
+@@ -362,7 +362,11 @@ static struct net_device_stats *sprdwl_get_stats(struct net_device *ndev)
+ 	return &ndev->stats;
+ }
+ 
+-static void sprdwl_tx_timeout(struct net_device *ndev)
++static void sprdwl_tx_timeout(struct net_device *ndev
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)
++			      , unsigned int txqueue
++#endif
++			      )
+ {
+ 	wl_ndev_log(L_DBG, ndev, "%s\n", __func__);
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 7, 0)
+@@ -933,12 +937,12 @@ static int sprdwl_set_mac(struct net_device *dev, void *addr)
+ 		if (!is_zero_ether_addr(sa->sa_data)) {
+ 			vif->has_rand_mac = true;
+ 			memcpy(vif->random_mac, sa->sa_data, ETH_ALEN);
+-			memcpy(dev->dev_addr, sa->sa_data, ETH_ALEN);
++			eth_hw_addr_set(dev, sa->sa_data);
+ 		} else {
+ 			vif->has_rand_mac = false;
+ 			netdev_info(dev, "need clear random mac for sta/softap mode\n");
+ 			memset(vif->random_mac, 0, ETH_ALEN);
+-			memcpy(dev->dev_addr, vif->mac, ETH_ALEN);
++			eth_hw_addr_set(dev, vif->mac);
+ 		}
+ 	}
+ 	/*return success to pass vts test*/
+@@ -1055,11 +1059,10 @@ static struct notifier_block sprdwl_inet6addr_cb = {
+ static int write_mac_addr(char *mac_file, u8 *addr)
+ {
+ 	struct file *fp = 0;
+-	mm_segment_t old_fs;
+ 	char buf[18];
+ 	loff_t pos = 0;
+ 	/*open file*/
+-	fp = filp_open(mac_file, O_CREAT|O_RDWR, 777);
++	fp = filp_open(mac_file, O_CREAT | O_RDWR | O_TRUNC, 0600);
+ 	if (IS_ERR(fp)) {
+ 		 wl_err("can't create WIFI MAC file!\n");
+ 		 return -ENOENT;
+@@ -1067,16 +1070,9 @@ static int write_mac_addr(char *mac_file, u8 *addr)
+ 	 /*format MAC address*/
+ 	 sprintf(buf, "%02x:%02x:%02x:%02x:%02x:%02x", addr[0], addr[1],
+ 		     addr[2], addr[3], addr[4], addr[5]);
+-	 /*save old fs: should be USER_DS*/
+-	 old_fs = get_fs();
+-	 /*change it to KERNEL_DS*/
+-	 set_fs(KERNEL_DS);
+-	 /*write file*/
+-	 vfs_write(fp, buf, sizeof(buf), &pos);
++	 kernel_write(fp, buf, strlen(buf), &pos);
+ 	 /*close file*/
+ 	 filp_close(fp, NULL);
+-	 /*restore to old fs*/
+-	 set_fs(old_fs);
+ 
+ 	 return 0;
+ }
+@@ -1090,8 +1086,7 @@ static int sprdwl_get_mac_from_file(struct sprdwl_vif *vif, u8 *addr)
+ {
+ 	struct file *fp = 0;
+ 	u8 buf[64] = { 0 };
+-	mm_segment_t fs;
+-	loff_t *pos;
++	ssize_t read_len;
+ 	char tmp_mac_file[256] = {0};
+ 
+ 	snprintf(tmp_mac_file, 255, "%s.%s", WIFI_MAC_ADDR_PATH, "tmp");
+@@ -1105,14 +1100,12 @@ static int sprdwl_get_mac_from_file(struct sprdwl_vif *vif, u8 *addr)
+ 		}
+ 	}
+ 
+-	fs = get_fs();
+-	set_fs(KERNEL_DS);
+-
+-	pos = &fp->f_pos;
+-	vfs_read(fp, buf, sizeof(buf), pos);
++	read_len = kernel_read(fp, buf, sizeof(buf) - 1, &fp->f_pos);
+ 
+ 	filp_close(fp, NULL);
+-	set_fs(fs);
++	if (read_len <= 0)
++		goto random_mac;
++	buf[read_len] = '\0';
+ 
+ 	str2mac(buf, addr);
+ 	if (!is_valid_ether_addr(addr)) {
+@@ -1132,7 +1125,7 @@ static int sprdwl_get_mac_from_file(struct sprdwl_vif *vif, u8 *addr)
+ 
+ 	return 0;
+ random_mac:
+-	random_ether_addr(addr);
++	eth_random_addr(addr);
+ 	wl_warn("%s use random MAC address\n",
+ 			__func__);
+ 	/* initialize MAC addr with specific OUI */
+@@ -1199,6 +1192,7 @@ static void sprdwl_set_mac_addr(struct sprdwl_vif *vif, u8 *pending_addr,
+ 	case NL80211_IFTYPE_P2P_CLIENT:
+ 	case NL80211_IFTYPE_P2P_GO:
+ 		addr[4] ^= 0x80;
++		fallthrough;
+ 	case NL80211_IFTYPE_P2P_DEVICE:
+ 		addr[0] ^= 0x02;
+ 		break;
+@@ -1473,6 +1467,7 @@ static struct sprdwl_vif *sprdwl_register_netdev(struct sprdwl_priv *priv,
+ 	struct net_device *ndev;
+ 	struct wireless_dev *wdev;
+ 	struct sprdwl_vif *vif;
++	u8 mac[ETH_ALEN];
+ 	int ret;
+ 
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 17, 0))
+@@ -1529,7 +1524,8 @@ static struct sprdwl_vif *sprdwl_register_netdev(struct sprdwl_priv *priv,
+ 	ndev->features |= NETIF_F_SG;
+ 	SET_NETDEV_DEV(ndev, wiphy_dev(priv->wiphy));
+ 
+-	sprdwl_set_mac_addr(vif, addr, ndev->dev_addr);
++	sprdwl_set_mac_addr(vif, addr, mac);
++	eth_hw_addr_set(ndev, mac);
+ 
+ #ifdef CONFIG_P2P_INTF
+ 	if (type == NL80211_IFTYPE_P2P_DEVICE)
+diff --git a/unisocwifi/msg.c b/unisocwifi/msg.c
+index 511baf9..c8e7b14 100644
+--- a/unisocwifi/msg.c
++++ b/unisocwifi/msg.c
+@@ -17,6 +17,7 @@
+ 
+ #include "sprdwl.h"
+ #include "msg.h"
++#include "compat.h"
+ 
+ /* static struct sprdwl_msg_list msg_list */
+ 
+@@ -63,17 +64,17 @@ void sprdwl_msg_deinit(struct sprdwl_msg_list *list)
+ {
+ 	struct sprdwl_msg_buf *msg_buf;
+ 	struct sprdwl_msg_buf *pos;
+-	struct timespec txmsgftime1, txmsgftime2;
++	sprdwl_timespec txmsgftime1, txmsgftime2;
+ 
+ 	atomic_add(SPRDWL_MSG_EXIT_VAL, &list->ref);
+ 	if (atomic_read(&list->ref) > SPRDWL_MSG_EXIT_VAL)
+ 		wl_err("%s ref not ok! wait for pop!\n", __func__);
+ 
+-	getnstimeofday(&txmsgftime1);
++	sprdwl_get_time(&txmsgftime1);
+ 	while (atomic_read(&list->ref) > SPRDWL_MSG_EXIT_VAL) {
+-		getnstimeofday(&txmsgftime2);
+-		if (((unsigned long)(timespec_to_ns(&txmsgftime2) -
+-			timespec_to_ns(&txmsgftime1))/1000000) > 3000)
++		sprdwl_get_time(&txmsgftime2);
++		if (((unsigned long)(sprdwl_time_to_ns(&txmsgftime2) -
++			sprdwl_time_to_ns(&txmsgftime1))/1000000) > 3000)
+ 			break;
+ 		usleep_range(2000, 2500);
+ 	}
+diff --git a/unisocwifi/npi.c b/unisocwifi/npi.c
+index b3285b3..93afce4 100644
+--- a/unisocwifi/npi.c
++++ b/unisocwifi/npi.c
+@@ -33,7 +33,6 @@ static struct genl_family sprdwl_nl_genl_family;
+ static int sprdwl_get_flag(void)
+ {
+ 	struct file *fp = NULL;
+-	mm_segment_t fs;
+ 	loff_t *pos;
+ 	int flag = 0;
+ 	char file_data[2];
+@@ -44,14 +43,10 @@ static int sprdwl_get_flag(void)
+ 		wl_err("open file:%s failed\n", SPRDWL_PSM_PATH);
+ 		return PTR_ERR(fp);
+ 	}
+-	fs = get_fs();
+-	set_fs(KERNEL_DS);
+-
+ 	pos = &fp->f_pos;
+-	vfs_read(fp, file_data, 1, pos);
++	kernel_read(fp, file_data, 1, pos);
+ 
+ 	filp_close(fp, NULL);
+-	set_fs(fs);
+ 
+ 	file_data[1] = 0;
+ 	if (kstrtoull(file_data, 10, &tmp)) {
+diff --git a/unisocwifi/rx_msg.c b/unisocwifi/rx_msg.c
+index 4ff97ed..1413781 100644
+--- a/unisocwifi/rx_msg.c
++++ b/unisocwifi/rx_msg.c
+@@ -384,7 +384,6 @@ int sprdwl_pkt_log_save(struct sprdwl_intf *intf, void *data)
+ {
+ 	int i, j, temp, data_len, pkt_line_num,
+ 		temp_pkt_line_num, pkt_len, m = 0;
+-	mm_segment_t fs;
+ 	/*for pkt log space key and enter key*/
+ 	char temp_space, temp_enter;
+ 	/*for pkt log txt line number and write pkt log into file*/
+@@ -397,8 +396,6 @@ int sprdwl_pkt_log_save(struct sprdwl_intf *intf, void *data)
+ 		wl_err("file create/open fail %s, %d\n", __func__, __LINE__);
+ 		return 1;
+ 	}
+-	fs = get_fs();
+-	set_fs(KERNEL_DS);
+ 	pkt_len = ((struct sprdwl_pktlog_hdr *)(data))->plen;
+ 	data += sizeof(struct sprdwl_pktlog_hdr);
+ 	while (m < pkt_len) {
+@@ -411,18 +408,18 @@ int sprdwl_pkt_log_save(struct sprdwl_intf *intf, void *data)
+ 		for (j = 0; j < 6; j++) {
+ 		     temphdr[j] = '0';
+ 		}
+-		vfs_write(intf->pfile, temphdr, 6, &intf->lp);
+-		vfs_write(intf->pfile, &temp_space, 1, &intf->lp);
++		kernel_write(intf->pfile, temphdr, 6, &intf->lp);
++		kernel_write(intf->pfile, &temp_space, 1, &intf->lp);
+ 		memset(tempdata, 0x00, 2);
+ 		for (i = 0; i < data_len; i++) {
+ 				sprintf(tempdata, "%02x",
+ 						*(unsigned char *)data);
+-				vfs_write(intf->pfile, tempdata,
++				kernel_write(intf->pfile, tempdata,
+ 						  2, &intf->lp);
+ 				memset(tempdata, 0x00, 2);
+ 				if ((i != 0) && ((i + 1)%16 == 0)) {
+ 					if (i < (data_len - 1)) {
+-						vfs_write(intf->pfile, &temp_enter,
++						kernel_write(intf->pfile, &temp_enter,
+ 								  sizeof(temp_enter), &intf->lp);
+ 						pkt_line_num += 16;
+ 						temp_pkt_line_num = pkt_line_num;
+@@ -430,22 +427,21 @@ int sprdwl_pkt_log_save(struct sprdwl_intf *intf, void *data)
+ 							temp = (temp_pkt_line_num >> (j*4)) & 0xf;
+ 							temphdr[5 - j] = (temp < 10) ? (temp + '0') : (temp - 10 + 'a');
+ 						}
+-						vfs_write(intf->pfile, temphdr,
++						kernel_write(intf->pfile, temphdr,
+ 								  6, &intf->lp);
+-						vfs_write(intf->pfile, &temp_space,
++						kernel_write(intf->pfile, &temp_space,
+ 								  1, &intf->lp);
+ 					}
+ 				} else {
+-					vfs_write(intf->pfile, &temp_space,
++					kernel_write(intf->pfile, &temp_space,
+ 							  sizeof(temp_space), &intf->lp);
+ 				}
+ 				data++;
+ 		}
+-		vfs_write(intf->pfile, &temp_enter, sizeof(temp_enter), &intf->lp);
++		kernel_write(intf->pfile, &temp_enter, sizeof(temp_enter), &intf->lp);
+ 		memset(temphdr, 0x00, 6);
+ 	}
+ 	filp_close(intf->pfile, NULL);
+-	set_fs(fs);
+ 	return 0;
+ }
+ 
+diff --git a/unisocwifi/tx_msg.c b/unisocwifi/tx_msg.c
+index cd25de3..da4ef83 100644
+--- a/unisocwifi/tx_msg.c
++++ b/unisocwifi/tx_msg.c
+@@ -23,6 +23,7 @@
+ #include <linux/ipv6.h>
+ #include <net/ip.h>
+ #include "tx_msg.h"
++#include "compat.h"
+ #include "rx_msg.h"
+ #include "cfg80211.h"
+ #include "wl_core.h"
+@@ -45,7 +46,7 @@ struct sprdwl_msg_buf *sprdwl_get_msg_buf(void *pdev,
+ 	struct sprdwl_tx_msg *sprdwl_tx_dev = NULL;
+ 	struct sprdwl_msg_buf *msg_buf;
+ #if defined(MORE_DEBUG)
+-	struct timespec tx_begin;
++	sprdwl_timespec tx_begin;
+ #endif
+ 
+ 	dev = (struct sprdwl_intf *)pdev;
+@@ -84,8 +85,8 @@ struct sprdwl_msg_buf *sprdwl_get_msg_buf(void *pdev,
+ 
+ 	if (msg) {
+ #if defined(MORE_DEBUG)
+-		getnstimeofday(&tx_begin);
+-		msg->tx_start_time = timespec_to_ns(&tx_begin);
++		sprdwl_get_time(&tx_begin);
++		msg->tx_start_time = sprdwl_time_to_ns(&tx_begin);
+ #endif
+ 		if (type == SPRDWL_TYPE_DATA)
+ 			msg->msg_type = SPRDWL_TYPE_DATA;
+@@ -1194,15 +1195,15 @@ void prepare_addba(struct sprdwl_intf *intf, unsigned char lut_index,
+ 		peer_entry->ht_enable &&
+ 		peer_entry->vowifi_enabled != 1 &&
+ 		!test_bit(tid, &peer_entry->ba_tx_done_map)) {
+-		struct timespec time;
++		sprdwl_timespec time;
+ 
+-		getnstimeofday(&time);
++		sprdwl_get_time(&time);
+ 		/*need to delay 3s if priv addba failed*/
+-		if (((timespec_to_ns(&time) - timespec_to_ns(&peer_entry->time[tid]))/1000000) > 3000 ||
++		if (((sprdwl_time_to_ns(&time) - sprdwl_time_to_ns(&peer_entry->time[tid]))/1000000) > 3000 ||
+ 			peer_entry->time[tid].tv_nsec == 0) {
+ 			wl_debug("%s, %d, tx_addba, tid=%d\n",
+ 				__func__, __LINE__, tid);
+-			getnstimeofday(&peer_entry->time[tid]);
++			sprdwl_get_time(&peer_entry->time[tid]);
+ 			test_and_set_bit(tid, &peer_entry->ba_tx_done_map);
+ 			sprdwl_tx_addba(intf, peer_entry, tid);
+ 		}
+@@ -1548,7 +1549,7 @@ static inline unsigned short from32to16(unsigned int x)
+ 	return x;
+ }
+ 
+-static unsigned int do_csum(const unsigned char *buff, int len)
++static unsigned int sprdwl_do_csum(const unsigned char *buff, int len)
+ {
+ 	int odd;
+ 	unsigned int result = 0;
+@@ -1627,7 +1628,7 @@ static int sprdwl_mc_pkt_checksum(struct sk_buff *skb, struct net_device *ndev)
+ 
+ 	if (skb->ip_summed == CHECKSUM_PARTIAL) {
+ 		checksum =
+-			(__force __sum16)do_csum(
++			(__force __sum16)sprdwl_do_csum(
+ 			skb->data + ETHER_HDR_LEN + iphdrlen,
+ 			skb->len - ETHER_HDR_LEN - iphdrlen);
+ 		if (ipv6hdr->nexthdr == IPPROTO_UDP) {
+@@ -1827,7 +1828,7 @@ int sprdwl_tx_filter_ip_pkt(struct sk_buff *skb, struct net_device *ndev)
+ 
+ 		if (skb->ip_summed == CHECKSUM_PARTIAL) {
+ 			checksum =
+-				(__force __sum16)do_csum(
++				(__force __sum16)sprdwl_do_csum(
+ 				skb->data + ETHER_HDR_LEN + iphdrlen,
+ 				skb->len - ETHER_HDR_LEN - iphdrlen);
+ 			udphdr->check = ~checksum;
+diff --git a/unisocwifi/vendor.c b/unisocwifi/vendor.c
+index 9196a16..bb56c0d 100644
+--- a/unisocwifi/vendor.c
++++ b/unisocwifi/vendor.c
+@@ -3615,7 +3615,7 @@ static int sprdwl_set_offload_packet(struct wiphy *wiphy,
+ 	return 0;
+ }
+ 
+-const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
++struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
+ 	{/*9*/
+ 		{
+ 		    .vendor_id = OUI_SPREAD,
+@@ -4077,6 +4077,19 @@ static const struct nl80211_vendor_cmd_info sprdwl_vendor_events[] = {
+ 
+ int sprdwl_vendor_init(struct wiphy *wiphy)
+ {
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 3, 0)
++	int i;
++
++	/*
++	 * These legacy Android vendor commands parse their payloads in the
++	 * callbacks.  Modern cfg80211 requires every command to declare a
++	 * policy before wiphy_register(), so mark them as raw data.
++	 */
++	for (i = 0; i < ARRAY_SIZE(sprdwl_vendor_cmd); i++)
++		sprdwl_vendor_cmd[i].policy = VENDOR_CMD_RAW_DATA;
++	pr_info("sprdwl: cfg80211 vendor raw-data policies initialized\n");
++#endif
++
+ 	wiphy->vendor_commands = sprdwl_vendor_cmd;
+ 	wiphy->n_vendor_commands = ARRAY_SIZE(sprdwl_vendor_cmd);
+ 	wiphy->vendor_events = sprdwl_vendor_events;
+diff --git a/unisocwifi/wl_core.c b/unisocwifi/wl_core.c
+index 19a00d1..aa018d5 100644
+--- a/unisocwifi/wl_core.c
++++ b/unisocwifi/wl_core.c
+@@ -530,9 +530,11 @@ static struct sprdwl_if_ops sprdwl_core_ops = {
+ 	.ini_download_status = sprdwl_ini_download_status
+ };
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
+ static struct notifier_block boost_notifier = {
+ 	.notifier_call = sprdwl_notifier_boost,
+ };
++#endif
+ 
+ #ifdef CP2_RESET_SUPPORT
+ extern struct sprdwl_priv *g_sprdwl_priv;
+@@ -686,7 +688,9 @@ static int sprdwl_probe(struct platform_device *pdev)
+ #endif
+ 
+ 	sprdwl_debugfs_init(intf);
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
+ 	cpufreq_register_notifier(&boost_notifier, CPUFREQ_POLICY_NOTIFIER);
++#endif
+ 
+ 	return ret;
+ 
+@@ -713,7 +717,9 @@ static int sprdwl_remove(struct platform_device *pdev)
+ 	marlin_reset_callback_unregister(MARLIN_WIFI, &wifi_reset_notifier);
+ #endif
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
+ 	cpufreq_unregister_notifier(&boost_notifier, CPUFREQ_POLICY_NOTIFIER);
++#endif
+ 	sprdwl_debugfs_deinit();
+ 	sprdwl_core_deinit(priv);
+ 	sprdwl_tx_deinit(intf);
+diff --git a/unisocwifi/wl_core.h b/unisocwifi/wl_core.h
+index 8bad5a5..96871e5 100644
+--- a/unisocwifi/wl_core.h
++++ b/unisocwifi/wl_core.h
+@@ -29,6 +29,7 @@
+ #include <linux/fs.h>
+ #include <linux/uaccess.h>
+ #include "dbg_ini_util.h"
++#include "compat.h"
+ 
+ #define SPRDWL_NORMAL_MEM	0
+ #define SPRDWL_DEFRAG_MEM	1
+@@ -77,7 +78,7 @@ struct sprdwl_peer_entry {
+ 	unsigned long ba_tx_done_map;
+ 	u8 vowifi_enabled;
+ 	u8 vowifi_pkt_cnt;
+-	struct timespec time[6 + 1];
++	sprdwl_timespec time[6 + 1];
+ };
+ 
+ #if defined(MORE_DEBUG)
+diff --git a/unisocwifi/wl_intf.c b/unisocwifi/wl_intf.c
+index 0e72193..6d38487 100644
+--- a/unisocwifi/wl_intf.c
++++ b/unisocwifi/wl_intf.c
+@@ -18,6 +18,7 @@
+ #include <linux/ip.h>
+ #include "sprdwl.h"
+ #include "wl_intf.h"
++#include "compat.h"
+ #include "intf_ops.h"
+ #include "mm.h"
+ #include "tx_msg.h"
+@@ -129,11 +130,11 @@ void sprdwl_clear_stats(struct sprdwl_intf *intf)
+ void sprdwl_get_tx_avg_time(struct sprdwl_intf *intf,
+ 			    unsigned long tx_start_time)
+ {
+-	struct timespec tx_end;
++	sprdwl_timespec tx_end;
+ 
+-	getnstimeofday(&tx_end);
++	sprdwl_get_time(&tx_end);
+ 	intf->stats.tx_cost_time +=
+-	timespec_to_ns(&tx_end) - tx_start_time;
++	sprdwl_time_to_ns(&tx_end) - tx_start_time;
+ 	if (intf->stats.gap_num >= STATS_COUNT) {
+ 		intf->stats.tx_avg_time =
+ 		intf->stats.tx_cost_time / intf->stats.gap_num;
+@@ -1330,7 +1331,7 @@ int sprdwl_suspend_resume_handle(int chn, int mode)
+ 	struct sprdwl_tx_msg *tx_msg = (struct sprdwl_tx_msg *)intf->sprdwl_tx;
+ 	int ret;
+ 	struct sprdwl_vif *vif;
+-	struct timespec time;
++	sprdwl_timespec time;
+ 	enum sprdwl_mode sprdwl_mode = SPRDWL_MODE_STATION;
+ 	u8 mode_found = 0;
+ 
+@@ -1365,8 +1366,8 @@ int sprdwl_suspend_resume_handle(int chn, int mode)
+ 		}
+ 		priv->wakeup_tracer.resume_flag = 0;
+ 		intf->suspend_mode = SPRDWL_PS_SUSPENDING;
+-		getnstimeofday(&time);
+-		intf->sleep_time = timespec_to_ns(&time);
++		sprdwl_get_time(&time);
++		intf->sleep_time = sprdwl_time_to_ns(&time);
+ 		priv->is_suspending = 1;
+ 		ret = sprdwl_power_save(priv,
+ 					vif->ctx_id,
+@@ -1393,8 +1394,8 @@ int sprdwl_suspend_resume_handle(int chn, int mode)
+ #ifdef UNISOC_WIFI_PS
+ 		complete(&intf->suspend_completed);
+ #endif
+-		getnstimeofday(&time);
+-		intf->sleep_time = timespec_to_ns(&time) - intf->sleep_time;
++		sprdwl_get_time(&time);
++		intf->sleep_time = sprdwl_time_to_ns(&time) - intf->sleep_time;
+ 		ret = sprdwl_power_save(priv,
+ 					vif->ctx_id,
+ 					SPRDWL_SUSPEND_RESUME,
+@@ -1563,6 +1564,7 @@ void sprdwl_event_sta_lut(struct sprdwl_vif *vif, u8 *data, u16 len)
+ 	case UPD_LUT_INDEX:
+ 		peer_entry_delba((void *)intf, i);
+ 		sprdwl_dis_flush_txlist(intf, i);
++		fallthrough;
+ 	case ADD_LUT_INDEX:
+ 		intf->peer_entry[i].lut_index = i;
+ 		intf->peer_entry[i].ctx_id = sta_lut->ctx_id;
+@@ -1728,6 +1730,9 @@ void sprdwl_tx_delba(struct sprdwl_intf *intf,
+ 
+ int sprdwl_notifier_boost(struct notifier_block *nb, unsigned long event, void *data)
+ {
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
++	return NOTIFY_DONE;
++#else
+ 	struct cpufreq_policy *policy = data;
+ 	unsigned long min_freq;
+ 	unsigned long max_freq = policy->cpuinfo.max_freq;
+@@ -1745,6 +1750,7 @@ int sprdwl_notifier_boost(struct notifier_block *nb, unsigned long event, void *
+ 	cpufreq_verify_within_limits(policy, min_freq, max_freq);
+ 
+ 	return NOTIFY_OK;
++#endif
+ }
+ 
+ void sprdwl_boost(void)
+@@ -1753,7 +1759,9 @@ void sprdwl_boost(void)
+ 
+ 	if (intf->boost == 0) {
+ 		intf->boost = 1;
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
+ 		cpufreq_update_policy(0);
++#endif
+ 	}
+ }
+ 
+@@ -1763,7 +1771,9 @@ void sprdwl_unboost(void)
+ 
+ 	if (intf->boost == 1) {
+ 		intf->boost = 0;
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
+ 		cpufreq_update_policy(0);
++#endif
+ 	}
+ }
+ 
