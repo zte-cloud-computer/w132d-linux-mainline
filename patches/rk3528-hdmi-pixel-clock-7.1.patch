@@ -1,0 +1,51 @@
+diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+--- a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
++++ b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+@@ -350,9 +350,13 @@ dw_hdmi_rockchip_mode_valid(struct dw_hdmi *dw_hdmi, void *data,
+ 	if (hdmi->hdmiphy_clk) {
+ 		int rpclk = clk_round_rate(hdmi->hdmiphy_clk, pclk);
+ 
+ 		if (rpclk < 0 || abs(rpclk - pclk) > pclk / 1000)
+ 			return MODE_NOCLOCK;
++
++		if (mode->clock == 241500)
++			dev_info(hdmi->dev, "RK3528 HDMI mode 2560x1440@60 accepted at %d kHz\n",
++				 mode->clock);
+ 	}
+ 
+ 	return MODE_OK;
+ }
+@@ -379,5 +379,13 @@ dw_hdmi_rockchip_encoder_mode_set(struct drm_encoder *encoder,
+ {
+ 	struct rockchip_hdmi *hdmi = to_rockchip_hdmi(encoder);
+ 
+-	clk_set_rate(hdmi->ref_clk, adj_mode->clock * 1000);
++	/* RK3528 exposes the pixel PLL as the HDMI dclk_vp0 clock. */
++	if (hdmi->hdmiphy_clk) {
++		int ret = clk_set_rate(hdmi->hdmiphy_clk, adj_mode->clock * 1000);
++
++		dev_info(hdmi->dev,
++			 "RK3528 HDMI mode_set %ux%u@%u clock=%d kHz ret=%d\n",
++			 adj_mode->hdisplay, adj_mode->vdisplay,
++			 drm_mode_vrefresh(adj_mode), adj_mode->clock, ret);
++	}
+ }
+@@ -744,13 +751,10 @@ static int dw_hdmi_rockchip_bind(struct device *dev, struct device *master,
+ 		return dev_err_probe(hdmi->dev, ret, "failed to get phy\n");
+ 	}
+ 
+-	if (hdmi->phy) {
+-		struct of_phandle_args clkspec;
+-
+-		clkspec.np = hdmi->phy->dev.of_node;
+-		hdmi->hdmiphy_clk = of_clk_get_from_provider(&clkspec);
+-		if (IS_ERR(hdmi->hdmiphy_clk))
+-			hdmi->hdmiphy_clk = NULL;
+-	}
++	hdmi->hdmiphy_clk = devm_clk_get_optional(dev, "dclk_vp0");
++	if (IS_ERR(hdmi->hdmiphy_clk)) {
++		ret = PTR_ERR(hdmi->hdmiphy_clk);
++		return dev_err_probe(dev, ret, "failed to get HDMI pixel clock\n");
++	}
+ 
+ 	if (hdmi->chip_data == &rk3568_chip_data) {

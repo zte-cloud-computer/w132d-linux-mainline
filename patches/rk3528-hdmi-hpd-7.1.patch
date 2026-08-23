@@ -1,0 +1,138 @@
+--- a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
++++ b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+@@ -6,6 +6,8 @@
+ #include <linux/clk.h>
+ #include <linux/gpio/consumer.h>
+ #include <linux/hw_bitfield.h>
++#include <linux/io.h>
++#include <linux/interrupt.h>
+ #include <linux/mfd/syscon.h>
+ #include <linux/module.h>
+ #include <linux/platform_device.h>
+@@ -53,9 +55,12 @@
+ #define RK3399_HDMI_LCDC_SEL		BIT(6)
+ 
+ #define RK3528_VO_GRF_HDMI_MASK		0x60014
++#define RK3528_HDMI_SNKDET_SEL		BIT(6)
+ #define RK3528_HDMI_SNKDET			BIT(5)
+ #define RK3528_HDMI_SDAIN_MSK		BIT(1)
+ #define RK3528_HDMI_SCLIN_MSK		BIT(0)
++#define RK3528_GPIO_SWPORT_DR_L		0x0000
++#define RK3528_GPIO0_A2_DR			BIT(2)
+ 
+ #define RK3568_GRF_VO_CON1		0x0364
+ #define RK3568_HDMI_SDAIN_MSK		BIT(15)
+@@ -87,6 +92,8 @@
+ 	struct dw_hdmi *hdmi;
+ 	struct phy *phy;
+ 	struct gpio_desc *hpd_gpio;
++	void __iomem *gpio_base;
++	int hpd_irq;
+ };
+ 
+ static struct rockchip_hdmi *to_rockchip_hdmi(struct drm_encoder *encoder)
+@@ -204,6 +211,46 @@
+ 
+ static struct rockchip_hdmi_chip_data rk3528_chip_data;
+ 
++static void rk3528_gpio_hpd_sync(struct rockchip_hdmi *hdmi)
++{
++	int value;
++
++	if (!hdmi->hpd_gpio)
++		return;
++
++	/* GPIO0_A2 input enable is controlled by its output data bit. */
++	if (hdmi->gpio_base)
++		writel(FIELD_PREP_WM16(RK3528_GPIO0_A2_DR, 1),
++		       hdmi->gpio_base + RK3528_GPIO_SWPORT_DR_L);
++
++	regmap_write(hdmi->regmap, RK3528_VO_GRF_HDMI_MASK,
++		     FIELD_PREP_WM16(RK3528_HDMI_SNKDET_SEL, 1) |
++		     FIELD_PREP_WM16(RK3528_HDMI_SDAIN_MSK, 1) |
++		     FIELD_PREP_WM16(RK3528_HDMI_SCLIN_MSK, 1));
++
++	value = gpiod_get_value(hdmi->hpd_gpio);
++	if (value < 0)
++		return;
++
++	regmap_write(hdmi->regmap, RK3528_VO_GRF_HDMI_MASK,
++		     FIELD_PREP_WM16(RK3528_HDMI_SNKDET, value ? 1 : 0));
++}
++
++static irqreturn_t rk3528_hpd_irq(int irq, void *data)
++{
++	struct rockchip_hdmi *hdmi = data;
++	int value = gpiod_get_value(hdmi->hpd_gpio);
++
++	if (value >= 0) {
++		regmap_write(hdmi->regmap, RK3528_VO_GRF_HDMI_MASK,
++			     FIELD_PREP_WM16(RK3528_HDMI_SNKDET, value ? 1 : 0));
++		if (hdmi->encoder.encoder.dev)
++			drm_helper_hpd_irq_event(hdmi->encoder.encoder.dev);
++	}
++
++	return IRQ_HANDLED;
++}
++
+ static int rockchip_hdmi_parse_dt(struct rockchip_hdmi *hdmi)
+ {
+ 	struct device_node *np = hdmi->dev->of_node;
+@@ -227,6 +274,37 @@
+ 			     FIELD_PREP_WM16(RK3528_HDMI_SDAIN_MSK, 1) |
+ 			     FIELD_PREP_WM16(RK3528_HDMI_SCLIN_MSK, 1));
+ 
++	if (hdmi->chip_data == &rk3528_chip_data && hdmi->hpd_gpio) {
++		struct resource *res;
++
++		hdmi->hpd_irq = gpiod_to_irq(hdmi->hpd_gpio);
++		if (hdmi->hpd_irq < 0)
++			return hdmi->hpd_irq;
++
++		res = platform_get_resource(to_platform_device(hdmi->dev),
++					    IORESOURCE_MEM, 1);
++		if (!res)
++			return dev_err_probe(hdmi->dev, -ENODEV,
++					"failed to get RK3528 GPIO registers\n");
++
++		hdmi->gpio_base = devm_ioremap(hdmi->dev, res->start,
++					       resource_size(res));
++		if (!hdmi->gpio_base)
++			return dev_err_probe(hdmi->dev, -ENOMEM,
++					"failed to map RK3528 GPIO registers\n");
++
++		rk3528_gpio_hpd_sync(hdmi);
++		ret = devm_request_threaded_irq(hdmi->dev, hdmi->hpd_irq, NULL,
++						rk3528_hpd_irq,
++						IRQF_TRIGGER_RISING |
++						IRQF_TRIGGER_FALLING |
++						IRQF_ONESHOT,
++						"hdmi-hpd", hdmi);
++		if (ret)
++			return dev_err_probe(hdmi->dev, ret,
++					"failed to request HPD IRQ\n");
++	}
++
+ 	hdmi->ref_clk = devm_clk_get_optional_enabled(hdmi->dev, "ref");
+ 	if (!hdmi->ref_clk)
+ 		hdmi->ref_clk = devm_clk_get_optional_enabled(hdmi->dev, "vpll");
+@@ -496,12 +574,18 @@
+ 	return value ? connector_status_connected : connector_status_disconnected;
+ }
+ 
++static void rk3528_setup_hpd(struct dw_hdmi *dw_hdmi, void *data)
++{
++	dw_hdmi_phy_setup_hpd(dw_hdmi, data);
++	rk3528_gpio_hpd_sync(data);
++}
++
+ static const struct dw_hdmi_phy_ops rk3528_hdmi_phy_ops = {
+ 	.init		= dw_hdmi_rockchip_genphy_init,
+ 	.disable	= dw_hdmi_rockchip_genphy_disable,
+ 	.read_hpd	= dw_hdmi_rk3528_read_hpd,
+ 	.update_hpd	= dw_hdmi_phy_update_hpd,
+-	.setup_hpd	= dw_hdmi_phy_setup_hpd,
++	.setup_hpd	= rk3528_setup_hpd,
+ };
+ 
+ static struct rockchip_hdmi_chip_data rk3328_chip_data = {

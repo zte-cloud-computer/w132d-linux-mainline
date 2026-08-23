@@ -1,0 +1,13 @@
+diff --git a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
+--- a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
++++ b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
+@@ -2673,7 +2673,8 @@ static const struct vop2_video_port_data rk3528_vop_video_ports[] = {
+ 		.feature = VOP2_VP_FEATURE_OUTPUT_10BIT,
+ 		.gamma_lut_len = 1024,
+ 		.max_output = { 4096, 4096 },
+-		.pre_scan_max_dly = { 27, 45, 48, 8 },
++		/* RK3528 vendor values: window, layer mix, HDR mix, total. */
++		.pre_scan_max_dly = { 8, 6, 2, 16 },
+ 		.offset = 0xc00,
+ 	},
+ };

@@ -1,0 +1,11 @@
+--- a/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
++++ b/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c
+@@ -2478,5 +2478,7 @@ static const struct drm_edid *dw_hdmi_edid_read(struct dw_hdmi *hdmi,
+ 	drm_edid = drm_edid_read_ddc(connector, hdmi->ddc);
+ 	if (!drm_edid) {
+-		dev_dbg(hdmi->dev, "failed to get edid\n");
++		dev_err(hdmi->dev,
++			"failed to get EDID over DDC for %s (adapter %s)\n",
++			connector->name, hdmi->ddc->name);
+ 		return NULL;
+ 	}

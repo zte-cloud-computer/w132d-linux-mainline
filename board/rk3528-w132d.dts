@@ -11,10 +11,18 @@
 #include "rk3528.dtsi"
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/phy/phy.h>
+#include <dt-bindings/soc/rockchip,vop2.h>
 
 / {
 	model = "ZTE Cloud Computer W132D";
 	compatible = "zte,w132d", "rockchip,rk3528";
+
+	/* Mainline DRM master for the experimental RK3528 display path. */
+	display_subsystem: display-subsystem {
+		compatible = "rockchip,display-subsystem";
+		ports = <&vop_out>;
+		status = "okay";
+	};
 
 	aliases {
 		ethernet0 = &gmac0;
@@ -114,6 +122,125 @@
 	vbus-supply = <&vcc5v0_host>;
 	maximum-speed = "super-speed";
 	status = "okay";
+};
+
+/*
+ * RK3528 display bring-up.  The board now selects project-local RK3528
+ * HDMI PHY/glue matches; VOP2 register data is still being ported.
+ */
+&{/soc} {
+	vop: vop@ff840000 {
+		compatible = "rockchip,rk3528-vop", "rockchip,rk3568-vop";
+		reg = <0x0 0xff840000 0x0 0x3000>,
+		      <0x0 0xff845000 0x0 0x1000>,
+		      <0x0 0xff846400 0x0 0x800>;
+		reg-names = "vop", "gamma-lut", "acm-regs";
+		interrupts = <GIC_SPI 109 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru ACLK_VOP>,
+				 <&cru HCLK_VOP>,
+				 <&cru DCLK_VOP0>,
+				 <&cru DCLK_VOP1>,
+				 <&cru DCLK_VOP1>;
+		clock-names = "aclk", "hclk", "dclk_vp0", "dclk_vp1", "dclk_vp2";
+		assigned-clocks = <&cru DCLK_VOP0>;
+		assigned-clock-parents = <&inno_hdmiphy_clk>;
+		rockchip,grf = <&vo_grf>;
+		status = "okay";
+
+		vop_out: ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				#address-cells = <1>;
+				#size-cells = <0>;
+				reg = <0>;
+
+				vp0_out_hdmi: endpoint@ROCKCHIP_VOP2_EP_HDMI0 {
+					reg = <ROCKCHIP_VOP2_EP_HDMI0>;
+					remote-endpoint = <&hdmi_in_vp0>;
+				};
+			};
+		};
+	};
+
+	hdmiphy: hdmiphy@ffe00000 {
+		compatible = "rockchip,rk3528-hdmi-phy", "rockchip,rk3328-hdmi-phy";
+		reg = <0x0 0xffe00000 0x0 0x10000>;
+		interrupts = <GIC_SPI 101 IRQ_TYPE_LEVEL_HIGH>;
+		#phy-cells = <0>;
+		clocks = <&cru PCLK_HDMIPHY>, <&xin24m>;
+		clock-names = "sysclk", "refclk";
+		status = "okay";
+
+		/* RK3528 exposes the pixel clock through the dedicated clk-port. */
+		inno_hdmiphy_clk: clk-port {
+			#clock-cells = <0>;
+			clock-output-names = "clk_hdmiphy_pixel_io";
+			status = "okay";
+		};
+	};
+
+	hdmi: hdmi@ff8d0000 {
+		compatible = "rockchip,rk3528-dw-hdmi", "rockchip,rk3328-dw-hdmi";
+		reg = <0x0 0xff8d0000 0x0 0x20000>,
+		      <0x0 0xff610000 0x0 0x200>;
+		interrupts = <GIC_SPI 102 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 103 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "hdmi", "hdmi_wakeup";
+		clocks = <&cru PCLK_HDMI>,
+				 <&cru CLK_SFR_HDMI>,
+				 <&cru CLK_CEC_HDMI>,
+				 <&inno_hdmiphy_clk>;
+		clock-names = "iahb", "isfr", "cec", "dclk_vp0";
+		ddc-i2c-scl-high-time-ns = <9625>;
+		ddc-i2c-scl-low-time-ns = <10000>;
+		reg-io-width = <4>;
+		rockchip,grf = <&vo_grf>;
+		rockchip,cts-manual;
+		pinctrl-names = "default";
+		/* PA2 is the RK3528 GPIO HPD workaround input, not HDMI mux 1. */
+		pinctrl-0 = <&hdmi_w132d_pins>;
+		phys = <&hdmiphy>;
+		phy-names = "hdmi";
+		hpd-gpios = <&gpio0 RK_PA2 GPIO_ACTIVE_HIGH>;
+		#sound-dai-cells = <0>;
+		status = "okay";
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+
+				hdmi_in_vp0: endpoint {
+					remote-endpoint = <&vp0_out_hdmi>;
+				};
+			};
+
+			port@1 {
+				reg = <1>;
+			};
+		};
+	};
+};
+
+/*
+ * RK3528 W132D uses GPIO0_A2 for the HDMI 5 V HPD signal.  The upstream
+ * hdmi-pins group muxes PA2 to function 1, which prevents the GPIO consumer
+ * and the vendor SNKDET workaround from observing the signal.
+ */
+&pinctrl {
+	hdmi_w132d {
+		hdmi_w132d_pins: hdmi-w132d-pins {
+			rockchip,pins =
+				<0 RK_PA3 1 &pcfg_pull_none>,
+				<0 RK_PA2 0 &pcfg_pull_none>,
+				<0 RK_PA4 1 &pcfg_pull_none>,
+				<0 RK_PA5 1 &pcfg_pull_none>;
+		};
+	};
 };
 
 /* UWE5622 WCN/SDIO nodes are used by the out-of-tree mainline port. */

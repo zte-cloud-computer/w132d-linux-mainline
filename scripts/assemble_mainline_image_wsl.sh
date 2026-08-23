@@ -15,7 +15,7 @@ BASE_IMAGE=${W132D_MAINLINE_BASE_IMAGE:-$PRIVATE_DIR/w132d-armbian-20260820-2001
 VENDOR_ANDROID_IMAGE=${W132D_MAINLINE_VENDOR_IMAGE:-$PRIVATE_DIR/w132d-a9/15.vendor.img}
 WIRELESS_OUT=${W132D_MAINLINE_WIRELESS_OUT:-$MAINLINE_DIR/out/wireless}
 WIRELESS_STAGE=${W132D_MAINLINE_WIRELESS_STAGE:-$BUILD_ROOT/vendor-wireless-mainline}
-WIRELESS_PORT_REPO=${W132D_MAINLINE_PORT_REPO:-$MAINLINE_DIR}
+WIRELESS_PORT_REPO=${W132D_MAINLINE_PORT_REPO:-$MAINLINE_DIR/../w132d-armbian-port-repo}
 CHROOT_POLICY_BACKUP=$OUT_WORK/policy-rc.d.backup
 CHROOT_RESOLV_BACKUP=$OUT_WORK/resolv.conf.backup
 HAD_CHROOT_POLICY=0
@@ -23,6 +23,12 @@ HAD_CHROOT_RESOLV=0
 ROOT_UUID=${W132D_MAINLINE_ROOT_UUID:-b9d1a0d9-6a3b-4db8-9d7a-2b1b6c11e721}
 ROOT_PARTUUID=${W132D_MAINLINE_ROOT_PARTUUID:-3051FA2F-CBC1-40D3-9B27-2CDE013D09CE}
 ROOT_DEVICE=${W132D_MAINLINE_ROOT_DEVICE:-/dev/mmcblk0p3}
+if [ "${W132D_MAINLINE_VIDEO_ARGS+x}" = x ]; then
+	VIDEO_ARGS=$W132D_MAINLINE_VIDEO_ARGS
+else
+	VIDEO_ARGS=
+fi
+IMAGE_VARIANT=${W132D_IMAGE_VARIANT:-}
 ROOT_START=1073152
 BOOT_START=24576
 BOOT_END=1073151
@@ -182,9 +188,12 @@ install -d /mnt/w132d-mainline-boot/rockchip /mnt/w132d-mainline-boot/extlinux
 install -m 0644 "$MAINLINE_DIR/out/rk3528-w132d.dtb" /mnt/w132d-mainline-boot/rockchip/rk3528-w132d.dtb
 install -m 0644 "$REPO_ROOT/boot/extlinux.mainline.conf" /mnt/w132d-mainline-boot/extlinux/extlinux.conf
 install -m 0644 "$REPO_ROOT/boot/armbianEnv.mainline.txt" /mnt/w132d-mainline-boot/armbianEnv.txt
-sed "s|@ROOT_DEVICE@|${ROOT_DEVICE}|g" "$REPO_ROOT/boot/boot.mainline.cmd" > "$OUT_WORK/boot.mainline.cmd"
-sed "s|@ROOT_DEVICE@|${ROOT_DEVICE}|g" "$REPO_ROOT/boot/extlinux.mainline.conf" > "$OUT_WORK/extlinux.mainline.conf"
-sed "s|@ROOT_DEVICE@|${ROOT_DEVICE}|g" "$REPO_ROOT/boot/armbianEnv.mainline.txt" > "$OUT_WORK/armbianEnv.mainline.txt"
+sed -e "s|@ROOT_DEVICE@|${ROOT_DEVICE}|g" -e "s|@VIDEO_ARGS@|${VIDEO_ARGS}|g" \
+	"$REPO_ROOT/boot/boot.mainline.cmd" > "$OUT_WORK/boot.mainline.cmd"
+sed -e "s|@ROOT_DEVICE@|${ROOT_DEVICE}|g" -e "s|@VIDEO_ARGS@|${VIDEO_ARGS}|g" \
+	"$REPO_ROOT/boot/extlinux.mainline.conf" > "$OUT_WORK/extlinux.mainline.conf"
+sed -e "s|@ROOT_DEVICE@|${ROOT_DEVICE}|g" -e "s|@VIDEO_ARGS@|${VIDEO_ARGS}|g" \
+	"$REPO_ROOT/boot/armbianEnv.mainline.txt" > "$OUT_WORK/armbianEnv.mainline.txt"
 install -m 0644 "$OUT_WORK/extlinux.mainline.conf" /mnt/w132d-mainline-boot/extlinux/extlinux.conf
 install -m 0644 "$OUT_WORK/armbianEnv.mainline.txt" /mnt/w132d-mainline-boot/armbianEnv.txt
 mkimage -C none -A arm64 -T script -d "$OUT_WORK/boot.mainline.cmd" /mnt/w132d-mainline-boot/boot.scr >/dev/null
@@ -244,9 +253,9 @@ ln -sf /etc/systemd/system/w132d-wireless.service \
 	/mnt/w132d-mainline-root/etc/systemd/system/multi-user.target.wants/w132d-wireless.service
 sync
 
-umount /mnt/w132d-mainline-boot
-umount /mnt/w132d-mainline-src
-umount /mnt/w132d-mainline-root
+mountpoint -q /mnt/w132d-mainline-boot && umount /mnt/w132d-mainline-boot
+mountpoint -q /mnt/w132d-mainline-src && umount /mnt/w132d-mainline-src
+mountpoint -q /mnt/w132d-mainline-root && umount /mnt/w132d-mainline-root
 losetup -d "$LOOP_OUT"; LOOP_OUT=
 if [ -n "$LOOP_SRC" ]; then
 	losetup -d "$LOOP_SRC"
@@ -254,16 +263,25 @@ if [ -n "$LOOP_SRC" ]; then
 fi
 
 STAMP=$(TZ=Asia/Shanghai date +%Y%m%d-%H%M%S)
-PUBLISH_IMG="$OUT_DIR/w132d-mainline-armbian-${STAMP}-UTC+8.img"
+if [ -n "$IMAGE_VARIANT" ]; then
+	case "$IMAGE_VARIANT" in
+		*[!a-zA-Z0-9._-]*) echo 'ERROR: invalid W132D_IMAGE_VARIANT' >&2; exit 1 ;;
+	esac
+	PUBLISH_IMG="$OUT_DIR/w132d-mainline-armbian-${IMAGE_VARIANT}-${STAMP}-UTC+8.img"
+else
+	PUBLISH_IMG="$OUT_DIR/w132d-mainline-armbian-${STAMP}-UTC+8.img"
+fi
 cp -f "$OUT_IMG" "$PUBLISH_IMG"
 (cd "$OUT_DIR" && sha256sum "$(basename "$PUBLISH_IMG")" > "$(basename "$PUBLISH_IMG").sha256")
-mapfile -t PUBLISHED_IMAGES < <(ls -1t "$OUT_DIR"/w132d-mainline-armbian-*.img 2>/dev/null || true)
-for old_image in "${PUBLISHED_IMAGES[@]:2}"; do
-	rm -f "$old_image" "${old_image}.sha256"
-done
-# Remove hash sidecars left behind when an image was manually removed.
-for hash_file in "$OUT_DIR"/w132d-mainline-armbian-*.img.sha256; do
-	[ -e "$hash_file" ] || continue
-	[ -e "${hash_file%.sha256}" ] || rm -f "$hash_file"
-done
+if [ "${W132D_KEEP_ALL_IMAGES:-1}" != 1 ]; then
+	mapfile -t PUBLISHED_IMAGES < <(ls -1t "$OUT_DIR"/w132d-mainline-armbian-*.img 2>/dev/null || true)
+	for old_image in "${PUBLISHED_IMAGES[@]:2}"; do
+		rm -f "$old_image" "${old_image}.sha256"
+	done
+	# Remove hash sidecars left behind when an image was manually removed.
+	for hash_file in "$OUT_DIR"/w132d-mainline-armbian-*.img.sha256; do
+		[ -e "$hash_file" ] || continue
+		[ -e "${hash_file%.sha256}" ] || rm -f "$hash_file"
+	done
+fi
 echo "MAINLINE_IMAGE_DONE $PUBLISH_IMG"

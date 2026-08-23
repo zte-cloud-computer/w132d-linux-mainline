@@ -1,0 +1,28 @@
+diff --git a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
+--- a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
++++ b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
+@@ -2591,4 +2591,23 @@ static unsigned long rk3528_set_intf_mux(struct vop2_video_port *vp,
+ 						 int id, u32 polflags)
+ {
+-	return rk3568_set_intf_mux(vp, id, polflags);
++	struct vop2 *vop2 = vp->vop2;
++	unsigned long clock;
++	u32 dip;
++
++	clock = rk3568_set_intf_mux(vp, id, polflags);
++
++	/*
++	 * The RK3528 vendor VOP descriptor sets hdmi_dclk_pol=1 for HDMI0.
++	 * The generic RK3568 helper leaves bit 7 clear when the DT does not
++	 * request pixel-clock inversion. Preserve the RK3528 edge polarity
++	 * here; the stream can be readable while still retraining/flickering
++	 * when this bit is wrong.
++	 */
++	if (id == ROCKCHIP_VOP2_EP_HDMI0) {
++		dip = vop2_readl(vop2, RK3568_DSP_IF_POL);
++		dip |= BIT(7);
++		vop2_writel(vop2, RK3568_DSP_IF_POL, dip);
++	}
++
++	return clock;
+ }

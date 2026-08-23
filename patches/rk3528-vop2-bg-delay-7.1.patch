@@ -1,0 +1,15 @@
+--- a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
++++ b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
+@@ -2528,6 +2528,11 @@ static void rk3528_vop2_setup_bg_dly(struct vop2_video_port *vp)
+ 	u32 bg_dly = vp->data->pre_scan_max_dly[3];
++	u32 bg_mix_ctrl;
+ 
+-	vop2_writel(vp->vop2, 0x670, bg_dly);
++	/* RK3528 stores the delay in the high byte of PORT0_BG_MIX_CTRL. */
++	bg_mix_ctrl = vop2_readl(vp->vop2, 0x670);
++	bg_mix_ctrl &= ~GENMASK(31, 24);
++	bg_mix_ctrl |= bg_dly << 24;
++	vop2_writel(vp->vop2, 0x670, bg_mix_ctrl);
+ 	vop2_vp_write(vp, RK3568_VP_PRE_SCAN_HTIMING,
+ 		      ((bg_dly + (hdisplay >> 1) - 1) << 16) | hsync_len);
+ }

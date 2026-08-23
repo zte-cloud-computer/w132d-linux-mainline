@@ -1,0 +1,10 @@
+diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+--- a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
++++ b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+@@ -345,6 +345,0 @@
+-    /* The RK3528 PHY table explicitly supports the 241.5 MHz CVT-RB mode. */
+-    if (mode->clock == 241500 &&
+-        of_device_is_compatible(hdmi->dev->of_node,
+-                                 "rockchip,rk3528-dw-hdmi"))
+-        return MODE_OK;
+-

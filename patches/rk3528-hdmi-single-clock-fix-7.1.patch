@@ -1,0 +1,10 @@
+diff --git a/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c b/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c
+--- a/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c
++++ b/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c
+@@ -1810,5 +1810,6 @@ static void vop2_crtc_atomic_enable(struct drm_crtc *crtc,
+ 	else if (vop2->version == VOP_VERSION_RK3528)
+ 		drm_info(vop2->drm,
+ 			 "RK3528 vp%d dclk requested=%lu Hz actual=%lu Hz\n",
++			 vp->id, clock, clk_get_rate(vp->dclk));
+ 
+ 	vop2_post_config(crtc);

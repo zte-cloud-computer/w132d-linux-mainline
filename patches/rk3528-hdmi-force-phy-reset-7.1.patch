@@ -1,0 +1,24 @@
+--- a/drivers/phy/rockchip/phy-rockchip-inno-hdmi.c
++++ b/drivers/phy/rockchip/phy-rockchip-inno-hdmi.c
+@@ -1264,12 +1264,15 @@ static void inno_hdmi_phy_rk3528_init(struct inno_hdmi_phy *inno)
+ 	 */
+ 	inno_write(inno, 0x02, 0x81);
+ 
+-	/* if phy had been set in uboot, pll is locked */
++	/*
++	 * Do not inherit U-Boot's lock/output state.  The PHY may be locked
++	 * with a different pixel clock or analog configuration; force the
++	 * complete Linux power-on sequence to run for every modeset.
++	 */
+ 	if (inno_read(inno, 0xa9) & BIT(0)) {
+-		dev_info(inno->dev, "phy had been powered up\n");
+-		inno->phy->power_count = 1;
+-	} else {
+-		/* manual power down post-PLL */
+-		inno_hdmi_phy_rk3528_power_off(inno);
++		dev_info(inno->dev, "forcing reset of U-Boot-powered PHY\n");
+ 	}
++
++	/* Manual power down post-PLL before Linux selects its own rate. */
++	inno_hdmi_phy_rk3528_power_off(inno);
+ }

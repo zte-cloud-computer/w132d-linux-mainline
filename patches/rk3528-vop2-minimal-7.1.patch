@@ -1,0 +1,128 @@
+diff --git a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
+index 8f1b9f3..8f1b9f3 100644
+--- a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
++++ b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
+@@ -2500,6 +2500,113 @@ static const struct vop2_ops rk3588_vop_ops = {
+ 	.setup_overlay = rk3568_vop2_setup_overlay,
+ };
+ 
++/*
++ * RK3528 bring-up descriptor.  The mainline VOP2 implementation predates
++ * the full RK3528 VOP3 register model, so keep this first step deliberately
++ * small: VP0 and one Cluster0 primary plane only.  The register offsets used
++ * by the Cluster0 and VP0 timing blocks are shared with the older VOP2
++ * layout; ESMART, HDR and VP1 are intentionally left out until their native
++ * descriptors are translated.
++ */
++/* RK3528 keeps HDMI interface fields at VOP2 offsets, but its overlay port
++ * mux is in OVL_SYS_PORT_SEL_IMD (0x504), not the RK3568 0x608 register. */
++static unsigned long rk3528_set_intf_mux(struct vop2_video_port *vp,
++					 int id, u32 polflags)
++{
++	return rk3568_set_intf_mux(vp, id, polflags);
++}
++
++static void rk3528_vop2_setup_bg_dly(struct vop2_video_port *vp)
++{
++	struct drm_display_mode *mode = &vp->crtc.state->adjusted_mode;
++	u16 hdisplay = mode->crtc_hdisplay;
++	u16 hsync_len = mode->crtc_hsync_end - mode->crtc_hsync_start;
++	u32 bg_dly = vp->data->pre_scan_max_dly[3];
++
++	vop2_writel(vp->vop2, 0x670, bg_dly);
++	vop2_vp_write(vp, RK3568_VP_PRE_SCAN_HTIMING,
++		      ((bg_dly + (hdisplay >> 1) - 1) << 16) | hsync_len);
++}
++
++static void rk3528_vop2_setup_overlay(struct vop2_video_port *vp)
++{
++	struct vop2 *vop2 = vp->vop2;
++	struct drm_plane *plane;
++	u32 layer_sel = 0xffff;
++	u32 port_sel = 0;
++
++	vp->win_mask = 0;
++	drm_atomic_crtc_for_each_plane(plane, &vp->crtc) {
++		struct vop2_win *win = to_vop2_win(plane);
++
++		vp->win_mask |= BIT(win->data->phys_id);
++		layer_sel &= ~GENMASK(3, 0);
++		layer_sel |= win->data->layer_sel_id[vp->id];
++		if (win->data->phys_id == ROCKCHIP_VOP2_CLUSTER0)
++			port_sel |= vp->id;
++	}
++
++	if (!vp->win_mask)
++		return;
++
++	/* OVL_PORT0_CTRL, OVL_PORT0_LAYER_SEL, OVL_SYS_PORT_SEL_IMD. */
++	vop2_writel(vop2, 0x600, 0);
++	vop2_writel(vop2, 0x604, layer_sel);
++	vop2_writel(vop2, 0x504, port_sel);
++}
++
++static const struct vop2_ops rk3528_vop_ops = {
++	.setup_intf_mux = rk3528_set_intf_mux,
++	.setup_bg_dly = rk3528_vop2_setup_bg_dly,
++	.setup_overlay = rk3528_vop2_setup_overlay,
++};
++
++static const struct vop2_video_port_data rk3528_vop_video_ports[] = {
++	{
++		.id = 0,
++		.feature = VOP2_VP_FEATURE_OUTPUT_10BIT,
++		.gamma_lut_len = 1024,
++		.max_output = { 4096, 4096 },
++		.pre_scan_max_dly = { 27, 45, 48, 0 },
++		.offset = 0xc00,
++	},
++};
++
++static const struct vop2_win_data rk3528_vop_win_data[] = {
++	{
++		.name = "Cluster0-win0",
++		.phys_id = ROCKCHIP_VOP2_CLUSTER0,
++		.base = 0x1000,
++		.possible_vp_mask = BIT(0),
++		.formats = formats_cluster,
++		.nformats = ARRAY_SIZE(formats_cluster),
++		.format_modifiers = format_modifiers,
++		.layer_sel_id = { 0, 0xf, 0xf, 0xf },
++		.supported_rotations = DRM_MODE_REFLECT_X | DRM_MODE_REFLECT_Y,
++		.type = DRM_PLANE_TYPE_PRIMARY,
++		.feature = WIN_FEATURE_CLUSTER,
++		.max_upscale_factor = 4,
++		.max_downscale_factor = 4,
++		.dly = { 0, 27, 21 },
++	},
++};
++
++static const struct vop2_data rk3528_vop = {
++	.version = VOP_VERSION_RK3528,
++	.nr_vps = 1,
++	.max_input = { 4096, 4096 },
++	.max_output = { 4096, 4096 },
++	.vp = rk3528_vop_video_ports,
++	.win = rk3528_vop_win_data,
++	.win_size = ARRAY_SIZE(rk3528_vop_win_data),
++	.cluster_reg = rk3568_vop_cluster_regs,
++	.nr_cluster_regs = ARRAY_SIZE(rk3568_vop_cluster_regs),
++	.smart_reg = rk3568_vop_smart_regs,
++	.nr_smart_regs = ARRAY_SIZE(rk3568_vop_smart_regs),
++	.ops = &rk3528_vop_ops,
++	.soc_id = 3528,
++};
++
+ static const struct vop2_data rk3566_vop = {
+ 	.version = VOP_VERSION_RK3568,
+ 	.feature = VOP2_FEATURE_HAS_SYS_GRF,
+@@ -2598,6 +2632,9 @@ static const struct of_device_id vop2_dt_match[] = {
+ 		.compatible = "rockchip,rk3566-vop",
+ 		.data = &rk3566_vop,
+ 	}, {
++		.compatible = "rockchip,rk3528-vop",
++		.data = &rk3528_vop,
++	}, {
+ 		.compatible = "rockchip,rk3568-vop",
+ 		.data = &rk3568_vop,
+ 	}, {

@@ -1,0 +1,10 @@
+diff --git a/drivers/gpu/drm/drm_modes.c b/drivers/gpu/drm/drm_modes.c
+--- a/drivers/gpu/drm/drm_modes.c
++++ b/drivers/gpu/drm/drm_modes.c
+@@ -1814,4 +1814,5 @@
+ 			if (mode->type & DRM_MODE_TYPE_USERDEF) {
+ 				drm_warn(dev, "User-defined mode not supported: "
+-					 DRM_MODE_FMT "\n", DRM_MODE_ARG(mode));
++					 DRM_MODE_FMT " (%s)\n", DRM_MODE_ARG(mode),
++					 drm_get_mode_status_name(mode->status));
+ 			}

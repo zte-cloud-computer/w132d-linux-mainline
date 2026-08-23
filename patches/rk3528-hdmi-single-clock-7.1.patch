@@ -1,0 +1,43 @@
+diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+--- a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
++++ b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+@@ -381,11 +381,12 @@ static void dw_hdmi_rockchip_encoder_mode_set(struct drm_encoder *encoder,
+ 	struct rockchip_hdmi *hdmi = to_rockchip_hdmi(encoder);
+ 
+-	/* RK3528 exposes the pixel PLL as the HDMI dclk_vp0 clock. */
+-	if (hdmi->hdmiphy_clk) {
+-		int ret = clk_set_rate(hdmi->hdmiphy_clk, adj_mode->clock * 1000);
+-
+-		dev_info(hdmi->dev,
+-			 "RK3528 HDMI mode_set %ux%u@%u clock=%d kHz ret=%d\n",
+-			 adj_mode->hdisplay, adj_mode->vdisplay,
+-			 drm_mode_vrefresh(adj_mode), adj_mode->clock, ret);
+-	}
++	/*
++	 * RK3528's HDMI pixel PLL is the VOP dclk_vp0 clock. The VOP CRTC
++	 * owns its parent/rate programming; changing it here causes a second
++	 * PLL reconfiguration during one atomic modeset and can retrain HDMI.
++	 */
++	dev_info(hdmi->dev,
++		 "RK3528 HDMI mode_set %ux%u@%u clock=%d kHz vop_dclk=%lu Hz (VOP-owned)\n",
++		 adj_mode->hdisplay, adj_mode->vdisplay,
++		 drm_mode_vrefresh(adj_mode), adj_mode->clock,
++		 hdmi->hdmiphy_clk ? clk_get_rate(hdmi->hdmiphy_clk) : 0UL);
+ }
+diff --git a/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c b/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c
+--- a/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c
++++ b/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c
+@@ -1804,3 +1804,10 @@ static void vop2_crtc_atomic_enable(struct drm_crtc *crtc,
+ 	}
+ 
+-	clk_set_rate(vp->dclk, clock);
++	ret = clk_set_rate(vp->dclk, clock);
++	if (ret < 0)
++		drm_err(vop2->drm, "failed to set dclk for video port%d to %lu Hz: %d\n",
++			vp->id, clock, ret);
++	else if (vop2->version == VOP_VERSION_RK3528)
++		drm_info(vop2->drm,
++			 "RK3528 vp%d dclk requested=%lu Hz actual=%lu Hz\n",
++			 vp->id, clock, clk_get_rate(vp->dclk));
+ 
+ 	vop2_post_config(crtc);

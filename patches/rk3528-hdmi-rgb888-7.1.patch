@@ -1,0 +1,12 @@
+diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+--- a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
++++ b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+@@ -447,6 +447,7 @@ dw_hdmi_rockchip_encoder_atomic_check(struct drm_encoder *encoder,
+ 	struct rockchip_crtc_state *s = to_rockchip_crtc_state(crtc_state);
+ 
+-	s->output_mode = ROCKCHIP_OUT_MODE_AAAA;
++	/* RK3528 HDMI is wired for the standard 8-bit RGB888 path. */
++	s->output_mode = ROCKCHIP_OUT_MODE_P888;
+ 	s->output_type = DRM_MODE_CONNECTOR_HDMIA;
+ 
+ 	return 0;

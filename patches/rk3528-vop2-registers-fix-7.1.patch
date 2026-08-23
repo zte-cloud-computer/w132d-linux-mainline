@@ -1,0 +1,10 @@
+diff --git a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
+--- a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
++++ b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
+@@ -2637,5 +2637,5 @@ static void rk3528_vop2_setup_overlay(struct vop2_video_port *vp)
+ 	vop2_writel(vop2, 0x504, port_sel);
+ 	if (vp->primary_plane) {
+-		vop2_setup_cluster_alpha(vop2, to_vop2_win(vp->primary_plane));
++		vop2_setup_cluster_alpha(vop2, vp->primary_plane);
+ 		vop2_setup_alpha(vp);
+ 	}

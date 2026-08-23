@@ -1,97 +1,193 @@
-# W132D 主线状态
+# Mainline 7.1 status
 
-## 本快照范围
+## Current snapshot (2026-08-23)
 
-本分支记录硬件验证阶段之后的 Linux v7.1 主线 bring-up。目标是在暂时保留已验证 vendor SPL/U-Boot 作为启动链的前提下，替代 vendor 内核。
+- The project target is a mainline Linux v7.1 runtime; vendor SPL/U-Boot is
+  retained only as a temporary private boot-chain input.
+- eMMC, USB2, USB3, wired Ethernet, Wi-Fi, and Bluetooth are hardware-tested
+  and must remain regression gates. 3.5 mm audio and infrared are dropped.
+- HDMI is experimentally working on one 2K monitor at 2560x1440@60. The
+  tested path uses the RK3528 RGB888/P888 output format and vendor-derived VP0
+  delay values; multi-monitor, hotplug, suspend/resume, and long-run coverage
+  remain open.
+- The current boot templates keep kernel logs on TTL (`ttyS0`) and omit a
+  forced `video=` mode so DRM can use EDID. This exact template combination
+  still needs hardware confirmation; diagnostic mode arguments can be supplied
+  with `W132D_MAINLINE_VIDEO_ARGS`.
+- See `docs/HDMI_PORTING.md` for the consolidated HDMI history and known limits.
 
-本快照刻意禁用了显示路径。显示移植已暂停，其实验代码、补丁、设备树节点和启动参数均不属于 `main`。
+## Current snapshot (English)
 
-## 硬件矩阵
+- The project targets a mainline Linux v7.1 runtime; vendor SPL/U-Boot remains
+  only as a temporary private boot-chain input.
+- eMMC, USB2, USB3, wired Ethernet, Wi-Fi, and Bluetooth are hardware-tested
+  regression gates. 3.5 mm audio and infrared are dropped.
+- HDMI is experimentally working on one 2K monitor at 2560x1440@60. The tested
+  path uses RGB888/P888 output and vendor-derived VP0 delay values; multi-
+  monitor, hotplug, suspend/resume, and long-run coverage remain open.
+- Current boot templates keep kernel logs on TTL (`ttyS0`) and omit a forced
+  `video=` mode so DRM can use EDID. This exact template combination still
+  needs hardware confirmation; set `W132D_MAINLINE_VIDEO_ARGS` for diagnostics.
+- See `docs/HDMI_PORTING.md` for the consolidated HDMI history and limits.
 
-| 设备 | 结果 | 备注 |
-| --- | --- | --- |
-| eMMC | 通过 | 3.3 V MMC High-Speed 模式，限制为 52 MHz |
-| USB2 | 通过 | GM8220S hub 复位保持 deasserted |
-| USB3 | 通过 | 仅主机模式的 DWC3 路径，使用 RK3528 combo PHY |
-| 有线网口 | 通过 | RK3528 集成 RMII MACPHY |
-| Wi-Fi | 通过 | UWE5622 经 SDIO1，扫描和连接均已测试 |
-| 蓝牙 | 通过 | UWE5622 tty-over-SDIO 加用户态 HCI 配置 |
-| 3.5mm 音频 | 放弃 | 不再计划适配 |
-| 红外 | 放弃 | 不再计划适配 |
-| 显示输出 | 延后 | 在有审查过的 RK3528 主线方案前保持禁用 |
+The sections below retain chronological build checkpoints from the bring-up;
+later HDMI entries supersede the early baseline statements.
 
-## 主线文件
+## Historical build checkpoint
 
-- `board/rk3528-w132d.dts` 只描述已验证的存储、网络、USB、控制台和无线路径。
-- `scripts/prepare_mainline_kernel_wsl.sh` 应用 USB 修复、更新蓝牙命令兼容性，并禁用显示相关内核选项。
-- `scripts/build_wireless_mainline_wsl.sh` 针对 Linux v7.1 构建 WCN、Wi-Fi、蓝牙和 HCI 辅助组件。
-- `scripts/assemble_mainline_image_wsl.sh` 使用私有启动/rootfs/固件输入创建完整镜像，不导出原始分区。
+- Linux v7.1 source commit: `8cd9520d35a6c38db6567e97dd93b1f11f185dc6`
+- W132D DTB compile: passed
+- ARM64 `Image` compile: passed
+- Output files: `out/rk3528-w132d.dtb` (27,043 bytes) and `out/Image`
+  (43,248,128 bytes)
+- Artifact checks: ARM64 `Image` header `4d 5a 40 fa`; DTB magic `d0 0d fe ed`
+- SHA-256: `Image` = `c81a57928c7ff17db9669c0cfb03f3a20f035e9c03ee2fef2a1ec2a33216c51f`;
+  DTB = `7ccac759b9d73945fe4bbc1174d06bd544037184cff0c788c1fdcd2b8a2a52e9`
+- Hardware boot test: not performed
+- Armbian image: generated, not yet flashed or boot-tested
+- Image: `out/images/w132d-mainline-armbian-20260821-123019-UTC+8.img`
+- Image SHA-256: `f64eb6a37a702d7c428c9e22bcc4e8e380232aa31f92adab932e7fb90c3acd19`
+- Image layout: GPT; vendor boot blobs at sectors 64 and 16384; 512 MiB FAT32
+  bootfs at sectors 24576-1073151; ext4 rootfs from sector 1073152
+- Image boot files: mainline `Image`, `rk3528-w132d.dtb`, `boot.scr`, and
+  `extlinux.conf`; no initrd is required by the current defconfig
+- Rootfs: copied from the existing Armbian/Debian trixie minimal build; its
+  fstab was rewritten to the image root UUID and `serial-getty@ttyS0` was
+  enabled for the first console test
+- Offline checks: GPT verification passed; bootfs is FAT32 label `BOOTFS`;
+  rootfs is ext4 label `ROOTFS` with UUID
+  `b9d1a0d9-6a3b-4db8-9d7a-2b1b6c11e721`; boot files were readable from the
+  bootfs image
+- Bring-up finding: the first image reached the mainline kernel but the eMMC
+  card was not enumerated. The log showed the RK3528 DWCMShc warning
+  `Can't reduce the clock below 52MHz in HS200/HS400 mode` followed by
+  `unknown-block(0,0)`. The W132D DTS now avoids HS200 and caps eMMC at 52 MHz
+  until the 1.8 V regulator/DLL path is described correctly.
+- New image after eMMC fix:
+  `out/images/w132d-mainline-armbian-20260821-133452-UTC+8.img`
+- New image SHA-256:
+  `0119549cf938ab0d2574a51e6ac75faff3ee82642c574a572c81cc47625c56aa`
+- Armbian board metadata: draft only; `rk35xx-mainline` is not registered in an
+  Armbian checkout yet
+- CD1000 reference review: completed; reference DTB is vendor 6.1, not a
+  drop-in mainline DTS
 
-## 已知边界
+## Historical: 2026-08-21 HDMI pause and wireless preparation
 
-- 未包含主线 U-Boot 支持；已验证的 vendor 启动 blob 仍是私有构建输入。
-- 不再分发 UWE5622 固件和校准数据。
-- 3.5mm 音频和红外明确不在项目范围内。
-- Git 中不提交镜像。硬件测试必须使用本地组装镜像和正常 RKDevTool 流程。
+- HDMI remains unavailable. The controller probes, but the DRM log reports
+  `Cannot find any crtc or sizes` and the connector remains
+  `card0-HDMI-A-1/status=disconnected`. The current VOP/HDMI/PHY compatibles
+  are an experimental fallback, not native RK3528 support; HDMI work is paused.
+- USB3 is confirmed working on the latest tested image.
+- WiFi and Bluetooth preparation has started in `docs/WIRELESS_PORTING.md`.
+  The old vendor 6.1 UWE5622 modules cannot be loaded by Linux 7.1. The next
+  implementation step is an out-of-tree port of the BSP, `sprdwl_ng`, and
+  `sprdbt_tty`, followed by a separately validated SDIO1/GPIO DTS change.
+- No new image was generated for this documentation-only checkpoint.
+- A read-only wireless staging helper is available at
+  `scripts/prepare_wireless_mainline_wsl.sh`; it archives the exact research
+  commits under a private WSL staging directory and leaves DTS/config/images
+  untouched.
 
-## 重新验证清单
+The image is an experimental bring-up artifact. It has not been tested on the
+physical W132D. HDMI, USB, Wi-Fi, Bluetooth, GPU, VPU, and automatic rootfs
+expansion are intentionally out of scope for this first boot test.
 
-内核或 DTS 变更后，按以下顺序测试：
+## Confirmed in upstream v7.1
 
-1. 串口控制台和 eMMC 根文件系统；
-2. USB2 和 USB3 枚举；
-3. 有线网口链路和 DHCP；
-4. Wi-Fi 扫描和连接；
-5. 蓝牙控制器创建和发现设备。
+- RK3528 common device tree and pinctrl definitions
+- Cortex-A53 CPU/PSCI and SCMI clock description
+- RK3528 eMMC controller (`sdhci` at `ffbf0000`)
+- RK3528 SDIO controllers
+- RK3528 internal RMII MACPHY (`gmac0` at `ffbd0000`)
+- RK3528 Mali-450 compatible GPU node and VOP2 version definitions
+- CD1000 confirms the RK3528 controller address map, but not W132D wiring
+- Mainline defconfig includes Lima and Rockchip DRM as modules; the RK3528 GPU
+  node remains disabled in the W132D DTS pending bring-up
 
-显示移植暂停期间，不要向本分支添加显示节点或启动模式。显示工作应从单独的实验分支或本地研究历史继续。
+## Historical baseline limitations
 
----
+The following list describes the initial baseline and is retained for
+chronology. It is superseded by the later HDMI/VOP and wireless checkpoints.
 
-# W132D Mainline Status
+- W132D board DTS (mainline baseline exists, hardware validation pending)
+- W132D-specific power/reset GPIO definitions
+- HDMI/VOP2 board wiring for this device
+- RK3528 VOP2/HDMI mainline binding and glue support (generic DRM code exists,
+  but RK3528 is absent from the v7.1 match tables)
+- USB host controller nodes for this RK3528 v7.1 DTS baseline
+- Unisoc UWE5622 SDIO/WCN support in mainline
+- W132D mainline U-Boot support
 
-## Scope of This Snapshot
+The pending hardware validation and peripheral support items are independent
+blockers. A mainline kernel DTB can be
+compiled before they are solved, but a successful DTB build must not be
+described as a usable desktop image.
 
-This branch records the Linux v7.1 mainline bring-up after the hardware validation pass. The goal is to replace the vendor kernel while retaining the verified vendor SPL/U-Boot temporarily as the boot chain.
+## Initial hardware assumptions (historical)
 
-The display path is deliberately disabled in this snapshot. Display porting is paused and its experimental code, patches, device-tree nodes, and boot arguments are not part of `main`.
+The first DTS uses only facts already observed on the vendor image:
 
-## Hardware Matrix
+- 2 GiB RAM
+- eMMC on `sdhci`, 8-bit, non-removable, 1.8 V HS200
+- UART0 at `ttyS0`, 115200 baud
+- on-chip RMII MACPHY on `gmac0`
 
-| Device | Result | Notes |
-| --- | --- | --- |
-| eMMC | Pass | 3.3 V MMC High-Speed mode, capped at 52 MHz |
-| USB2 | Pass | GM8220S hub reset held deasserted |
-| USB3 | Pass | Host-only DWC3 path with RK3528 combo PHY |
-| Wired Ethernet | Pass | RK3528 integrated RMII MACPHY |
-| Wi-Fi | Pass | UWE5622 over SDIO1; scan and connection tested |
-| Bluetooth | Pass | UWE5622 tty-over-SDIO plus userspace HCI setup |
-| 3.5 mm audio | Dropped | No further adaptation planned |
-| Infrared | Dropped | No further adaptation planned |
-| Display output | Deferred | Disabled until a reviewed RK3528 mainline path exists |
+The initial DTS leaves Wi-Fi, Bluetooth, HDMI, USB, infrared, and dynamic DDR
+scaling out of the description until there is a mainline binding and a board
+measurement to support them.
 
-## Mainline Files
+## HDMI porting checkpoint (2026-08-22)
 
-- `board/rk3528-w132d.dts` describes only the validated storage, network, USB, console, and wireless paths.
-- `scripts/prepare_mainline_kernel_wsl.sh` applies the USB fixes, updates the Bluetooth command compatibility, and disables display-related kernel options.
-- `scripts/build_wireless_mainline_wsl.sh` builds the WCN, Wi-Fi, Bluetooth, and HCI helper components against Linux v7.1.
-- `scripts/assemble_mainline_image_wsl.sh` creates a complete image from private boot/rootfs/firmware inputs; it does not export raw partitions.
+- The project now carries a RK3528 INNO HDMI PHY backport and a minimal RK3528 DesignWare HDMI glue match.
+- The adapted PHY, glue, DTB, and ARM64 Image compile successfully.
+- Mainline 7.1 uses the older VOP2 data model and lacks RK3528 register/window/VP descriptors. Vendor 6.1 uses a newer VOP3 data model, so this remains the main blocker before CRTC/HPD/EDID hardware testing.
 
-## Known Boundaries
+## HDMI/VOP minimal descriptor checkpoint (2026-08-22)
 
-- Mainline U-Boot support is not included; verified vendor boot blobs remain private build inputs.
-- UWE5622 firmware and calibration data are not redistributed.
-- 3.5 mm audio and infrared are intentionally outside the project scope.
-- No image is committed to Git. Hardware testing must use a locally assembled image and the normal RKDevTool workflow.
+- Added `patches/rk3528-vop2-minimal-7.1.patch` and applied it from the mainline preparation script.
+- Mainline VOP2 now has a `rockchip,rk3528-vop` match with one VP0 and one Cluster0 primary plane. This removes the previous RK3568-only fallback and is intended to establish a native RK3528 CRTC bring-up path.
+- The descriptor is intentionally incomplete. RK3528 OVL system/port mux registers, ESMART windows, HDR, VP1, and final clock/timing behavior still require translation from the vendor reference.
+- The current experimental ops write the RK3528 overlay mux at `0x504` and VP0 background delay at `0x670`; this is enough to test the CRTC path but is not yet a complete modeset implementation.
+- `out/Image` and `out/rk3528-w132d.dtb` compile successfully. No complete image was generated in this checkpoint.
+- Hardware validation required: confirm CRTC/connector creation first; then test HPD/EDID and modes in the order 1920x1080@60, 2560x1440, hotplug.
 
-## Revalidation Checklist
+Current tested hardware scope remains: USB2, USB3, wired Ethernet, WiFi, and Bluetooth pass. 3.5 mm audio and infrared are abandoned. The project target is to replace the vendor kernel with a mainline kernel; vendor SPL/U-Boot may remain temporarily as the boot chain.
 
-After a kernel or DTS change, test in this order:
+## HDMI resource-description retry (2026-08-22)
 
-1. serial console and eMMC rootfs;
-2. USB2 and USB3 enumeration;
-3. wired Ethernet link and DHCP;
-4. Wi-Fi scan and connection;
-5. Bluetooth controller creation and discovery.
+- The hotplug capture showed that HDMI and VOP components bound, but no HPD or
+  EDID event appeared and the connector stayed disconnected.
+- The W132D DTS now also describes the RK3528 vendor-reference HDMI resources:
+  the second HDMI register window, the wakeup interrupt, the `dclk_vp0`
+  pixel-clock input, DDC SCL timing, and `rockchip,cts-manual`. The VOP node
+  includes the RK3528 ACM register window as a third resource.
+- Recompiled `out/Image` and `out/rk3528-w132d.dtb` successfully and assembled
+  the complete test image:
+  `out/images/w132d-mainline-armbian-20260822-124755-UTC+8.img`.
+- This is a targeted hardware test only. It does not prove HDMI output is
+  fixed; the next test should capture connector status and live HPD/EDID logs
+  while inserting and removing the cable.
 
-Do not add display nodes or boot modes to this branch while the display port is paused. Continue the display work from a separate experimental branch or from the local research history.
+## HDMI RGB888 and VP0-delay experiment (2026-08-23)
+
+- The accepted no-HDMI image is retained as the control baseline.
+- The HDMI path now follows the vendor RK3528 output format (`P888`/RGB888)
+  instead of the earlier forced `AAAA` mode.
+- The RK3528 vendor VP0 delay tuple is carried into the mainline descriptor as
+  `{ 8, 6, 2, 16 }` (window, layer mix, HDR mix, combined pre-scan delay).
+- Complete test image:
+  `out/images/w132d-mainline-armbian-hdmi-rgb888-20260823-120428-UTC+8.img`.
+- This image is an HDMI pipeline-format/timing experiment at 2560x1440@60;
+  it does not change the verified USB, Ethernet, Wi-Fi, or Bluetooth paths.
+
+## HDMI EDID and serial-console image (2026-08-23)
+
+- Removed `console=tty0`, so kernel logs are routed only to the TTL console.
+  The userspace tty1 login service remains enabled.
+- Removed the default `video=` mode override; DRM now chooses the mode from
+  the connected display's EDID unless a diagnostic build explicitly supplies
+  `W132D_MAINLINE_VIDEO_ARGS`.
+- Complete image:
+  `out/images/w132d-mainline-armbian-hdmi-edid-serial-20260823-122700-UTC+8.img`.
+- Historical images are no longer deleted by the assembly script.

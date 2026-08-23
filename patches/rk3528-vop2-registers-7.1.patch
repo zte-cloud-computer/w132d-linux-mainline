@@ -1,0 +1,155 @@
+--- a/drivers/gpu/drm/rockchip/rockchip_drm_vop2.h
++++ b/drivers/gpu/drm/rockchip/rockchip_drm_vop2.h
+@@ -521,6 +521,14 @@
+ #define RK3568_MIX0_DST_COLOR_CTRL		0x654
+ #define RK3568_MIX0_SRC_ALPHA_CTRL		0x658
+ #define RK3568_MIX0_DST_ALPHA_CTRL		0x65C
++#define RK3528_CLUSTER0_MIX_SRC_COLOR_CTRL	0x530
++#define RK3528_CLUSTER0_MIX_DST_COLOR_CTRL	0x534
++#define RK3528_CLUSTER0_MIX_SRC_ALPHA_CTRL	0x538
++#define RK3528_CLUSTER0_MIX_DST_ALPHA_CTRL	0x53C
++#define RK3528_MIX0_SRC_COLOR_CTRL		0x620
++#define RK3528_MIX0_DST_COLOR_CTRL		0x624
++#define RK3528_MIX0_SRC_ALPHA_CTRL		0x628
++#define RK3528_MIX0_DST_ALPHA_CTRL		0x62C
+ #define RK3568_HDR0_SRC_COLOR_CTRL		0x6C0
+ #define RK3568_HDR0_DST_COLOR_CTRL		0x6C4
+ #define RK3568_HDR0_SRC_ALPHA_CTRL		0x6C8
+diff --git a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
+--- a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
++++ b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
+@@ -347,6 +347,68 @@
+ 	[VOP2_WIN_VSD_CBCR_GT4] = { .reg = 0xffffffff },
+ };
+ 
++/* RK3528 uses the RK3568-shaped window block with wider format and AXI fields. */
++static const struct reg_field rk3528_vop_cluster_regs[VOP2_WIN_MAX_REG] = {
++	[VOP2_WIN_ENABLE] = REG_FIELD(RK3568_CLUSTER_WIN_CTRL0, 0, 0),
++	[VOP2_WIN_FORMAT] = REG_FIELD(RK3568_CLUSTER_WIN_CTRL0, 1, 6),
++	[VOP2_WIN_RB_SWAP] = REG_FIELD(RK3568_CLUSTER_WIN_CTRL0, 14, 14),
++	[VOP2_WIN_UV_SWAP] = REG_FIELD(RK3568_CLUSTER_WIN_CTRL0, 17, 17),
++	[VOP2_WIN_DITHER_UP] = REG_FIELD(RK3568_CLUSTER_WIN_CTRL0, 18, 18),
++	[VOP2_WIN_ACT_INFO] = REG_FIELD(RK3568_CLUSTER_WIN_ACT_INFO, 0, 31),
++	[VOP2_WIN_DSP_INFO] = REG_FIELD(RK3568_CLUSTER_WIN_DSP_INFO, 0, 31),
++	[VOP2_WIN_DSP_ST] = REG_FIELD(RK3568_CLUSTER_WIN_DSP_ST, 0, 31),
++	[VOP2_WIN_YRGB_MST] = REG_FIELD(RK3568_CLUSTER_WIN_YRGB_MST, 0, 31),
++	[VOP2_WIN_UV_MST] = REG_FIELD(RK3568_CLUSTER_WIN_CBR_MST, 0, 31),
++	[VOP2_WIN_YUV_CLIP] = REG_FIELD(RK3568_CLUSTER_WIN_CTRL0, 19, 19),
++	[VOP2_WIN_YRGB_VIR] = REG_FIELD(RK3568_CLUSTER_WIN_VIR, 0, 15),
++	[VOP2_WIN_UV_VIR] = REG_FIELD(RK3568_CLUSTER_WIN_VIR, 16, 31),
++	[VOP2_WIN_Y2R_EN] = REG_FIELD(RK3568_CLUSTER_WIN_CTRL0, 8, 8),
++	[VOP2_WIN_R2Y_EN] = REG_FIELD(RK3568_CLUSTER_WIN_CTRL0, 9, 9),
++	[VOP2_WIN_CSC_MODE] = REG_FIELD(RK3568_CLUSTER_WIN_CTRL0, 10, 12),
++	[VOP2_WIN_AXI_YRGB_R_ID] = REG_FIELD(RK3568_CLUSTER_WIN_CTRL2, 0, 4),
++	[VOP2_WIN_AXI_UV_R_ID] = REG_FIELD(RK3568_CLUSTER_WIN_CTRL2, 5, 9),
++	[VOP2_WIN_AXI_BUS_ID] = { .reg = 0xffffffff },
++	[VOP2_WIN_SCALE_YRGB_X] = REG_FIELD(RK3568_CLUSTER_WIN_SCL_FACTOR_YRGB, 0, 15),
++	[VOP2_WIN_SCALE_YRGB_Y] = REG_FIELD(RK3568_CLUSTER_WIN_SCL_FACTOR_YRGB, 16, 31),
++	[VOP2_WIN_YRGB_VER_SCL_MODE] = REG_FIELD(RK3568_CLUSTER_WIN_CTRL1, 14, 15),
++	[VOP2_WIN_YRGB_HOR_SCL_MODE] = REG_FIELD(RK3568_CLUSTER_WIN_CTRL1, 22, 23),
++	[VOP2_WIN_YRGB_HSCL_FILTER_MODE] = REG_FIELD(RK3568_CLUSTER_WIN_CTRL1, 20, 21),
++	[VOP2_WIN_YRGB_VSCL_FILTER_MODE] = REG_FIELD(RK3568_CLUSTER_WIN_CTRL1, 12, 13),
++	[VOP2_WIN_BIC_COE_SEL] = REG_FIELD(RK3568_CLUSTER_WIN_CTRL1, 2, 3),
++	[VOP2_WIN_VSD_YRGB_GT2] = REG_FIELD(RK3568_CLUSTER_WIN_CTRL1, 28, 28),
++	[VOP2_WIN_VSD_YRGB_GT4] = REG_FIELD(RK3568_CLUSTER_WIN_CTRL1, 29, 29),
++	[VOP2_WIN_VSD_CBCR_GT2] = REG_FIELD(RK3568_CLUSTER_WIN_CTRL1, 30, 30),
++	[VOP2_WIN_VSD_CBCR_GT4] = REG_FIELD(RK3568_CLUSTER_WIN_CTRL1, 31, 31),
++	[VOP2_WIN_AFBC_ENABLE] = REG_FIELD(RK3568_CLUSTER_CTRL, 1, 1),
++	[VOP2_WIN_CLUSTER_ENABLE] = REG_FIELD(RK3568_CLUSTER_CTRL, 0, 0),
++	[VOP2_WIN_CLUSTER_LB_MODE] = REG_FIELD(RK3568_CLUSTER_CTRL, 4, 7),
++	[VOP2_WIN_AFBC_FORMAT] = REG_FIELD(RK3568_CLUSTER_WIN_AFBCD_CTRL, 2, 6),
++	[VOP2_WIN_AFBC_RB_SWAP] = REG_FIELD(RK3568_CLUSTER_WIN_AFBCD_CTRL, 9, 9),
++	[VOP2_WIN_AFBC_UV_SWAP] = REG_FIELD(RK3568_CLUSTER_WIN_AFBCD_CTRL, 10, 10),
++	[VOP2_WIN_AFBC_AUTO_GATING_EN] = REG_FIELD(RK3568_CLUSTER_WIN_AFBCD_OUTPUT_CTRL, 4, 4),
++	[VOP2_WIN_AFBC_HALF_BLOCK_EN] = REG_FIELD(RK3568_CLUSTER_WIN_AFBCD_CTRL, 7, 7),
++	[VOP2_WIN_AFBC_BLOCK_SPLIT_EN] = REG_FIELD(RK3568_CLUSTER_WIN_AFBCD_CTRL, 8, 8),
++	[VOP2_WIN_AFBC_HDR_PTR] = REG_FIELD(RK3568_CLUSTER_WIN_AFBCD_HDR_PTR, 0, 31),
++	[VOP2_WIN_AFBC_PIC_SIZE] = REG_FIELD(RK3568_CLUSTER_WIN_AFBCD_PIC_SIZE, 0, 31),
++	[VOP2_WIN_AFBC_PIC_VIR_WIDTH] = REG_FIELD(RK3568_CLUSTER_WIN_AFBCD_VIR_WIDTH, 0, 15),
++	[VOP2_WIN_AFBC_TILE_NUM] = REG_FIELD(RK3568_CLUSTER_WIN_AFBCD_VIR_WIDTH, 16, 31),
++	[VOP2_WIN_AFBC_PIC_OFFSET] = REG_FIELD(RK3568_CLUSTER_WIN_AFBCD_PIC_OFFSET, 0, 31),
++	[VOP2_WIN_AFBC_DSP_OFFSET] = REG_FIELD(RK3568_CLUSTER_WIN_AFBCD_DSP_OFFSET, 0, 31),
++	[VOP2_WIN_TRANSFORM_OFFSET] = REG_FIELD(RK3568_CLUSTER_WIN_TRANSFORM_OFFSET, 0, 31),
++	[VOP2_WIN_AFBC_ROTATE_90] = REG_FIELD(RK3568_CLUSTER_WIN_AFBCD_ROTATE_MODE, 0, 0),
++	[VOP2_WIN_AFBC_ROTATE_270] = REG_FIELD(RK3568_CLUSTER_WIN_AFBCD_ROTATE_MODE, 1, 1),
++	[VOP2_WIN_XMIRROR] = REG_FIELD(RK3568_CLUSTER_WIN_AFBCD_ROTATE_MODE, 2, 2),
++	[VOP2_WIN_YMIRROR] = REG_FIELD(RK3568_CLUSTER_WIN_AFBCD_ROTATE_MODE, 3, 3),
++	[VOP2_WIN_COLOR_KEY] = { .reg = 0xffffffff },
++	[VOP2_WIN_COLOR_KEY_EN] = { .reg = 0xffffffff },
++	[VOP2_WIN_SCALE_CBCR_X] = { .reg = 0xffffffff },
++	[VOP2_WIN_SCALE_CBCR_Y] = { .reg = 0xffffffff },
++	[VOP2_WIN_CBCR_VER_SCL_MODE] = { .reg = 0xffffffff },
++	[VOP2_WIN_CBCR_HSCL_FILTER_MODE] = { .reg = 0xffffffff },
++	[VOP2_WIN_CBCR_HOR_SCL_MODE] = { .reg = 0xffffffff },
++	[VOP2_WIN_CBCR_VSCL_FILTER_MODE] = { .reg = 0xffffffff },
++};
++
+ static const struct reg_field rk3568_vop_smart_regs[VOP2_WIN_MAX_REG] = {
+ 	[VOP2_WIN_ENABLE] = REG_FIELD(RK3568_SMART_REGION0_CTRL, 0, 0),
+ 	[VOP2_WIN_FORMAT] = REG_FIELD(RK3568_SMART_REGION0_CTRL, 1, 5),
+@@ -1941,6 +2003,12 @@
+ 		dst_color_ctrl_reg = RK3568_CLUSTER0_MIX_DST_COLOR_CTRL;
+ 		src_alpha_ctrl_reg = RK3568_CLUSTER0_MIX_SRC_ALPHA_CTRL;
+ 		dst_alpha_ctrl_reg = RK3568_CLUSTER0_MIX_DST_ALPHA_CTRL;
++		if (vop2->version == VOP_VERSION_RK3528) {
++			src_color_ctrl_reg = RK3528_CLUSTER0_MIX_SRC_COLOR_CTRL;
++			dst_color_ctrl_reg = RK3528_CLUSTER0_MIX_DST_COLOR_CTRL;
++			src_alpha_ctrl_reg = RK3528_CLUSTER0_MIX_SRC_ALPHA_CTRL;
++			dst_alpha_ctrl_reg = RK3528_CLUSTER0_MIX_DST_ALPHA_CTRL;
++		}
+ 	} else {
+ 		src_color_ctrl_reg = RK3576_CLUSTER0_MIX_SRC_COLOR_CTRL;
+ 		dst_color_ctrl_reg = RK3576_CLUSTER0_MIX_DST_COLOR_CTRL;
+@@ -1997,6 +2065,12 @@
+ 		dst_color_ctrl_reg = RK3568_MIX0_DST_COLOR_CTRL;
+ 		src_alpha_ctrl_reg = RK3568_MIX0_SRC_ALPHA_CTRL;
+ 		dst_alpha_ctrl_reg = RK3568_MIX0_DST_ALPHA_CTRL;
++		if (vop2->version == VOP_VERSION_RK3528) {
++			src_color_ctrl_reg = RK3528_MIX0_SRC_COLOR_CTRL;
++			dst_color_ctrl_reg = RK3528_MIX0_DST_COLOR_CTRL;
++			src_alpha_ctrl_reg = RK3528_MIX0_SRC_ALPHA_CTRL;
++			dst_alpha_ctrl_reg = RK3528_MIX0_DST_ALPHA_CTRL;
++		}
+ 	} else {
+ 		src_color_ctrl_reg = RK3576_OVL_MIX0_SRC_COLOR_CTRL(vp->id);
+ 		dst_color_ctrl_reg = RK3576_OVL_MIX0_DST_COLOR_CTRL(vp->id);
+@@ -2562,6 +2636,10 @@
+ 	vop2_writel(vop2, 0x600, 0);
+ 	vop2_writel(vop2, 0x604, layer_sel);
+ 	vop2_writel(vop2, 0x504, port_sel);
++	if (vp->primary_plane) {
++		vop2_setup_cluster_alpha(vop2, vp->primary_plane);
++		vop2_setup_alpha(vp);
++	}
+ }
+ 
+ static const struct vop2_ops rk3528_vop_ops = {
+@@ -2576,7 +2654,7 @@
+ 		.feature = VOP2_VP_FEATURE_OUTPUT_10BIT,
+ 		.gamma_lut_len = 1024,
+ 		.max_output = { 4096, 4096 },
+-		.pre_scan_max_dly = { 27, 45, 48, 0 },
++		.pre_scan_max_dly = { 27, 45, 48, 8 },
+ 		.offset = 0xc00,
+ 	},
+ };
+@@ -2591,6 +2669,8 @@
+ 		.nformats = ARRAY_SIZE(formats_cluster),
+ 		.format_modifiers = format_modifiers,
+ 		.layer_sel_id = { 0, 0xf, 0xf, 0xf },
++		.axi_yrgb_r_id = 2,
++		.axi_uv_r_id = 3,
+ 		.supported_rotations = DRM_MODE_REFLECT_X | DRM_MODE_REFLECT_Y,
+ 		.type = DRM_PLANE_TYPE_PRIMARY,
+ 		.feature = WIN_FEATURE_CLUSTER,
+@@ -2608,8 +2688,8 @@
+ 	.vp = rk3528_vop_video_ports,
+ 	.win = rk3528_vop_win_data,
+ 	.win_size = ARRAY_SIZE(rk3528_vop_win_data),
+-	.cluster_reg = rk3568_vop_cluster_regs,
+-	.nr_cluster_regs = ARRAY_SIZE(rk3568_vop_cluster_regs),
++	.cluster_reg = rk3528_vop_cluster_regs,
++	.nr_cluster_regs = ARRAY_SIZE(rk3528_vop_cluster_regs),
+ 	.smart_reg = rk3568_vop_smart_regs,
+ 	.nr_smart_regs = ARRAY_SIZE(rk3568_vop_smart_regs),
+ 	.ops = &rk3528_vop_ops,

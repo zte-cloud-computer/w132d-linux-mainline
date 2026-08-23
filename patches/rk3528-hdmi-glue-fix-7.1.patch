@@ -1,0 +1,15 @@
+--- a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
++++ b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+@@ -485,9 +485,8 @@ dw_hdmi_rk3528_read_hpd(struct dw_hdmi *dw_hdmi, void *data)
+ 	if (value < 0)
+ 		return connector_status_unknown;
+ 
+ 	regmap_write(hdmi->regmap, RK3528_VO_GRF_HDMI_MASK,
+-		     value ? FIELD_PREP_WM16(RK3528_HDMI_SNKDET,
+-				      RK3528_HDMI_SNKDET) :
+-			      FIELD_PREP_WM16(0, RK3528_HDMI_SNKDET));
++		     value ? FIELD_PREP_WM16(RK3528_HDMI_SNKDET, 1) :
++			      FIELD_PREP_WM16(RK3528_HDMI_SNKDET, 0));
+ 
+ 	return value ? connector_status_connected : connector_status_disconnected;
+ }

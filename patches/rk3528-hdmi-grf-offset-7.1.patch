@@ -1,0 +1,7 @@
+diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+--- a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
++++ b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+@@ -57,1 +57,2 @@
+-#define RK3528_VO_GRF_HDMI_MASK		0x60014
++/* The W132D DT maps the VO-GRF window at 0xff360000. */
++#define RK3528_VO_GRF_HDMI_MASK		0x00014

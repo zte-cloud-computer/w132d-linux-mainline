@@ -24,16 +24,16 @@ The vast majority of the code and implementation in this repository were generat
 | UWE5622 蓝牙 | 正常 |
 | 3.5mm 音频 | 放弃适配 |
 | 红外 | 放弃适配 |
-| HDMI 显示输出 | 本快照中主动禁用，移植暂缓 |
+| HDMI 显示输出 | 已在一台 2K 显示器上通过 2560x1440@60 验证；主线移植仍属实验状态 |
 
-W132D 设备树中已移除显示路径，主线内核配置也禁用了显示相关选项。本快照不包含显示驱动、显示 endpoint、显示补丁或显示启动参数。
+当前主线 HDMI 路径包含 RK3528 专用 DTS endpoint、INNO HDMI PHY 回移植、DesignWare HDMI glue、VOP2 兼容描述和时序/格式补丁。已验证显示器画面稳定，但尚未完成多显示器、热插拔、待机唤醒和长期稳定性覆盖。
 
 ## 仓库结构
 
 - `board/`：W132D Linux v7.1 DTS 和 Armbian 板级元数据草稿。
 - `boot/`：已验证 vendor 启动链使用的串口/eMMC 启动模板。
-- `patches/`：USB 主机修改和无线驱动兼容补丁。
-- `drivers/`：保留的 USB2 研究源码；构建时使用 `patches/` 中的对应补丁。
+- `patches/`：RK3528 USB、HDMI/VOP 和无线驱动兼容补丁。
+- `drivers/`：保留的 USB2 和 RK3528 HDMI PHY 研究源码；构建时使用 `patches/` 中的对应补丁。
 - `rootfs/`：无线服务、蓝牙 HCI 服务和根文件系统扩容辅助脚本。
 - `scripts/`：DTB/内核、无线模块和完整镜像构建辅助脚本。
 - `tools/`：W132D 蓝牙 HCI 初始化工具。
@@ -86,16 +86,16 @@ The latest mainline image was tested on real W132D hardware with the following r
 | UWE5622 Bluetooth | Working |
 | 3.5 mm audio | Not being adapted |
 | Infrared | Not being adapted |
-| HDMI display output | Intentionally disabled in this snapshot; porting is deferred |
+| HDMI display output | Verified on one 2K monitor at 2560x1440@60; still experimental |
 
-The display path is omitted from the W132D device tree and disabled in the mainline kernel configuration. No display driver, display endpoint, display patch, or display boot argument is part of this snapshot.
+The mainline HDMI path now includes RK3528-specific DTS endpoints, a project-local INNO HDMI PHY backport, DesignWare HDMI glue, a VOP2 compatibility descriptor, and vendor-derived format/timing patches. The tested monitor is stable, but multi-monitor, hotplug, suspend/resume, and long-duration coverage are still open.
 
 ## Repository Layout
 
 - `board/`: W132D Linux v7.1 DTS and draft Armbian board metadata.
 - `boot/`: serial/eMMC boot templates for the verified vendor boot chain.
-- `patches/`: USB host changes and wireless driver compatibility patches.
-- `drivers/`: retained USB2 research source; the build uses the corresponding patch in `patches/`.
+- `patches/`: RK3528 USB, HDMI/VOP, and wireless driver compatibility patches.
+- `drivers/`: retained USB2 and RK3528 HDMI PHY research sources; the build uses the corresponding patches in `patches/`.
 - `rootfs/`: wireless service, Bluetooth HCI service, and rootfs growth helper.
 - `scripts/`: DTB/kernel, wireless module, and complete-image build helpers.
 - `tools/`: the W132D Bluetooth HCI initialization helper.

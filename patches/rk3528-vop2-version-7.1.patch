@@ -1,0 +1,19 @@
+diff --git a/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c b/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c
+--- a/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c
++++ b/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c
+@@ -809,7 +809,14 @@ static void vop2_enable(struct vop2 *vop2)
+ 	}
+ 
+ 	version = vop2_readl(vop2, RK3568_VERSION_INFO);
+-	if (version != vop2->version) {
++	/*
++	 * RK3528 exposes a stable major/minor value but a revision-specific
++	 * low 16-bit build value. Keep the logical VOP version descriptor while
++	 * accepting the hardware revision reported by this board.
++	 */
++	if ((vop2->data->soc_id == 3528 &&
++	     (version & 0xffff0000) != (vop2->version & 0xffff0000)) ||
++	    (vop2->data->soc_id != 3528 && version != vop2->version)) {
+ 		drm_err(vop2->drm, "Hardware version(0x%08x) mismatch\n", version);
+ 		return;
+ 	}
