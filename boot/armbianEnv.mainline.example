@@ -1,0 +1,17 @@
+# Example only; this file is not installed into a device or image yet.
+# Keep the root device/UUID consistent with the Armbian image partition table.
+verbosity=7
+bootlogo=false
+fdtfile=rockchip/rk3528-w132d.dtb
+rootdev=LABEL=ROOTFS
+rootfstype=ext4
+rootflags=rw,errors=remount-ro
+console=serial
+consoleargs=console=ttyS0,115200n8
+earlycon=on
+earlyconargs=earlycon=uart8250,mmio32,0xff9f0000
+extraargs=rw rootwait
+extraboardargs=
+overlay_prefix=rk3528
+overlays=
+user_overlays=

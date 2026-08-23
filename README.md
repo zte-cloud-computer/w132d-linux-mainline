@@ -1,81 +1,79 @@
-# ZTE W132D Armbian port
+# ZTE W132D mainline Linux port
 
-这是中兴云电脑 W132D（Rockchip RK3528、2 GiB DDR4、32 GiB eMMC）的实验性
-Armbian 适配资料库。仓库保存可审查的设备树、补丁、辅助程序、构建方法和验证方法；不保存
-原机 Android 备份、专有启动固件、无线固件、板级校准数据或可刷写镜像。
+This repository contains the public board description, patches, build helpers,
+and test notes for the ZTE Cloud Computer W132D (Rockchip RK3528). The active
+`main` branch targets an upstream Linux v7.1 based kernel and is intended to
+replace the vendor kernel over time.
 
-当前稳定候选基于 Linux `6.1.115-vendor-rk35xx` 和 Debian 13 (trixie)。USB2、
-2560x1440 HDMI、有线网络、UWE5622 Wi-Fi、蓝牙、Mali-450 GPU 基本功能已经过实机测试。
-VPU 仅集成 Rockchip MPP 用户态，尚未完成系统性验收。
-红外和3.5mm音频不可用。
+The historical vendor Linux 6.1 snapshot is preserved locally and on the
+remote as branch `vendor-6.1`. It is reference material, not the runtime target
+of the mainline branch.
 
-## 重要说明
+## Current hardware status
 
-本项目的大部分分析与实现由 AI agent 辅助完成，尚未经过全面人工代码审查。它不代表
-ZTE、Rockchip、Unisoc、Armbian、KryptonLee、CoreELEC 或其他上游项目的认可。仓库中记录
-上游 URL 和精确 commit 仅用于在本仓库内重建补丁基线。
+The latest mainline image was tested on real W132D hardware with the following
+results:
 
-镜像组装依赖你合法持有的 W132D 原机备份。脚本会从本地备份中提取并校验专有组件，但不会
-下载或提供它们。
+| Function | Status |
+| --- | --- |
+| eMMC root filesystem | Working |
+| USB2 host | Working |
+| USB3 host | Working |
+| Wired Ethernet (RMII) | Working |
+| UWE5622 Wi-Fi | Working |
+| UWE5622 Bluetooth | Working |
+| 3.5 mm audio | Not being adapted |
+| Infrared | Not being adapted |
+| HDMI display output | Intentionally disabled in this snapshot; porting is deferred |
 
-## 稳定性状态
+The display path is omitted from the W132D device tree and disabled in the
+mainline kernel configuration. No display driver, display endpoint, display
+patch, or display boot argument is part of this snapshot.
 
-当前参考镜像（仓库中没有）：
+## Repository layout
 
-```text
-w132d-armbian-20260820-200141-UTC+8.img
-SHA256 852927a4226ad4940213e1a3ac63dfce900770e3742f03c5a497bf374f0684d9
-```
+- `board/`: W132D Linux v7.1 DTS and draft Armbian board metadata.
+- `boot/`: serial/eMMC boot templates for the verified vendor boot chain.
+- `patches/`: USB2/USB host changes and wireless driver compatibility patches.
+- `drivers/`: retained USB2 research source; the build uses the corresponding
+  patch in `patches/`.
+- `rootfs/`: wireless service, Bluetooth HCI service, and rootfs growth helper.
+- `scripts/`: DTB/kernel, wireless module, and complete-image build helpers.
+- `tools/`: the W132D Bluetooth HCI initialization helper.
+- `docs/`: build, reference, wireless-porting, and status notes.
 
-该镜像已连续运行超过 2 小时，越过此前约 30 分钟的固定串口帧/整机失联窗口；随后连接
-Wi-Fi 并保持正常，未观察到 Oops、panic、WCN 超时或网络 watchdog。它是当前稳定候选，
-不等于完成了长期压力、休眠唤醒、全部外设组合或断电一致性认证。`20260820-185142` 是已知
-无法启动的坏版本，不应使用；原因见 [启动链说明](docs/BOOTCHAIN.md)。
+Generated images, kernel modules, boot blobs, Android backups, calibration
+files, and firmware are intentionally excluded by `.gitignore`.
 
-## 仓库内容
+## Mainline build
 
-| 路径 | 内容 | 是否建议提交 |
-| --- | --- | --- |
-| `board/` | W132D DTS 与 Armbian 板卡配置 | 是 |
-| `boot/` | extlinux 与 U-Boot 文本启动配置 | 是 |
-| `patches/linux/` | Linux HID 板级修正 | 是 |
-| `patches/uwe5621ds-aml/` | Wi-Fi/WCN 的 Linux 6.1 适配补丁 | 是 |
-| `patches/uwe5631-aml/` | 蓝牙 SDIO 边界检查与板级集成补丁 | 是 |
-| `tools/` | W132D 蓝牙 HCI 初始化/附加程序 | 是 |
-| `rootfs/` | 首次扩容脚本与 systemd 服务 | 是 |
-| `scripts/` | 构建、启动链重打包、镜像组装和验证脚本 | 是 |
-| `docs/` | 构建、启动链、测试和 Git 操作说明 | 是 |
-| `w132d-a9/`、`vendor-blobs/`、`*.img`、`*.bin`、`*.ko` | 备份、专有输入和生成物 | 否 |
-
-
-## 构建入口
-
-先阅读 [构建说明](docs/BUILDING.md)。核心脚本均从环境变量读取本机路径，不包含用户名或
-固定 Windows 目录：
+The helpers expect a Linux v7.1 checkout at `/root/w132d-build/linux-v7.1`
+inside WSL2 by default. Override paths with environment variables when needed.
 
 ```bash
-export W132D_PRIVATE_DIR=/mnt/c/path/to/w132d-private
-export W132D_WIFI_SRC=/path/to/uwe5621ds-aml
-export W132D_BT_SRC=/path/to/uwe5631-aml
-export W132D_MPP_SRC=/path/to/mpp
+export W132D_MAINLINE_DIR=/path/to/w132d-armbian-port-repo
+export W132D_MAINLINE_KERNEL_DIR=/root/w132d-build/linux-v7.1
 
-bash scripts/build_uwe5622_wsl.sh
-bash scripts/repack_wdt_bootchain_wsl.sh
-W132D_REUSE_COMPONENTS=1 bash scripts/assemble_image_wsl.sh
-bash scripts/verify_image.sh
+bash scripts/build_mainline_kernel_wsl.sh
+bash scripts/prepare_wireless_mainline_wsl.sh
+bash scripts/build_wireless_mainline_wsl.sh
 ```
 
-这些镜像操作需要 loop device、mount、chroot 和文件系统工具，必须在 WSL2 Linux 环境以
-root 执行。默认输出未经 XZ 压缩的带 UTC+8 时间戳 `.img`，并写入
-`W132D_PUBLISH_DIR`（未设置时为 `W132D_PRIVATE_DIR`）。
+Complete image assembly additionally needs a private, legally obtained
+Armbian rootfs/image, the verified W132D boot blobs, and the original WCN
+firmware. The scripts extract those inputs locally and never add them to Git.
+See [docs/BUILDING.md](docs/BUILDING.md) and [docs/WIRELESS_PORTING.md](docs/WIRELESS_PORTING.md).
 
-## 许可证
+The vendor SPL/U-Boot is reused only as a temporary boot chain. Mainline
+U-Boot support is a separate future task.
 
-这是混合许可证仓库：
+## Licensing and redistribution
 
-- 原创脚本、服务和辅助程序：MIT；
-- W132D DTS：`GPL-2.0+ OR MIT`；
-- Linux、UWE5621/UWE5631 衍生补丁：GPL-2.0-only；
-- 第三方源码和二进制：保持各自条款，本仓库的许可证不覆盖它们。
+This is a mixed-license repository. Original helper code is MIT; the W132D DTS
+is `(GPL-2.0+ OR MIT)`; Linux-derived compatibility patches are GPL-2.0-only.
+The notices in [LICENSE](LICENSE), [LICENSES/](LICENSES/), and
+[THIRD_PARTY.md](THIRD_PARTY.md) are part of the source distribution.
 
-完整说明见 [LICENSE](LICENSE) 和 [THIRD_PARTY.md](THIRD_PARTY.md)。
+Third-party source trees, vendor boot firmware, WCN firmware, calibration data,
+and generated images retain their own licenses and are not relicensed or
+redistributed by this repository.

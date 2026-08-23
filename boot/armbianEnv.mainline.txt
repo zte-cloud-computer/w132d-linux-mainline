@@ -1,0 +1,10 @@
+# W132D Linux v7.1 mainline bring-up
+verbosity=7
+bootlogo=false
+console=serial
+consoleargs=console=tty0 console=ttyS0,115200n8
+earlycon=on
+extraargs=clk_ignore_unused pd_ignore_unused
+fdtfile=rockchip/rk3528-w132d.dtb
+rootdev=@ROOT_DEVICE@
+rootfstype=ext4

@@ -1,0 +1,29 @@
+diff --git a/unisocwcn/sdio/sdiohal_main.c b/unisocwcn/sdio/sdiohal_main.c
+--- a/unisocwcn/sdio/sdiohal_main.c
++++ b/unisocwcn/sdio/sdiohal_main.c
+@@ -52,5 +52,14 @@ extern void sdio_clk_always_on(int on);
+ #endif
+ 
+ #ifdef CONFIG_RK_BOARD
+-extern int rockchip_wifi_set_carddetect(int val);
++/* Mainline has no vendor Rockchip card-detect export.  The SDIO host is
++ * described in DT and can be asked to rescan through the public MMC API. */
++extern struct sdiohal_data_t *sdiohal_data;
++static inline int rockchip_wifi_set_carddetect(int val)
++{
++	if (sdiohal_data && sdiohal_data->sdio_dev_host)
++		mmc_detect_change(sdiohal_data->sdio_dev_host,
++				  msecs_to_jiffies(val ? 100 : 0));
++	return 0;
++}
+ #endif
+@@ -1388,8 +1388,8 @@ static int sdiohal_parse_dt(void)
+ 	sdio_node = of_parse_phandle(np, "sdhci-name", 0);
+ 	if (sdio_node == NULL)
+ 		sdiohal_info("not config sdio host node.");
+ 
+-#if (defined(CONFIG_RK_BOARD) || defined(CONFIG_AW_BOARD))
++#if (defined(CONFIG_RK_BOARD) || defined(CONFIG_AW_BOARD))
+ 	/* will get host at sdiohal_probe */
+ 	return 0;
+ #endif
