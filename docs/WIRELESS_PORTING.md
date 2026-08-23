@@ -1,10 +1,68 @@
-# W132D UWE5622 wireless port
+# W132D UWE5622 无线移植
 
-The W132D uses a Unisoc UWE5622 Marlin controller. Wi-Fi and Bluetooth share
-the RK3528 SDIO1 host; the Bluetooth data path is exposed as a tty by the WCN
-driver and is initialized by the userspace HCI helper.
+W132D 使用 Unisoc UWE5622 Marlin 控制器。Wi-Fi 和蓝牙共享 RK3528 的 SDIO1 主机；WCN 驱动把蓝牙数据路径暴露为 tty，再由用户态 HCI 辅助工具完成初始化。
 
-## Board wiring
+## 板级接线
+
+| 信号 | W132D 连接 |
+| --- | --- |
+| SDIO 主机 | RK3528 `mmc@ffc20000`（`sdio1`），4-bit，不可移除 |
+| WCN 电源/复位 | GPIO3_A2 |
+| SDIO 数据中断 | GPIO3_A3 |
+| 蓝牙使能 | GPIO3_A4 |
+| 蓝牙唤醒主机 | GPIO3_C1 |
+
+`board/rk3528-w132d.dts` 中的 GPIO 极性和时序基于已测试的 W132D vendor 描述。不得把 CD1000 的参考 GPIO 直接复制到本板。
+
+## 源码暂存
+
+`scripts/prepare_wireless_mainline_wsl.sh` 会把以下精确提交归档到私有 staging 目录，并且不会复制固件：
+
+- `KryptonLee/uwe5621ds-aml`，提交 `0c12c46df48da9592abc7848335482e68d23e28a`；
+- `CoreELEC/uwe5631-aml`，提交 `08165b5d56f46b569ee6461d7082ff795efafb2e`。
+
+暂存目录默认是 `/root/w132d-build/w132d-wireless-mainline`，可通过 `W132D_WIRELESS_STAGE` 修改，但必须位于 `W132D_BUILD_ROOT` 之下。
+
+## 构建顺序
+
+准备好 Linux v7.1 源码树后，在 root WSL2 shell 中运行：
+
+```bash
+bash scripts/prepare_wireless_mainline_wsl.sh
+bash scripts/build_wireless_mainline_wsl.sh
+```
+
+构建辅助脚本把公开兼容补丁应用到上游源码的临时副本，然后构建：
+
+- `uwe5622_bsp_sdio.ko`；
+- `sprdwl_ng.ko`；
+- `sprdbt_tty.ko`；
+- `w132d-btattach`。
+
+它还会针对同一内核的 `Module.symvers` 构建所需的 Linux wireless、蓝牙、crypto 和 rfkill 模块。
+
+## 镜像集成
+
+完整镜像辅助脚本会把模块安装到 `lib/modules/<kernel-release>/updates/uwe5622`，加入无线和蓝牙 systemd 单元，并从用户拥有的 Android vendor 镜像提取所需固件到私有 staging 目录。固件、校准数据、MAC 地址和生成的模块均排除在 Git 之外。
+
+## 硬件验收
+
+按以下顺序测试：
+
+1. 在 `dmesg` 中确认 SDIO 枚举和 WCN 上电；
+2. 加载 WCN 和 Wi-Fi 模块，扫描并连接；
+3. 加载蓝牙 tty 模块并启动 `w132d-btattach`；
+4. 确认 BlueZ 控制器出现并扫描附近设备。
+
+如果出现 SDIO 超时或系统挂起，应停在该阶段，先保存串口日志，再修改 GPIO 或电源时序。
+
+---
+
+# W132D UWE5622 Wireless Port
+
+The W132D uses a Unisoc UWE5622 Marlin controller. Wi-Fi and Bluetooth share the RK3528 SDIO1 host; the Bluetooth data path is exposed as a tty by the WCN driver and is initialized by the userspace HCI helper.
+
+## Board Wiring
 
 | Signal | W132D connection |
 | --- | --- |
@@ -14,23 +72,18 @@ driver and is initialized by the userspace HCI helper.
 | Bluetooth enable | GPIO3_A4 |
 | Bluetooth wake-host | GPIO3_C1 |
 
-The GPIO polarity and timing in `board/rk3528-w132d.dts` are based on the
-tested W132D vendor description. The CD1000 reference GPIOs must not be copied
-to this board.
+The GPIO polarity and timing in `board/rk3528-w132d.dts` are based on the tested W132D vendor description. The CD1000 reference GPIOs must not be copied to this board.
 
-## Source staging
+## Source Staging
 
-`scripts/prepare_wireless_mainline_wsl.sh` archives these exact commits into a
-private staging directory and does not copy firmware:
+`scripts/prepare_wireless_mainline_wsl.sh` archives these exact commits into a private staging directory and does not copy firmware:
 
 - `KryptonLee/uwe5621ds-aml` at `0c12c46df48da9592abc7848335482e68d23e28a`;
 - `CoreELEC/uwe5631-aml` at `08165b5d56f46b569ee6461d7082ff795efafb2e`.
 
-The staging directory defaults to `/root/w132d-build/w132d-wireless-mainline`
-and can be changed with `W132D_WIRELESS_STAGE`. It must remain below
-`W132D_BUILD_ROOT`.
+The staging directory defaults to `/root/w132d-build/w132d-wireless-mainline` and can be changed with `W132D_WIRELESS_STAGE`. It must remain below `W132D_BUILD_ROOT`.
 
-## Build order
+## Build Order
 
 Run the following from a root WSL2 shell after preparing the Linux v7.1 tree:
 
@@ -39,26 +92,20 @@ bash scripts/prepare_wireless_mainline_wsl.sh
 bash scripts/build_wireless_mainline_wsl.sh
 ```
 
-The build helper applies the public compatibility patches to temporary copies
-of the upstream sources, then builds:
+The build helper applies the public compatibility patches to temporary copies of the upstream sources, then builds:
 
 - `uwe5622_bsp_sdio.ko`;
 - `sprdwl_ng.ko`;
 - `sprdbt_tty.ko`;
 - `w132d-btattach`.
 
-It also builds the required Linux wireless, Bluetooth, crypto, and rfkill
-modules against the same kernel `Module.symvers`.
+It also builds the required Linux wireless, Bluetooth, crypto, and rfkill modules against the same kernel `Module.symvers`.
 
-## Image integration
+## Image Integration
 
-The complete-image helper installs modules under
-`lib/modules/<kernel-release>/updates/uwe5622`, adds the systemd wireless and
-Bluetooth units, and extracts the required firmware from a user-owned Android
-vendor image into a private staging directory. Firmware, calibration data,
-MAC addresses, and generated modules are excluded from Git.
+The complete-image helper installs modules under `lib/modules/<kernel-release>/updates/uwe5622`, adds the systemd wireless and Bluetooth units, and extracts the required firmware from a user-owned Android vendor image into a private staging directory. Firmware, calibration data, MAC addresses, and generated modules are excluded from Git.
 
-## Hardware acceptance
+## Hardware Acceptance
 
 Test in this order:
 
@@ -67,5 +114,4 @@ Test in this order:
 3. load the Bluetooth tty module and start `w132d-btattach`;
 4. verify a BlueZ controller and scan for nearby devices.
 
-If SDIO timeouts or a system hang occur, stop at that stage and capture the
-serial log before changing GPIO or power sequencing.
+If SDIO timeouts or a system hang occur, stop at that stage and capture the serial log before changing GPIO or power sequencing.
