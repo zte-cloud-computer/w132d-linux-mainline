@@ -22,8 +22,16 @@ The vast majority of the code and implementation in this repository were generat
 | 有线网口（RMII） | 正常 |
 | UWE5622 Wi-Fi | 正常 |
 | UWE5622 蓝牙 | 正常 |
-| 3.5mm 音频 | 放弃适配 |
-| 红外 | 放弃适配 |
+| eMMC HS400 / 命令队列 | 正常（需 RK3528 DLL tap 补丁） |
+| 温度传感器与热降频 | 正常 |
+| CPU 调频调压（408 MHz 起） | 正常 |
+| Mali-450 GPU（Lima） | 正常，五档频率 300–800 MHz |
+| RKVDEC 硬件解码 | 正常（H.264 / HEVC） |
+| 3.5mm 音频（输出 + 麦克风） | 正常 |
+| 红外接收 | 正常（gpio-ir-receiver） |
+| 面板指示灯 | 正常 |
+| 看门狗 | 正常 |
+| OP-TEE / ramoops | 正常 |
 | HDMI 显示输出 | 已在一台 2K 显示器上通过 2560x1440@60 验证；主线移植仍属实验状态 |
 
 当前主线 HDMI 路径包含 RK3528 专用 DTS endpoint、INNO HDMI PHY 回移植、DesignWare HDMI glue、VOP2 兼容描述和时序/格式补丁。已验证显示器画面稳定，但尚未完成多显示器、热插拔、待机唤醒和长期稳定性覆盖。
@@ -32,7 +40,7 @@ The vast majority of the code and implementation in this repository were generat
 
 - `board/`：W132D Linux v7.1.10 DTS 和 Armbian 板级元数据草稿。
 - `boot/`：已验证 vendor 启动链使用的串口/eMMC 启动模板。
-- `patches/`：RK3528 USB、HDMI/VOP 和无线驱动兼容补丁。
+- `patches/`：RK3528 USB、HDMI/VOP、eMMC HS400、TSADC、RKVDEC、音频和无线驱动兼容补丁。
 - `drivers/`：保留的 USB2 和 RK3528 HDMI PHY 研究源码；构建时使用 `patches/` 中的对应补丁。
 - `rootfs/`：无线服务、蓝牙 HCI 服务和根文件系统扩容辅助脚本。
 - `scripts/`：DTB/内核、无线模块和完整镜像构建辅助脚本。
@@ -84,8 +92,16 @@ The latest mainline image was tested on real W132D hardware with the following r
 | Wired Ethernet (RMII) | Working |
 | UWE5622 Wi-Fi | Working |
 | UWE5622 Bluetooth | Working |
-| 3.5 mm audio | Not being adapted |
-| Infrared | Not being adapted |
+| eMMC HS400 / command queue | Working (needs the RK3528 DLL tap patch) |
+| TSADC and thermal throttling | Working |
+| CPU DVFS (down to 408 MHz) | Working |
+| Mali-450 GPU (Lima) | Working, all five OPPs 300-800 MHz |
+| RKVDEC hardware video decode | Working (H.264 / HEVC) |
+| 3.5 mm audio (playback + microphone) | Working |
+| Infrared receiver | Working (gpio-ir-receiver) |
+| Panel LEDs | Working |
+| Watchdog | Working |
+| OP-TEE / ramoops | Working |
 | HDMI display output | Verified on one 2K monitor at 2560x1440@60; still experimental |
 
 The mainline HDMI path now includes RK3528-specific DTS endpoints, a project-local INNO HDMI PHY backport, DesignWare HDMI glue, a VOP2 compatibility descriptor, and vendor-derived format/timing patches. The tested monitor is stable, but multi-monitor, hotplug, suspend/resume, and long-duration coverage are still open.
@@ -94,7 +110,7 @@ The mainline HDMI path now includes RK3528-specific DTS endpoints, a project-loc
 
 - `board/`: W132D Linux v7.1.10 DTS and draft Armbian board metadata.
 - `boot/`: serial/eMMC boot templates for the verified vendor boot chain.
-- `patches/`: RK3528 USB, HDMI/VOP, and wireless driver compatibility patches.
+- `patches/`: RK3528 USB, HDMI/VOP, eMMC HS400, TSADC, RKVDEC, audio, and wireless driver compatibility patches.
 - `drivers/`: retained USB2 and RK3528 HDMI PHY research sources; the build uses the corresponding patches in `patches/`.
 - `rootfs/`: wireless service, Bluetooth HCI service, and rootfs growth helper.
 - `scripts/`: DTB/kernel, wireless module, and complete-image build helpers.
