@@ -10,6 +10,7 @@
 
 #include "rk3528.dtsi"
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/leds/common.h>
 #include <dt-bindings/phy/phy.h>
 #include <dt-bindings/soc/rockchip,vop2.h>
 #include <dt-bindings/thermal/thermal.h>
@@ -762,5 +763,49 @@
 		compatible = "gpio-ir-receiver";
 		gpios = <&gpio4 RK_PC6 GPIO_ACTIVE_LOW>;
 		status = "okay";
+	};
+};
+
+&{/} {
+	/*
+	 * Panel indicators.  Do not use the legacy "label" property here:
+	 * leds-gpio only passes an fwnode to the LED core when a child has no
+	 * label, and led-class only reads linux,default-trigger from that
+	 * fwnode - with a label every trigger silently ends up as [none].
+	 */
+	leds {
+		compatible = "gpio-leds";
+
+		led-net-red {
+			color = <LED_COLOR_ID_RED>;
+			function = LED_FUNCTION_LAN;
+			gpios = <&gpio4 RK_PB7 GPIO_ACTIVE_HIGH>;
+			default-state = "off";
+			linux,default-trigger = "none";
+		};
+
+		led-net-green {
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_LAN;
+			gpios = <&gpio4 RK_PC0 GPIO_ACTIVE_HIGH>;
+			default-state = "off";
+			linux,default-trigger = "none";
+		};
+
+		led-pwr-green {
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_POWER;
+			gpios = <&gpio4 RK_PC1 GPIO_ACTIVE_HIGH>;
+			default-state = "off";
+			linux,default-trigger = "none";
+		};
+
+		led-pwr-red {
+			color = <LED_COLOR_ID_RED>;
+			function = LED_FUNCTION_POWER;
+			gpios = <&gpio1 RK_PC2 GPIO_ACTIVE_HIGH>;
+			default-state = "on";
+			linux,default-trigger = "none";
+		};
 	};
 };
