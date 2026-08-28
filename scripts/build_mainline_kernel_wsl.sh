@@ -8,7 +8,7 @@ ARCH=arm64
 CROSS_COMPILE="${CROSS_COMPILE:-aarch64-linux-gnu-}"
 OUT_DIR="$WIN_DIR/out"
 
-"$WIN_DIR/scripts/build_mainline_dtb_wsl.sh"
+bash "$WIN_DIR/scripts/build_mainline_dtb_wsl.sh"
 echo '=== build Linux v7.1 Image ==='
 make -C "$KERNEL_DIR" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION= Image -j"$(nproc)"
 mkdir -p "$OUT_DIR"

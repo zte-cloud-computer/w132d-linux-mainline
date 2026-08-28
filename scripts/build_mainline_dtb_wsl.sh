@@ -25,7 +25,7 @@ if ! grep -qxF "dtb-\$(CONFIG_ARCH_ROCKCHIP) += ${DTS_NAME}.dtb" "$MAKEFILE"; th
 	printf '\ndtb-$(CONFIG_ARCH_ROCKCHIP) += %s.dtb\n' "$DTS_NAME" >> "$MAKEFILE"
 fi
 
-"$WIN_DIR/scripts/prepare_mainline_kernel_wsl.sh"
+bash "$WIN_DIR/scripts/prepare_mainline_kernel_wsl.sh"
 echo '=== build W132D mainline DTB ==='
 make -C "$KERNEL_DIR" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION= \
 	"rockchip/${DTS_NAME}.dtb" -j"$(nproc)"
