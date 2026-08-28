@@ -6,6 +6,7 @@
 | --- | --- | --- | --- |
 | Armbian 构建系统 | `https://github.com/armbian/build`（由镜像构建文档固定） | 仅包含板级元数据和构建说明 | 遵循上游 GPL-2.0 条款 |
 | Linux | 上游 Linux v7.1.10，提交 `8d4e6356173a7b2e4a6a8ee1669060c33528fdb9` | 板级 DTS 和少量兼容补丁 | 源自 Linux 的补丁采用 GPL-2.0-only，见 `LICENSES/GPL-2.0-only` |
+| Rockchip BSP 内核 | `https://github.com/armbian/linux-rockchip`，分支 `rk-6.1-rkr5` | RK3528 驱动支持的移植依据（eMMC HS400 tap 值、TSADC 码表与初始化、RKVDEC 匹配项） | 与 Linux 同源，补丁采用 GPL-2.0-only |
 | U-Boot 工具 | `https://github.com/u-boot/u-boot` | 仅调用 FIT/镜像工具 | 未复制 U-Boot 源码；遵循上游许可证 |
 | UWE5621/WCN/Wi-Fi | `https://github.com/KryptonLee/uwe5621ds-aml`，提交 `0c12c46df48da9592abc7848335482e68d23e28a` | 兼容补丁和构建说明 | 保留上游 GPL 声明；补丁采用 GPL-2.0-only |
 | UWE5631 蓝牙 SDIO 串口 | `https://github.com/CoreELEC/uwe5631-aml`，提交 `08165b5d56f46b569ee6461d7082ff795efafb2e` | 兼容补丁和构建说明 | 保留上游 GPL 声明；补丁采用 GPL-2.0-only |
@@ -37,6 +38,7 @@ This file records the upstream projects used as build inputs or porting referenc
 | --- | --- | --- | --- |
 | Armbian build | `https://github.com/armbian/build` (pinned by the image build notes) | Board metadata and build instructions only | Follow the upstream GPL-2.0 terms |
 | Linux | Upstream Linux v7.1.10, commit `8d4e6356173a7b2e4a6a8ee1669060c33528fdb9` | Board DTS and small compatibility patches | Linux-derived patches are GPL-2.0-only; see `LICENSES/GPL-2.0-only` |
+| Rockchip BSP kernel | `https://github.com/armbian/linux-rockchip`, branch `rk-6.1-rkr5` | Reference for the RK3528 driver support (eMMC HS400 tap values, TSADC code table and init, RKVDEC match entry) | Same origin as Linux; patches are GPL-2.0-only |
 | U-Boot tools | `https://github.com/u-boot/u-boot` | Invocation of FIT/image tools only | No U-Boot source is copied here; follow the upstream license |
 | UWE5621/WCN/Wi-Fi | `https://github.com/KryptonLee/uwe5621ds-aml`, commit `0c12c46df48da9592abc7848335482e68d23e28a` | Compatibility patches and build instructions | Preserve the upstream GPL notices; patches are GPL-2.0-only |
 | UWE5631 Bluetooth tty-over-SDIO | `https://github.com/CoreELEC/uwe5631-aml`, commit `08165b5d56f46b569ee6461d7082ff795efafb2e` | Compatibility patches and build instructions | Preserve the upstream GPL notices; patches are GPL-2.0-only |
