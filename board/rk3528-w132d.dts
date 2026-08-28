@@ -746,3 +746,21 @@
 		status = "okay";
 	};
 };
+
+&{/} {
+	/*
+	 * The vendor DTB drives the IR receiver with rockchip,remotectl-pwm,
+	 * which captures pulse widths in PWM3 hardware.  Mainline has neither
+	 * that driver nor capture support in pwm-rockchip, so the same pin is
+	 * muxed back to plain GPIO and decoded by gpio-ir-receiver.  pwm3 must
+	 * stay disabled for the pin to be free.
+	 *
+	 * No wakeup-source: this board only ever does software standby, so the
+	 * pin never participates in a hardware suspend/resume path.
+	 */
+	ir_receiver: ir-receiver {
+		compatible = "gpio-ir-receiver";
+		gpios = <&gpio4 RK_PC6 GPIO_ACTIVE_LOW>;
+		status = "okay";
+	};
+};
