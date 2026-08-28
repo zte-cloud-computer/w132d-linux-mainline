@@ -536,3 +536,66 @@
 		};
 	};
 };
+
+&{/soc} {
+	/*
+	 * The vendor DTB uses the BSP-only "rockchip,iommu-v2"; mainline reaches
+	 * the same v2 ops through "rockchip,rk3568-iommu".
+	 */
+	vdec_mmu: iommu@ff740800 {
+		compatible = "rockchip,rk3568-iommu";
+		reg = <0x0 0xff740800 0x0 0x40>,
+		      <0x0 0xff740900 0x0 0x40>;
+		interrupts = <GIC_SPI 95 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru ACLK_RKVDEC>, <&cru HCLK_RKVDEC>;
+		clock-names = "aclk", "iface";
+		#iommu-cells = <0>;
+		status = "okay";
+	};
+
+
+
+
+	/*
+	 * No power-domains on purpose.  rk3528.dtsi leaves
+	 * power-domain@RK3528_PD_RKVDEC disabled, so referencing it makes both
+	 * devices fail with deferred probe timeouts.  The vendor DTB does not
+	 * use a power domain here either: the RK3528 vdec domain is defined with
+	 * a zero power mask, i.e. bus idle handshake only, permanently powered.
+	 */
+	vdec: video-codec@ff740000 {
+		compatible = "rockchip,rk3528-vdec";
+		reg = <0x0 0xff740000 0x0 0x100>,
+		      <0x0 0xff740100 0x0 0x400>;
+		reg-names = "link", "function";
+		interrupts = <GIC_SPI 94 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru ACLK_RKVDEC>, <&cru HCLK_RKVDEC>,
+			 <&cru CLK_HEVC_CA_RKVDEC>;
+		clock-names = "axi", "ahb", "hevc_cabac";
+		assigned-clocks = <&cru ACLK_RKVDEC>, <&cru CLK_HEVC_CA_RKVDEC>;
+		assigned-clock-rates = <340000000>, <600000000>;
+		iommus = <&vdec_mmu>;
+		sram = <&vdec_sram>;
+		status = "okay";
+	};
+
+
+
+
+	/*
+	 * On-chip SRAM used for the decoder row cache.  The child must carry
+	 * "pool" or drivers/misc/sram.c never creates a named gen_pool for it.
+	 */
+	sram@fe480000 {
+		compatible = "mmio-sram";
+		reg = <0x0 0xfe480000 0x0 0xc000>;
+		ranges = <0x0 0x0 0xfe480000 0xc000>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		vdec_sram: rkvdec-sram@0 {
+			reg = <0x0 0xc000>;
+			pool;
+		};
+	};
+};
