@@ -485,3 +485,54 @@
 		};
 	};
 };
+
+&{/} {
+	/*
+	 * vdd_logic supplies the GPU rail from PWM2.  Without it the rail stays
+	 * at the 703 mV left by U-Boot and lima refuses to probe with
+	 * "no regulator (mali) found"; the 700/800 MHz OPPs would be undervolted.
+	 */
+	vdd_logic: regulator-vdd-logic {
+		compatible = "pwm-regulator";
+		pwms = <&pwm2 0 5000 1>;
+		pwm-dutycycle-range = <100 0>;
+		regulator-name = "vdd_logic";
+		regulator-min-microvolt = <703000>;
+		regulator-max-microvolt = <1006000>;
+		regulator-settling-time-up-us = <250>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+};
+
+&pwm2 {
+	status = "okay";
+};
+
+/*
+ * Mali-450 needs no driver change - mainline lima already matches
+ * "arm,mali-450" - only the rail and the enable.  With vdd_logic connected all
+ * five OPPs (300/500/600/700/800 MHz) run; 800 MHz peaks at 57 C against a
+ * 95 C trip.
+ */
+&gpu {
+	mali-supply = <&vdd_logic>;
+	#cooling-cells = <2>;
+	status = "okay";
+};
+
+/*
+ * Hang the GPU off the 95 C trip that the SoC zone leaves free, so a GPU
+ * downclock - unnoticeable on this headless machine - happens before the CPU
+ * is throttled at 110 C.  The GPU peaks at 57 C at 800 MHz, so this is
+ * configuration completeness rather than a fix for an observed problem.
+ */
+&soc_thermal {
+	cooling-maps {
+		map1 {
+			trip = <&soc_alert0>;
+			cooling-device = <&gpu THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+			contribution = <1024>;
+		};
+	};
+};
