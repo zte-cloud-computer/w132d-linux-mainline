@@ -1,7 +1,8 @@
 diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+index 1cd1c6c85a16489b4dd2c4dec72ca1459764e647..971eefb39bdd45064942a8ef759a157024446f96 100644
 --- a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
 +++ b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
-@@ -381,13 +381,24 @@ static void dw_hdmi_rockchip_encoder_mode_set(struct drm_encoder *encoder,
+@@ -282,15 +282,26 @@ static void dw_hdmi_rockchip_encoder_mode_set(struct drm_encoder *encoder,
  	struct rockchip_hdmi *hdmi = to_rockchip_hdmi(encoder);
  
  	/*
@@ -19,8 +20,7 @@ diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockc
 +		 "RK3528 HDMI mode_set %ux%u@%u clock=%d kHz phy_dclk_before=%lu Hz\n",
  		 adj_mode->hdisplay, adj_mode->vdisplay,
  		 drm_mode_vrefresh(adj_mode), adj_mode->clock,
--		 hdmi->hdmiphy_clk ? clk_get_rate(hdmi->hdmiphy_clk) : 0UL);
-+		 hdmi->hdmiphy_clk ? clk_get_rate(hdmi->hdmiphy_clk) : 0UL);
+ 		 hdmi->hdmiphy_clk ? clk_get_rate(hdmi->hdmiphy_clk) : 0UL);
 +
 +	if (hdmi->hdmiphy_clk) {
 +		unsigned long clock = adj_mode->crtc_clock * 1000UL;
@@ -31,3 +31,5 @@ diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockc
 +			 clock, clk_get_rate(hdmi->hdmiphy_clk), ret);
 +	}
  }
+ 
+ static void dw_hdmi_rockchip_encoder_enable(struct drm_encoder *encoder)

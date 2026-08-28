@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 /*
- * ZTE Cloud Computer W132D - first Linux v7.1 mainline baseline.
+ * ZTE Cloud Computer W132D - Linux v7.1.10 stable baseline.
  *
  * This file intentionally starts from the upstream RK3528 SoC description.
  * Vendor-only rk3528-linux.dtsi nodes are not included here.
@@ -10,8 +10,10 @@
 
 #include "rk3528.dtsi"
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/leds/common.h>
 #include <dt-bindings/phy/phy.h>
 #include <dt-bindings/soc/rockchip,vop2.h>
+#include <dt-bindings/thermal/thermal.h>
 
 / {
 	model = "ZTE Cloud Computer W132D";
@@ -71,12 +73,24 @@
 	bus-width = <8>;
 	cap-mmc-highspeed;
 	/*
-	 * The v7.1 RK3528 DWCMShc path has no W132D voltage-switch/regulator
-	 * description yet.  Keep eMMC in the 3.3 V MMC High-Speed mode (52 MHz)
-	 * for bring-up; advertising HS200 makes the driver enter its DLL path and
-	 * fail to enumerate the card when it has to fall back below 52 MHz.
+	 * HS400 needs the RK3528 DLL tap values added by
+	 * patches/rk3528-dwcmshc-hs400-7.1.patch.  Without that patch the driver
+	 * falls back to the RK3588 taps (10/8/4) and the eMMC does not enumerate.
 	 */
-	max-frequency = <52000000>;
+	max-frequency = <200000000>;
+	mmc-hs200-1_8v;
+	mmc-hs400-1_8v;
+	mmc-hs400-enhanced-strobe;
+	/*
+	 * The command queue is enabled from the DT property alone; the driver
+	 * reads it with device_property_read_bool(pdev, "supports-cqe").
+	 */
+	supports-cqe;
+	/*
+	 * Deliberately no fixed-emmc-driver-type: the vendor reference board uses
+	 * type 4, but the Samsung 07S000 part fitted here rejects it and the MMC
+	 * core falls back to type B anyway.
+	 */
 	no-sd;
 	no-sdio;
 	non-removable;
@@ -255,7 +269,7 @@
 &{/} {
 	sdio_pwrseq: sdio-pwrseq {
 		compatible = "mmc-pwrseq-simple";
-		/* Linux 7.1's simple pwrseq treats a single reset GPIO as a
+		/* Linux 7.1.10's simple pwrseq treats a single reset GPIO as a
 		 * reset-controller candidate. Keep both board WCN control lines in
 		 * the GPIO array so it uses the intended GPIO fallback path. */
 		reset-gpios = <&gpio3 RK_PB2 GPIO_ACTIVE_LOW>,
@@ -293,4 +307,542 @@
 
 &sdio1 {
 	mmc-pwrseq = <&sdio_pwrseq>;
+};
+
+/*
+ * Board hardware that mainline v7.1.10 does not describe for the RK3528 yet.
+ *
+ * The SoC-level blocks below are added through &{/soc} the same way the
+ * display path above is: they are not board wiring, but keeping them in the
+ * board file avoids carrying a second rk3528.dtsi patch while the register
+ * data is still being validated.  Every register address, interrupt and clock
+ * topology comes from this machine's own vendor DTB, with the vendor BSP
+ * clock/reset IDs re-mapped onto the mainline rockchip,rk3528-cru.h numbering.
+ */
+&{/} {
+	/*
+	 * vdd_cpu drives the CPU rail from PWM1.
+	 *
+	 * pwm-dutycycle-range is mandatory here.  Mainline pwm-rockchip handles
+	 * PWM_POLARITY_INVERSED in the opposite direction from the vendor kernel,
+	 * so copying the vendor description verbatim maps a high voltage request
+	 * onto a low duty cycle; the board then browns out at 2016 MHz.
+	 *
+	 * regulator-init-microvolt is deliberately absent: applying a voltage at
+	 * probe time, before the mapping direction has been observed, is what
+	 * bricked an earlier bring-up attempt.
+	 */
+	vdd_cpu: regulator-vdd-cpu {
+		compatible = "pwm-regulator";
+		pwms = <&pwm1 0 5000 1>;
+		pwm-dutycycle-range = <100 0>;
+		regulator-name = "vdd_cpu";
+		regulator-min-microvolt = <746000>;
+		regulator-max-microvolt = <1201000>;
+		regulator-settling-time-up-us = <250>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+};
+
+&pwm1 {
+	status = "okay";
+};
+
+/*
+ * The mainline opp-table-cpu starts at 1200 MHz.  This machine is idle over
+ * 90% of the time, and the SCMI firmware itself reports 408 MHz as the lower
+ * bound (clk_min_rate on scmi_clk_cpu), so add the four vendor low steps.
+ *
+ * All four use 875000 uV rather than the vendor 825000 uV base: the vendor
+ * kernel picks a voltage from an nvmem leakage bin and raises everything at or
+ * below 1200 MHz to 875000 uV anyway.  Mainline already uses 875000 uV at
+ * 1200 MHz, so this reuses a value the tree already trusts.
+ */
+&cpu_opp_table {
+	opp-408000000 {
+		opp-hz = /bits/ 64 <408000000>;
+		opp-microvolt = <875000 875000 1100000>;
+		clock-latency-ns = <40000>;
+	};
+
+	opp-600000000 {
+		opp-hz = /bits/ 64 <600000000>;
+		opp-microvolt = <875000 875000 1100000>;
+		clock-latency-ns = <40000>;
+	};
+
+	opp-816000000 {
+		opp-hz = /bits/ 64 <816000000>;
+		opp-microvolt = <875000 875000 1100000>;
+		clock-latency-ns = <40000>;
+	};
+
+	opp-1008000000 {
+		opp-hz = /bits/ 64 <1008000000>;
+		opp-microvolt = <875000 875000 1100000>;
+		clock-latency-ns = <40000>;
+	};
+};
+
+&cpu0 {
+	cpu-supply = <&vdd_cpu>;
+	#cooling-cells = <2>;
+	dynamic-power-coefficient = <147>;
+};
+
+&cpu1 {
+	cpu-supply = <&vdd_cpu>;
+	#cooling-cells = <2>;
+	dynamic-power-coefficient = <147>;
+};
+
+&cpu2 {
+	cpu-supply = <&vdd_cpu>;
+	#cooling-cells = <2>;
+	dynamic-power-coefficient = <147>;
+};
+
+&cpu3 {
+	cpu-supply = <&vdd_cpu>;
+	#cooling-cells = <2>;
+	dynamic-power-coefficient = <147>;
+};
+
+&{/soc} {
+	watchdog@ffac0000 {
+		compatible = "snps,dw-wdt";
+		reg = <0x0 0xffac0000 0x0 0x100>;
+		clocks = <&cru TCLK_WDT_NS>, <&cru PCLK_WDT_NS>;
+		clock-names = "tclk", "pclk";
+		resets = <&cru SRST_P_WDT_NS>;
+		reset-names = "reset";
+		status = "okay";
+	};
+
+
+
+
+	tsadc: tsadc@ffad0000 {
+		compatible = "rockchip,rk3528-tsadc";
+		reg = <0x0 0xffad0000 0x0 0x400>;
+		interrupts = <GIC_SPI 139 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru CLK_TSADC>, <&cru CLK_TSADC_TSEN>,
+			 <&cru PCLK_TSADC>;
+		clock-names = "tsadc", "tsadc_tsen", "apb_pclk";
+		assigned-clocks = <&cru CLK_TSADC>, <&cru CLK_TSADC_TSEN>;
+		assigned-clock-rates = <1200000>, <12000000>;
+		resets = <&cru SRST_TSADC>, <&cru SRST_P_TSADC>;
+		reset-names = "tsadc", "tsadc-apb";
+		rockchip,grf = <&vpu_grf>;
+		rockchip,hw-tshut-temp = <120000>;
+		rockchip,hw-tshut-mode = <0>;
+		rockchip,hw-tshut-polarity = <0>;
+		#thermal-sensor-cells = <1>;
+		status = "okay";
+	};
+};
+
+/*
+ * Three trips: 95 C and 110 C passive, 120 C critical.  Only the 110 C trip
+ * throttles the CPU; the 95 C one is left for the GPU to use first, so the
+ * GPU gives up headroom before the CPU does.  Measured peak with four CPUs
+ * loaded is 58 C, so this never fires in normal use.
+ */
+&{/} {
+	thermal-zones {
+		soc_thermal: soc-thermal {
+			polling-delay-passive = <20>;
+			polling-delay = <1000>;
+			thermal-sensors = <&tsadc 0>;
+
+			trips {
+				soc_alert0: trip-point-0 {
+					temperature = <95000>;
+					hysteresis = <2000>;
+					type = "passive";
+				};
+
+				soc_alert1: trip-point-1 {
+					temperature = <110000>;
+					hysteresis = <2000>;
+					type = "passive";
+				};
+
+				soc-crit {
+					temperature = <120000>;
+					hysteresis = <2000>;
+					type = "critical";
+				};
+			};
+
+			cooling-maps {
+				map0 {
+					trip = <&soc_alert1>;
+					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+					contribution = <1024>;
+				};
+			};
+		};
+	};
+};
+
+&{/} {
+	/*
+	 * vdd_logic supplies the GPU rail from PWM2.  Without it the rail stays
+	 * at the 703 mV left by U-Boot and lima refuses to probe with
+	 * "no regulator (mali) found"; the 700/800 MHz OPPs would be undervolted.
+	 */
+	vdd_logic: regulator-vdd-logic {
+		compatible = "pwm-regulator";
+		pwms = <&pwm2 0 5000 1>;
+		pwm-dutycycle-range = <100 0>;
+		regulator-name = "vdd_logic";
+		regulator-min-microvolt = <703000>;
+		regulator-max-microvolt = <1006000>;
+		regulator-settling-time-up-us = <250>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+};
+
+&pwm2 {
+	status = "okay";
+};
+
+/*
+ * Mali-450 needs no driver change - mainline lima already matches
+ * "arm,mali-450" - only the rail and the enable.  With vdd_logic connected all
+ * five OPPs (300/500/600/700/800 MHz) run; 800 MHz peaks at 57 C against a
+ * 95 C trip.
+ */
+&gpu {
+	mali-supply = <&vdd_logic>;
+	#cooling-cells = <2>;
+	status = "okay";
+};
+
+/*
+ * Hang the GPU off the 95 C trip that the SoC zone leaves free, so a GPU
+ * downclock - unnoticeable on this headless machine - happens before the CPU
+ * is throttled at 110 C.  The GPU peaks at 57 C at 800 MHz, so this is
+ * configuration completeness rather than a fix for an observed problem.
+ */
+&soc_thermal {
+	cooling-maps {
+		map1 {
+			trip = <&soc_alert0>;
+			cooling-device = <&gpu THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+			contribution = <1024>;
+		};
+	};
+};
+
+&{/soc} {
+	/*
+	 * The vendor DTB uses the BSP-only "rockchip,iommu-v2"; mainline reaches
+	 * the same v2 ops through "rockchip,rk3568-iommu".
+	 */
+	vdec_mmu: iommu@ff740800 {
+		compatible = "rockchip,rk3568-iommu";
+		reg = <0x0 0xff740800 0x0 0x40>,
+		      <0x0 0xff740900 0x0 0x40>;
+		interrupts = <GIC_SPI 95 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru ACLK_RKVDEC>, <&cru HCLK_RKVDEC>;
+		clock-names = "aclk", "iface";
+		#iommu-cells = <0>;
+		status = "okay";
+	};
+
+
+
+
+	/*
+	 * No power-domains on purpose.  rk3528.dtsi leaves
+	 * power-domain@RK3528_PD_RKVDEC disabled, so referencing it makes both
+	 * devices fail with deferred probe timeouts.  The vendor DTB does not
+	 * use a power domain here either: the RK3528 vdec domain is defined with
+	 * a zero power mask, i.e. bus idle handshake only, permanently powered.
+	 */
+	vdec: video-codec@ff740000 {
+		compatible = "rockchip,rk3528-vdec";
+		reg = <0x0 0xff740000 0x0 0x100>,
+		      <0x0 0xff740100 0x0 0x400>;
+		reg-names = "link", "function";
+		interrupts = <GIC_SPI 94 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru ACLK_RKVDEC>, <&cru HCLK_RKVDEC>,
+			 <&cru CLK_HEVC_CA_RKVDEC>;
+		clock-names = "axi", "ahb", "hevc_cabac";
+		assigned-clocks = <&cru ACLK_RKVDEC>, <&cru CLK_HEVC_CA_RKVDEC>;
+		assigned-clock-rates = <340000000>, <600000000>;
+		iommus = <&vdec_mmu>;
+		sram = <&vdec_sram>;
+		status = "okay";
+	};
+
+
+
+
+	/*
+	 * On-chip SRAM used for the decoder row cache.  The child must carry
+	 * "pool" or drivers/misc/sram.c never creates a named gen_pool for it.
+	 */
+	sram@fe480000 {
+		compatible = "mmio-sram";
+		reg = <0x0 0xfe480000 0x0 0xc000>;
+		ranges = <0x0 0x0 0xfe480000 0xc000>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		vdec_sram: rkvdec-sram@0 {
+			reg = <0x0 0xc000>;
+			pool;
+		};
+	};
+};
+
+&{/} {
+	/* SARADC reference; channel 2 distinguishes headphone from headset. */
+	vdd_1v8_s3: regulator-vdd-1v8-s3 {
+		compatible = "regulator-fixed";
+		regulator-name = "vdd_1v8_s3";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+
+
+
+	/*
+	 * Playback: SAI2 -> on-chip ACODEC (DAC only) -> LINEOUT -> 3.5 mm jack.
+	 * The vendor rockchip,multicodecs-card has no mainline equivalent;
+	 * simple-audio-card covers everything this path needs.
+	 */
+	acodec_sound: acodec-sound {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "rk3528-acodec";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,mclk-fs = <256>;
+		simple-audio-card,bitclock-master = <&acodec_sound_cpu>;
+		simple-audio-card,frame-master = <&acodec_sound_cpu>;
+		simple-audio-card,hp-det-gpios = <&gpio4 RK_PA3 GPIO_ACTIVE_LOW>;
+		simple-audio-card,widgets = "Headphone", "Headphones";
+		pinctrl-names = "default";
+		pinctrl-0 = <&hp_det>;
+
+		acodec_sound_cpu: simple-audio-card,cpu {
+			sound-dai = <&sai2>;
+		};
+
+		simple-audio-card,codec {
+			sound-dai = <&acodec>;
+		};
+	};
+
+
+
+
+	/*
+	 * Capture: ES7202 analog-to-PDM bridge -> PDM SDI2.  PDM is a
+	 * unidirectional data line, so this card carries no format/mclk-fs.
+	 */
+	es7202_sound: es7202-sound {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "rockchip,pdm-mic-array";
+
+		simple-audio-card,cpu {
+			sound-dai = <&pdm>;
+		};
+
+		simple-audio-card,codec {
+			sound-dai = <&es7202>;
+		};
+	};
+};
+
+&saradc {
+	vref-supply = <&vdd_1v8_s3>;
+	status = "okay";
+};
+
+&i2c2 {
+	status = "okay";
+
+	/* The vendor codec driver matches on this compatible string. */
+	es7202: es7202@30 {
+		compatible = "ES7202_PDM_ADC_1";
+		reg = <0x30>;
+		#sound-dai-cells = <0>;
+		status = "okay";
+	};
+};
+
+&pinctrl {
+	headphone {
+		/*
+		 * GPIO4_A3 has no external pull-up, so without the internal one
+		 * the detect line reads low forever and a headphone always looks
+		 * inserted.  The vendor hp-det group uses pcfg_pull_up too.
+		 */
+		hp_det: hp-det {
+			rockchip,pins = <4 RK_PA3 0 &pcfg_pull_up>;
+		};
+	};
+};
+
+&{/soc} {
+	/*
+	 * SAI2 is wired to the on-chip codec, so it has no pins.  Mainline only
+	 * matches rockchip,rk3576-sai, but the RK3528 register layout is
+	 * identical and the driver reads SAI_VERSION at runtime; the rk3576
+	 * fallback is kept so an unpatched driver still binds.
+	 */
+	sai2: sai@ffb90000 {
+		compatible = "rockchip,rk3528-sai", "rockchip,rk3576-sai";
+		reg = <0x0 0xffb90000 0x0 0x1000>;
+		interrupts = <GIC_SPI 127 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru MCLK_SAI_I2S2>, <&cru HCLK_SAI_I2S2>;
+		clock-names = "mclk", "hclk";
+		dmas = <&dmac 4>;
+		dma-names = "tx";
+		resets = <&cru SRST_M_SAI_I2S2>, <&cru SRST_H_SAI_I2S2>;
+		reset-names = "m", "h";
+		#sound-dai-cells = <0>;
+		status = "okay";
+	};
+
+
+
+
+	acodec: acodec@ffe10000 {
+		compatible = "rockchip,rk3528-codec";
+		reg = <0x0 0xffe10000 0x0 0x1000>;
+		clocks = <&cru PCLK_ACODEC>, <&cru MCLK_ACODEC_TX>;
+		clock-names = "pclk", "mclk";
+		resets = <&cru SRST_P_ACODEC>;
+		reset-names = "acodec";
+		/* External amplifier enable. */
+		pa-ctl-gpios = <&gpio4 RK_PC3 GPIO_ACTIVE_HIGH>;
+		#sound-dai-cells = <0>;
+		status = "okay";
+	};
+
+
+
+
+	pdm: pdm@ffbb0000 {
+		compatible = "rockchip,rk3528-pdm", "rockchip,rk3568-pdm";
+		reg = <0x0 0xffbb0000 0x0 0x1000>;
+		clocks = <&cru MCLK_PDM>, <&cru HCLK_PDM>;
+		clock-names = "pdm_clk", "pdm_hclk";
+		dmas = <&dmac 6>;
+		dma-names = "rx";
+		pinctrl-names = "default";
+		pinctrl-0 = <&pdm_clk1>, <&pdm_sdi2>;
+		/* Only SDI2 is populated; map it onto path0. */
+		rockchip,path-map = <2 1 0 3>;
+		#sound-dai-cells = <0>;
+		status = "okay";
+	};
+};
+
+&{/} {
+	/*
+	 * The vendor DTB drives the IR receiver with rockchip,remotectl-pwm,
+	 * which captures pulse widths in PWM3 hardware.  Mainline has neither
+	 * that driver nor capture support in pwm-rockchip, so the same pin is
+	 * muxed back to plain GPIO and decoded by gpio-ir-receiver.  pwm3 must
+	 * stay disabled for the pin to be free.
+	 *
+	 * No wakeup-source: this board only ever does software standby, so the
+	 * pin never participates in a hardware suspend/resume path.
+	 */
+	ir_receiver: ir-receiver {
+		compatible = "gpio-ir-receiver";
+		gpios = <&gpio4 RK_PC6 GPIO_ACTIVE_LOW>;
+		status = "okay";
+	};
+};
+
+&{/} {
+	/*
+	 * Panel indicators.  Do not use the legacy "label" property here:
+	 * leds-gpio only passes an fwnode to the LED core when a child has no
+	 * label, and led-class only reads linux,default-trigger from that
+	 * fwnode - with a label every trigger silently ends up as [none].
+	 */
+	leds {
+		compatible = "gpio-leds";
+
+		led-net-red {
+			color = <LED_COLOR_ID_RED>;
+			function = LED_FUNCTION_LAN;
+			gpios = <&gpio4 RK_PB7 GPIO_ACTIVE_HIGH>;
+			default-state = "off";
+			linux,default-trigger = "none";
+		};
+
+		led-net-green {
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_LAN;
+			gpios = <&gpio4 RK_PC0 GPIO_ACTIVE_HIGH>;
+			default-state = "off";
+			linux,default-trigger = "none";
+		};
+
+		led-pwr-green {
+			color = <LED_COLOR_ID_GREEN>;
+			function = LED_FUNCTION_POWER;
+			gpios = <&gpio4 RK_PC1 GPIO_ACTIVE_HIGH>;
+			default-state = "off";
+			linux,default-trigger = "none";
+		};
+
+		led-pwr-red {
+			color = <LED_COLOR_ID_RED>;
+			function = LED_FUNCTION_POWER;
+			gpios = <&gpio1 RK_PC2 GPIO_ACTIVE_HIGH>;
+			default-state = "on";
+			linux,default-trigger = "none";
+		};
+	};
+};
+
+&{/firmware} {
+	/*
+	 * OP-TEE is already running: our U-Boot FIT loads it at 0x08400000, and
+	 * U-Boot removes that range from /memory before entering Linux, so the
+	 * kernel never maps it.  Only the DT node was missing, which is why
+	 * /dev/tee0 never appeared.
+	 */
+	optee {
+		compatible = "linaro,optee-tz";
+		method = "smc";
+	};
+};
+
+&{/reserved-memory} {
+	/*
+	 * Crash log storage that survives a warm reset - it is ordinary DRAM in
+	 * the firmware-reserved low 2 MB that neither Linux nor the TPL touches.
+	 * It does not survive a power cycle.
+	 *
+	 * 0x110000..0x1effff is free: the ATF images end at 0xa2f71 and the SCMI
+	 * shmem sits at 0x10f000+0x100.
+	 *
+	 * record-size and console-size must be powers of two; ramoops rounds
+	 * anything else down without a diagnostic.
+	 */
+	ramoops@110000 {
+		compatible = "ramoops";
+		reg = <0x0 0x110000 0x0 0xe0000>;
+		record-size = <0x10000>;
+		console-size = <0x40000>;
+		pmsg-size = <0x0>;
+		ftrace-size = <0x0>;
+		/* KMSG_DUMP_EMERG, so emergency_restart() is captured too. */
+		max-reason = <3>;
+	};
 };

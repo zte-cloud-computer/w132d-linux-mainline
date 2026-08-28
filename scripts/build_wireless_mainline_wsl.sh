@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 MAINLINE_DIR="${W132D_MAINLINE_DIR:-$(cd -- "$SCRIPT_DIR/.." && pwd)}"
 BUILD_ROOT="${W132D_BUILD_ROOT:-/root/w132d-build}"
-KERNEL_DIR="${W132D_MAINLINE_KERNEL_DIR:-$BUILD_ROOT/linux-v7.1}"
+KERNEL_DIR="${W132D_MAINLINE_KERNEL_DIR:-$BUILD_ROOT/linux-v7.1.10}"
 STAGE="${W132D_WIRELESS_STAGE:-$BUILD_ROOT/w132d-wireless-mainline}"
 PORT_REPO="${W132D_PORT_REPO:-$MAINLINE_DIR}"
 OUT="${W132D_WIRELESS_OUT:-$MAINLINE_DIR/out/wireless}"
@@ -25,7 +25,7 @@ BT_BUILD="$STAGE/src/uwe5631-aml/BT/tty-sdio"
 echo '=== refresh clean wireless source staging ==='
 "$MAINLINE_DIR/scripts/prepare_wireless_mainline_wsl.sh"
 
-echo '=== prepare Linux 7.1 kernel configuration ==='
+echo '=== prepare Linux 7.1.10 kernel configuration ==='
 "$MAINLINE_DIR/scripts/prepare_mainline_kernel_wsl.sh"
 "$KERNEL_DIR/scripts/config" --file "$KERNEL_DIR/.config" \
 	--module CONFIG_CFG80211 \
@@ -48,7 +48,7 @@ echo '=== prepare Linux 7.1 kernel configuration ==='
 	--module CONFIG_CRYPTO_CMAC
 make -C "$KERNEL_DIR" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION= olddefconfig >/dev/null
 
-echo '=== build Linux 7.1 wireless dependency modules ==='
+echo '=== build Linux 7.1.10 wireless dependency modules ==='
 make -C "$KERNEL_DIR" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
 	LOCALVERSION= modules -j"$(nproc)"
 
@@ -64,7 +64,7 @@ patch -d "$STAGE/src/uwe5631-aml" -p1 --forward --batch < \
 patch -d "$BT_BUILD" -p1 --forward --batch < \
 	"$PORT_REPO/patches/uwe5631-aml/0002-w132d-board-integration.patch"
 
-# Linux 7.1 removed the old <linux/of_gpio.h> number-based DT helpers. Keep
+# Linux 7.1.10 has removed the old <linux/of_gpio.h> number-based DT helpers. Keep
 # the vendor driver's integer GPIO storage for this first port, but resolve
 # each property through the supported descriptor API. The DTS uses the normal
 # <name>-gpios spelling, while callers can keep their historical names.
@@ -196,10 +196,10 @@ find "$WIFI_BUILD/unisocwcn" -type f \( -name '*.c' -o -name '*.h' \) \
 	-exec sed -i 's@#include <linux/of_gpio.h>@#include <linux/of.h>\n#include <linux/gpio.h>\n#include <linux/gpio/consumer.h>@' {} +
 # The Bluetooth tty-over-SDIO source carries the same obsolete include, but
 # does not use its number-based helpers.  Keep the source buildable against
-# Linux 7.1 without introducing a second GPIO compatibility layer.
+# Linux 7.1.10 without introducing a second GPIO compatibility layer.
 find "$BT_BUILD" -type f \( -name '*.c' -o -name '*.h' \) \
 	-exec sed -i 's@#include <linux/of_gpio.h>@#include <linux/of.h>\n#include <linux/gpio.h>\n#include <linux/gpio/consumer.h>@' {} +
-# Linux 7.1 keeps of_find_device_by_node() in the platform OF API header.
+# Linux 7.1.10 keeps of_find_device_by_node() in the platform OF API header.
 # The vendor BSP used to receive this declaration indirectly from headers
 # that no longer include it, so add it only to the files that call the API.
 while IFS= read -r file; do
@@ -216,7 +216,7 @@ sed -i \
 	-e 's/cfg80211_new_sta(vif->ndev,/cfg80211_new_sta(\&vif->wdev,/' \
 	-e 's/cfg80211_del_sta(vif->ndev,/cfg80211_del_sta(\&vif->wdev,/' \
 	"$WIFI_BUILD/unisocwifi/cfg80211.c"
-# Linux 7.1 passes struct wireless_dev to add_key/del_key. The vendor
+# Linux 7.1.10 passes struct wireless_dev to add_key/del_key. The vendor
 # callbacks still use the old net_device type; letting that mismatch compile
 # makes WPA key installation treat wireless_dev as net_device and crash.
 perl -0pi -e 's/static int sprdwl_cfg80211_add_key\(struct wiphy \*wiphy, struct net_device \*ndev,/static int sprdwl_cfg80211_add_key(struct wiphy *wiphy, struct wireless_dev *wdev,/' \
@@ -239,7 +239,7 @@ perl -0pi -e 's/(static int sprdwl_cfg80211_del_station.*?\n\{\n)\tstruct sprdwl
 	"$WIFI_BUILD/unisocwifi/cfg80211.c"
 perl -0pi -e 's/(static int sprdwl_cfg80211_get_station.*?\n\{\n)\tstruct sprdwl_vif \*vif = netdev_priv\(ndev\);/$1\tstruct net_device *ndev = wdev ? wdev->netdev : NULL;\n\tstruct sprdwl_vif *vif;\n\n\tif (!ndev)\n\t\treturn -ENODEV;\n\tvif = netdev_priv(ndev);\n\tif (!vif)\n\t\treturn -ENODEV;/sg' \
 	"$WIFI_BUILD/unisocwifi/cfg80211.c"
-# Linux 7.1 wraps beacon updates in cfg80211_ap_update and adds a radio index
+# Linux 7.1.10 wraps beacon updates in cfg80211_ap_update and adds a radio index
 # to set_wiphy_params. The underlying vendor helpers keep their old payload.
 perl -0pi -e 's/(static int sprdwl_cfg80211_change_beacon\(struct wiphy \*wiphy,\n\s*struct net_device \*ndev,\n)\s*struct cfg80211_beacon_data \*beacon\)/$1\t\t\t\t\t struct cfg80211_ap_update *info)/; s/(static int sprdwl_cfg80211_change_beacon.*?\n\{\n)\tstruct sprdwl_vif \*vif = netdev_priv\(ndev\);/$1\tstruct cfg80211_beacon_data *beacon = \&info->beacon;\n\tstruct sprdwl_vif *vif = netdev_priv(ndev);/s' \
 	"$WIFI_BUILD/unisocwifi/cfg80211.c"

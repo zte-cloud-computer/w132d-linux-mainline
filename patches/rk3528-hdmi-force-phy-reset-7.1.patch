@@ -1,6 +1,8 @@
+diff --git a/drivers/phy/rockchip/phy-rockchip-inno-hdmi.c b/drivers/phy/rockchip/phy-rockchip-inno-hdmi.c
+index a683e08b4da1637279cf65989951dfbb156b76eb..f17caffaec77a048e1b82412678aa7c293328cfe 100644
 --- a/drivers/phy/rockchip/phy-rockchip-inno-hdmi.c
 +++ b/drivers/phy/rockchip/phy-rockchip-inno-hdmi.c
-@@ -1264,12 +1264,15 @@ static void inno_hdmi_phy_rk3528_init(struct inno_hdmi_phy *inno)
+@@ -1265,14 +1265,17 @@ static void inno_hdmi_phy_rk3528_init(struct inno_hdmi_phy *inno)
  	 */
  	inno_write(inno, 0x02, 0x81);
  
@@ -22,3 +24,5 @@
 +	/* Manual power down post-PLL before Linux selects its own rate. */
 +	inno_hdmi_phy_rk3528_power_off(inno);
  }
+ 
+ static int

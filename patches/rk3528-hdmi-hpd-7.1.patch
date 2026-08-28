@@ -1,3 +1,5 @@
+diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+index 1daec1b260aa647ce10848fd7c21a5a9ebc0516d..15fcd255f9d5b44271ab7c1534d92c5c6a0b5efe 100644
 --- a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
 +++ b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
 @@ -6,6 +6,8 @@
@@ -22,7 +24,7 @@
  
  #define RK3568_GRF_VO_CON1		0x0364
  #define RK3568_HDMI_SDAIN_MSK		BIT(15)
-@@ -87,6 +92,8 @@
+@@ -87,6 +92,8 @@ struct rockchip_hdmi {
  	struct dw_hdmi *hdmi;
  	struct phy *phy;
  	struct gpio_desc *hpd_gpio;
@@ -31,7 +33,7 @@
  };
  
  static struct rockchip_hdmi *to_rockchip_hdmi(struct drm_encoder *encoder)
-@@ -204,6 +211,46 @@
+@@ -204,6 +211,46 @@ static const struct dw_hdmi_phy_config rockchip_phy_config[] = {
  
  static struct rockchip_hdmi_chip_data rk3528_chip_data;
  
@@ -78,7 +80,7 @@
  static int rockchip_hdmi_parse_dt(struct rockchip_hdmi *hdmi)
  {
  	struct device_node *np = hdmi->dev->of_node;
-@@ -227,6 +274,37 @@
+@@ -227,6 +274,37 @@ static int rockchip_hdmi_parse_dt(struct rockchip_hdmi *hdmi)
  			     FIELD_PREP_WM16(RK3528_HDMI_SDAIN_MSK, 1) |
  			     FIELD_PREP_WM16(RK3528_HDMI_SCLIN_MSK, 1));
  
@@ -116,7 +118,7 @@
  	hdmi->ref_clk = devm_clk_get_optional_enabled(hdmi->dev, "ref");
  	if (!hdmi->ref_clk)
  		hdmi->ref_clk = devm_clk_get_optional_enabled(hdmi->dev, "vpll");
-@@ -496,12 +574,18 @@
+@@ -520,12 +598,18 @@ dw_hdmi_rk3528_read_hpd(struct dw_hdmi *dw_hdmi, void *data)
  	return value ? connector_status_connected : connector_status_disconnected;
  }
  

@@ -1,6 +1,6 @@
 # W132D HDMI Porting Notes
 
-This document records the RK3528 HDMI work carried out against the Linux v7.1
+This document records the RK3528 HDMI work carried out against the Linux v7.1.10
 mainline tree. It is a bring-up record, not a claim that the implementation is
 ready for upstream submission.
 
@@ -41,7 +41,7 @@ group otherwise muxed PA2 away from the GPIO consumer.
 
 ### INNO HDMI PHY
 
-`drivers/phy-rockchip-inno-hdmi-phy.c` is a Linux v7.1 API adaptation of the
+`drivers/phy-rockchip-inno-hdmi-phy.c` is a Linux v7.1.10 API adaptation of the
 Rockchip INNO PHY implementation. The preparation script copies it into the
 kernel tree and applies the RK3528-specific changes:
 
@@ -58,7 +58,7 @@ The HDMI glue adds the RK3528 compatible match and the HPD/GRF handling to the
 generic DesignWare driver. The VOP work is deliberately a compatibility layer,
 not a wholesale copy of the vendor VOP3 driver:
 
-- native `rockchip,rk3528-vop` matching in the v7.1 VOP2 driver;
+- native `rockchip,rk3528-vop` matching in the v7.1.10 VOP2 driver;
 - VP0 and Cluster0 primary-plane bring-up;
 - RK3528 overlay port/layer mixer register offsets;
 - RK3528 cluster format, CSC, scaler, and AXI ID fields;
@@ -77,13 +77,13 @@ order. HDMI work is enabled by default and can be disabled for a control build:
 
 ```bash
 export W132D_MAINLINE_DIR=/path/to/w132d-armbian-port-repo
-export W132D_MAINLINE_KERNEL_DIR=/root/w132d-build/linux-v7.1
+export W132D_MAINLINE_KERNEL_DIR=/root/w132d-build/linux-v7.1.10
 export W132D_ENABLE_HDMI=1
 bash scripts/build_mainline_kernel_wsl.sh
 ```
 
 The HDMI patch set is project-local and should be reviewed against the pinned
-Linux v7.1 base commit before proposing any upstream submission.
+Linux v7.1.10 base commit before proposing any upstream submission.
 
 ## Runtime checks
 

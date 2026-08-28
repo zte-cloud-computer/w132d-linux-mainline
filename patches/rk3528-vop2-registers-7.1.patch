@@ -1,6 +1,8 @@
+diff --git a/drivers/gpu/drm/rockchip/rockchip_drm_vop2.h b/drivers/gpu/drm/rockchip/rockchip_drm_vop2.h
+index 37722652844a92121a9341e03d6c5db9bde345b4..1a8a38f65679ed89600f85c0b70e095d588dff2b 100644
 --- a/drivers/gpu/drm/rockchip/rockchip_drm_vop2.h
 +++ b/drivers/gpu/drm/rockchip/rockchip_drm_vop2.h
-@@ -521,6 +521,14 @@
+@@ -521,6 +521,14 @@ enum dst_factor_mode {
  #define RK3568_MIX0_DST_COLOR_CTRL		0x654
  #define RK3568_MIX0_SRC_ALPHA_CTRL		0x658
  #define RK3568_MIX0_DST_ALPHA_CTRL		0x65C
@@ -16,9 +18,10 @@
  #define RK3568_HDR0_DST_COLOR_CTRL		0x6C4
  #define RK3568_HDR0_SRC_ALPHA_CTRL		0x6C8
 diff --git a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
+index e5b1998a24ede2c1e4fb78979acc2b14bb10b808..9c47c46900ca0618cddcb39b2b0ad64cc2477d8b 100644
 --- a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
 +++ b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
-@@ -347,6 +347,68 @@
+@@ -347,6 +347,68 @@ static const struct reg_field rk3568_vop_cluster_regs[VOP2_WIN_MAX_REG] = {
  	[VOP2_WIN_VSD_CBCR_GT4] = { .reg = 0xffffffff },
  };
  
@@ -87,7 +90,7 @@ diff --git a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c b/drivers/gpu/drm/rock
  static const struct reg_field rk3568_vop_smart_regs[VOP2_WIN_MAX_REG] = {
  	[VOP2_WIN_ENABLE] = REG_FIELD(RK3568_SMART_REGION0_CTRL, 0, 0),
  	[VOP2_WIN_FORMAT] = REG_FIELD(RK3568_SMART_REGION0_CTRL, 1, 5),
-@@ -1941,6 +2003,12 @@
+@@ -1941,6 +2003,12 @@ static void vop2_setup_cluster_alpha(struct vop2 *vop2, struct vop2_win *main_wi
  		dst_color_ctrl_reg = RK3568_CLUSTER0_MIX_DST_COLOR_CTRL;
  		src_alpha_ctrl_reg = RK3568_CLUSTER0_MIX_SRC_ALPHA_CTRL;
  		dst_alpha_ctrl_reg = RK3568_CLUSTER0_MIX_DST_ALPHA_CTRL;
@@ -100,7 +103,7 @@ diff --git a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c b/drivers/gpu/drm/rock
  	} else {
  		src_color_ctrl_reg = RK3576_CLUSTER0_MIX_SRC_COLOR_CTRL;
  		dst_color_ctrl_reg = RK3576_CLUSTER0_MIX_DST_COLOR_CTRL;
-@@ -1997,6 +2065,12 @@
+@@ -1997,6 +2065,12 @@ static void vop2_setup_alpha(struct vop2_video_port *vp)
  		dst_color_ctrl_reg = RK3568_MIX0_DST_COLOR_CTRL;
  		src_alpha_ctrl_reg = RK3568_MIX0_SRC_ALPHA_CTRL;
  		dst_alpha_ctrl_reg = RK3568_MIX0_DST_ALPHA_CTRL;
@@ -113,7 +116,7 @@ diff --git a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c b/drivers/gpu/drm/rock
  	} else {
  		src_color_ctrl_reg = RK3576_OVL_MIX0_SRC_COLOR_CTRL(vp->id);
  		dst_color_ctrl_reg = RK3576_OVL_MIX0_DST_COLOR_CTRL(vp->id);
-@@ -2562,6 +2636,10 @@
+@@ -2581,6 +2655,10 @@ static void rk3528_vop2_setup_overlay(struct vop2_video_port *vp)
  	vop2_writel(vop2, 0x600, 0);
  	vop2_writel(vop2, 0x604, layer_sel);
  	vop2_writel(vop2, 0x504, port_sel);
@@ -124,7 +127,7 @@ diff --git a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c b/drivers/gpu/drm/rock
  }
  
  static const struct vop2_ops rk3528_vop_ops = {
-@@ -2576,7 +2654,7 @@
+@@ -2595,7 +2673,7 @@ static const struct vop2_video_port_data rk3528_vop_video_ports[] = {
  		.feature = VOP2_VP_FEATURE_OUTPUT_10BIT,
  		.gamma_lut_len = 1024,
  		.max_output = { 4096, 4096 },
@@ -133,7 +136,7 @@ diff --git a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c b/drivers/gpu/drm/rock
  		.offset = 0xc00,
  	},
  };
-@@ -2591,6 +2669,8 @@
+@@ -2610,6 +2688,8 @@ static const struct vop2_win_data rk3528_vop_win_data[] = {
  		.nformats = ARRAY_SIZE(formats_cluster),
  		.format_modifiers = format_modifiers,
  		.layer_sel_id = { 0, 0xf, 0xf, 0xf },
@@ -142,7 +145,7 @@ diff --git a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c b/drivers/gpu/drm/rock
  		.supported_rotations = DRM_MODE_REFLECT_X | DRM_MODE_REFLECT_Y,
  		.type = DRM_PLANE_TYPE_PRIMARY,
  		.feature = WIN_FEATURE_CLUSTER,
-@@ -2608,8 +2688,8 @@
+@@ -2627,8 +2707,8 @@ static const struct vop2_data rk3528_vop = {
  	.vp = rk3528_vop_video_ports,
  	.win = rk3528_vop_win_data,
  	.win_size = ARRAY_SIZE(rk3528_vop_win_data),

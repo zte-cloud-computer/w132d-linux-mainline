@@ -208,10 +208,10 @@ ln -sf /lib/systemd/system/serial-getty@.service \
 	/mnt/w132d-mainline-root/etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service
 ln -sf /lib/systemd/system/getty@.service \
 	/mnt/w132d-mainline-root/etc/systemd/system/getty.target.wants/getty@tty1.service
-printf 'mainline-v7.1-w132d\n' > /mnt/w132d-mainline-root/etc/w132d-mainline-release
+printf 'mainline-v7.1.10-w132d\n' > /mnt/w132d-mainline-root/etc/w132d-mainline-release
 
 echo '=== install mainline UWE5622 WiFi/Bluetooth support ==='
-KERNEL_RELEASE=$(make -s -C "$BUILD_ROOT/linux-v7.1" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- LOCALVERSION= kernelrelease)
+KERNEL_RELEASE=$(make -s -C "$BUILD_ROOT/linux-v7.1.10" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- LOCALVERSION= kernelrelease)
 MODULE_DIR="/mnt/w132d-mainline-root/lib/modules/${KERNEL_RELEASE}/updates/uwe5622"
 rm -rf "/mnt/w132d-mainline-root/lib/modules/${KERNEL_RELEASE}"
 install -d "$MODULE_DIR" \

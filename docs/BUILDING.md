@@ -3,10 +3,10 @@
 主线构建默认使用的本地源码检出路径是：
 
 ```text
-/root/w132d-build/linux-v7.1
+/root/w132d-build/linux-v7.1.10
 ```
 
-源码固定在 Linux v7.1 提交 `8cd9520d35a6c38db6567e97dd93b1f11f185dc6`。DTB 辅助脚本只把 W132D 板级文件复制到该检出，并增加一个本地 Makefile 目标，不会修改 vendor 内核工作树。两个辅助脚本都根据自身位置推导工作区路径，因此不依赖 Windows 工作区路径的编码。
+源码固定在 Linux stable v7.1.10 提交 `8d4e6356173a7b2e4a6a8ee1669060c33528fdb9`。kernel.org 官方 `linux-7.1.10.tar.xz` 的 SHA-256 是 `67d2f4697a02f3bec98e744b1bdc307e920c24bb4e88b5ee97dc9a34e9aa9999`。准备脚本会拒绝其他内核版本。DTB 辅助脚本只把 W132D 板级文件复制到该检出，并增加一个本地 Makefile 目标，不会修改 vendor 内核工作树。两个辅助脚本都根据自身位置推导工作区路径，因此不依赖 Windows 工作区路径的编码。
 
 镜像组装辅助脚本使用已有的 Armbian/Debian trixie 最小镜像作为 rootfs 来源，使用主线 `out/Image` 和 DTB，以及已验证的 vendor `head.bin` 和 `p2_uboot-wdt.img` 作为私有启动输入。它只写入 `out/images/`，不会替换 vendor 镜像。
 
@@ -30,10 +30,10 @@ ophub CD1000 的布局可作为未来 Armbian 启动文件系统的参考：`Ima
 The default local source checkout used for the mainline build is:
 
 ```text
-/root/w132d-build/linux-v7.1
+/root/w132d-build/linux-v7.1.10
 ```
 
-It is pinned to Linux v7.1 commit `8cd9520d35a6c38db6567e97dd93b1f11f185dc6`. The DTB helper copies only the W132D board file into that checkout and adds one local Makefile target. It does not modify the vendor kernel worktree. Both helpers derive the workspace path from their own location, so they do not depend on the encoding of the Windows workspace path.
+It is pinned to Linux stable v7.1.10 commit `8d4e6356173a7b2e4a6a8ee1669060c33528fdb9`. The SHA-256 of kernel.org's official `linux-7.1.10.tar.xz` is `67d2f4697a02f3bec98e744b1bdc307e920c24bb4e88b5ee97dc9a34e9aa9999`. The preparation helper rejects other kernel versions. The DTB helper copies only the W132D board file into that checkout and adds one local Makefile target. It does not modify the vendor kernel worktree. Both helpers derive the workspace path from their own location, so they do not depend on the encoding of the Windows workspace path.
 
 The image assembly helper uses an existing Armbian/Debian trixie minimal image as a rootfs source, the mainline `out/Image` and DTB, and the already verified vendor `head.bin` plus `p2_uboot-wdt.img` as private boot inputs. It writes only to `out/images/` and never replaces vendor images.
 

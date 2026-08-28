@@ -1,0 +1,95 @@
+diff --git a/drivers/mmc/host/sdhci-of-dwcmshc.c b/drivers/mmc/host/sdhci-of-dwcmshc.c
+index 29af07561a86104f9790ef9e67d9144ea5a76a65..d7c668b7382ef8ae909e1464ae155d393b883ebe 100644
+--- a/drivers/mmc/host/sdhci-of-dwcmshc.c
++++ b/drivers/mmc/host/sdhci-of-dwcmshc.c
+@@ -333,6 +333,13 @@ struct rockchip_pltfm_data {
+ 	 * - Revision 1: Implemented in all other Rockchip SoCs, including RK3576, RK3588, etc.
+ 	 */
+ 	int revision;
++	/*
++	 * Optional HS400 DLL tap overrides, ported from the GPL-2.0
++	 * Rockchip BSP. Zero keeps the generic RK35xx defaults below.
++	 */
++	u8 hs400_tx_tap;
++	u8 hs400_cmd_tap;
++	u8 hs400_strbin_tap;
+ };
+ 
+ static void dwcmshc_enable_card_clk(struct sdhci_host *host)
+@@ -756,6 +763,7 @@ static void dwcmshc_rk3568_set_clock(struct sdhci_host *host, unsigned int clock
+ 	struct rk35xx_priv *priv = dwc_priv->priv;
+ 	const struct rockchip_pltfm_data *rockchip_pdata = to_pltfm_data(dwc_priv, rockchip);
+ 	u8 txclk_tapnum = DLL_TXCLK_TAPNUM_DEFAULT;
++	u32 strbin_tapnum = DLL_STRBIN_TAPNUM_DEFAULT;
+ 	u32 extra, reg;
+ 	int err;
+ 
+@@ -852,12 +860,19 @@ static void dwcmshc_rk3568_set_clock(struct sdhci_host *host, unsigned int clock
+ 		txclk_tapnum = priv->txclk_tapnum;
+ 
+ 	if (rockchip_pdata->revision == 1 && host->mmc->ios.timing == MMC_TIMING_MMC_HS400) {
+-		txclk_tapnum = DLL_TXCLK_TAPNUM_90_DEGREES;
++		u32 cmd_tapnum = DLL_CMDOUT_TAPNUM_90_DEGREES;
++
++		txclk_tapnum = rockchip_pdata->hs400_tx_tap ?:
++			       DLL_TXCLK_TAPNUM_90_DEGREES;
++		if (rockchip_pdata->hs400_cmd_tap)
++			cmd_tapnum = rockchip_pdata->hs400_cmd_tap;
++		if (rockchip_pdata->hs400_strbin_tap)
++			strbin_tapnum = rockchip_pdata->hs400_strbin_tap;
+ 
+ 		extra = DLL_CMDOUT_SRC_CLK_NEG |
+ 			DLL_CMDOUT_EN_SRC_CLK_NEG |
+ 			DWCMSHC_EMMC_DLL_DLYENA |
+-			DLL_CMDOUT_TAPNUM_90_DEGREES |
++			cmd_tapnum |
+ 			DLL_CMDOUT_TAPNUM_FROM_SW;
+ 		sdhci_writel(host, extra, DECMSHC_EMMC_DLL_CMDOUT);
+ 	}
+@@ -869,7 +884,7 @@ static void dwcmshc_rk3568_set_clock(struct sdhci_host *host, unsigned int clock
+ 	sdhci_writel(host, extra, DWCMSHC_EMMC_DLL_TXCLK);
+ 
+ 	extra = DWCMSHC_EMMC_DLL_DLYENA |
+-		DLL_STRBIN_TAPNUM_DEFAULT |
++		strbin_tapnum |
+ 		DLL_STRBIN_TAPNUM_FROM_SW;
+ 	sdhci_writel(host, extra, DWCMSHC_EMMC_DLL_STRBIN);
+ 
+@@ -2128,6 +2143,26 @@ static const struct cqhci_host_ops rk35xx_cqhci_ops = {
+ 	.set_tran_desc	= dwcmshc_set_tran_desc,
+ };
+ 
++static const struct rockchip_pltfm_data sdhci_dwcmshc_rk3528_pdata = {
++	.dwcmshc_pdata = {
++		.pdata = {
++			.ops = &sdhci_dwcmshc_rk35xx_ops,
++			.quirks = SDHCI_QUIRK_CAP_CLOCK_BASE_BROKEN |
++				  SDHCI_QUIRK_BROKEN_TIMEOUT_VAL,
++			.quirks2 = SDHCI_QUIRK2_PRESET_VALUE_BROKEN |
++				   SDHCI_QUIRK2_CLOCK_DIV_ZERO_BROKEN,
++		},
++		.cqhci_host_ops = &rk35xx_cqhci_ops,
++		.init = dwcmshc_rk35xx_init,
++		.postinit = dwcmshc_rk35xx_postinit,
++	},
++	.revision = 1,
++	/* Rockchip BSP rk3528_drvdata: hs400 tx/cmd/strbin = 6/6/3 */
++	.hs400_tx_tap = 6,
++	.hs400_cmd_tap = 6,
++	.hs400_strbin_tap = 3,
++};
++
+ static const struct rockchip_pltfm_data sdhci_dwcmshc_rk3568_pdata = {
+ 	.dwcmshc_pdata = {
+ 		.pdata = {
+@@ -2342,6 +2377,10 @@ static const struct of_device_id sdhci_dwcmshc_dt_ids[] = {
+ 		.compatible = "canaan,k230-sdio",
+ 		.data = &k230_sdio_data.dwcmshc_pdata,
+ 	},
++	{
++		.compatible = "rockchip,rk3528-dwcmshc",
++		.data = &sdhci_dwcmshc_rk3528_pdata,
++	},
+ 	{
+ 		.compatible = "rockchip,rk3588-dwcmshc",
+ 		.data = &sdhci_dwcmshc_rk3588_pdata,

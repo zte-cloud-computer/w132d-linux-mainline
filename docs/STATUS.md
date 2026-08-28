@@ -1,11 +1,18 @@
-# Mainline 7.1 status
+# Linux 7.1.10 stable baseline status
 
 ## Current snapshot (2026-08-23)
 
-- The project target is a mainline Linux v7.1 runtime; vendor SPL/U-Boot is
+- The project target is a Linux v7.1.10 stable runtime; vendor SPL/U-Boot is
   retained only as a temporary private boot-chain input.
+- The source baseline is stable commit
+  `8d4e6356173a7b2e4a6a8ee1669060c33528fdb9`; the patch series and defconfig
+  preparation complete from a clean v7.1.10 tree without fuzzy patch matches.
 - eMMC, USB2, USB3, wired Ethernet, Wi-Fi, and Bluetooth are hardware-tested
-  and must remain regression gates. 3.5 mm audio and infrared are dropped.
+  and must remain regression gates.
+- eMMC HS400, TSADC thermal throttling, CPU DVFS, the Mali-450 GPU, RKVDEC,
+  the analog audio path, the IR receiver, the panel LEDs, the watchdog, OP-TEE
+  and ramoops are now described as well; see "Board hardware added on 7.1.10"
+  below.
 - HDMI is experimentally working on one 2K monitor at 2560x1440@60. The
   tested path uses the RK3528 RGB888/P888 output format and vendor-derived VP0
   delay values; multi-monitor, hotplug, suspend/resume, and long-run coverage
@@ -18,10 +25,16 @@
 
 ## Current snapshot (English)
 
-- The project targets a mainline Linux v7.1 runtime; vendor SPL/U-Boot remains
+- The project targets a Linux v7.1.10 stable runtime; vendor SPL/U-Boot remains
   only as a temporary private boot-chain input.
+- The source baseline is stable commit
+  `8d4e6356173a7b2e4a6a8ee1669060c33528fdb9`; patch and defconfig preparation
+  complete from a clean v7.1.10 tree without fuzzy matches.
 - eMMC, USB2, USB3, wired Ethernet, Wi-Fi, and Bluetooth are hardware-tested
-  regression gates. 3.5 mm audio and infrared are dropped.
+  regression gates.
+- eMMC HS400, TSADC thermal throttling, CPU DVFS, the Mali-450 GPU, RKVDEC,
+  the analog audio path, the IR receiver, the panel LEDs, the watchdog, OP-TEE
+  and ramoops are now described as well.
 - HDMI is experimentally working on one 2K monitor at 2560x1440@60. The tested
   path uses RGB888/P888 output and vendor-derived VP0 delay values; multi-
   monitor, hotplug, suspend/resume, and long-run coverage remain open.
@@ -93,7 +106,38 @@ The image is an experimental bring-up artifact. It has not been tested on the
 physical W132D. HDMI, USB, Wi-Fi, Bluetooth, GPU, VPU, and automatic rootfs
 expansion are intentionally out of scope for this first boot test.
 
-## Confirmed in upstream v7.1
+## Board hardware added on 7.1.10
+
+Every item below was brought up on the physical W132D.  Register addresses,
+interrupts and clock topologies come from this machine's own vendor DTB, with
+the vendor BSP clock/reset IDs re-mapped onto mainline
+`rockchip,rk3528-cru.h` numbering.
+
+| Block | Kernel change | Device tree |
+| --- | --- | --- |
+| eMMC HS400 + CQE | `patches/rk3528-dwcmshc-hs400-7.1.patch` (RK3528 DLL taps 6/6/3) | `&sdhci` HS200/HS400/ES/`supports-cqe`, 200 MHz |
+| Watchdog | none, `snps,dw-wdt` already matches | `watchdog@ffac0000` |
+| TSADC + thermal zone | `patches/rk3528-tsadc-7.1.patch` | `tsadc@ffad0000`, `soc-thermal` 95/110/120 C |
+| CPU DVFS | none | `vdd_cpu` PWM regulator, `cpu-supply`, four vendor OPPs from 408 MHz |
+| Mali-450 | none, Lima already matches `arm,mali-450` | `vdd_logic` PWM regulator, `mali-supply`, `&gpu status = "okay"` |
+| RKVDEC | `patches/rk3528-rkvdec-7.1.patch` | `video-codec@ff740000`, `iommu@ff740800`, `sram@fe480000` |
+| Audio | `patches/rk3528-audio-7.1.patch` (RK3528 codec, ES7202, SAI match) | `sai@ffb90000`, `acodec@ffe10000`, `pdm@ffbb0000`, ES7202 on i2c2, two simple-audio-cards |
+| IR receiver | none | `gpio-ir-receiver` on GPIO4_C6 |
+| Panel LEDs | none | `gpio-leds`, modern `color`/`function` bindings |
+| OP-TEE | none | `/firmware/optee` |
+| Crash storage | none | `ramoops@110000`, 896 KiB |
+
+Two constraints are easy to get wrong and are documented in the DTS itself:
+
+- `pwm-dutycycle-range = <100 0>` is mandatory on both PWM regulators.  The
+  mainline `pwm-rockchip` inverted-polarity handling runs the opposite way from
+  the vendor kernel, so a verbatim copy of the vendor description maps a high
+  voltage request onto a low duty cycle.
+- The LED nodes must not carry a `label` property: `leds-gpio` only passes an
+  fwnode to the LED core when a child has no label, and `linux,default-trigger`
+  is only read from that fwnode.
+
+## Confirmed in Linux v7.1.10
 
 - RK3528 common device tree and pinctrl definitions
 - Cortex-A53 CPU/PSCI and SCMI clock description
@@ -114,8 +158,8 @@ chronology. It is superseded by the later HDMI/VOP and wireless checkpoints.
 - W132D-specific power/reset GPIO definitions
 - HDMI/VOP2 board wiring for this device
 - RK3528 VOP2/HDMI mainline binding and glue support (generic DRM code exists,
-  but RK3528 is absent from the v7.1 match tables)
-- USB host controller nodes for this RK3528 v7.1 DTS baseline
+  but RK3528 is absent from the v7.1.10 match tables)
+- USB host controller nodes for this RK3528 v7.1.10 DTS baseline
 - Unisoc UWE5622 SDIO/WCN support in mainline
 - W132D mainline U-Boot support
 

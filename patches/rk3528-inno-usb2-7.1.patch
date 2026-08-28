@@ -25,7 +25,7 @@ Signed-off-by: Shlomi Marco <s.marco@rubycomm.com>
  1 file changed, 124 insertions(+), 26 deletions(-)
 
 diff --git a/drivers/phy/rockchip/phy-rockchip-inno-usb2.c b/drivers/phy/rockchip/phy-rockchip-inno-usb2.c
-index 111111111111..222222222222 100644
+index 8f4c08e..207f28d 100644
 --- a/drivers/phy/rockchip/phy-rockchip-inno-usb2.c
 +++ b/drivers/phy/rockchip/phy-rockchip-inno-usb2.c
 @@ -171,6 +171,7 @@ struct rockchip_usb2phy_port_cfg {
@@ -141,7 +141,7 @@ index 111111111111..222222222222 100644
  }
  
  static unsigned long
-@@ -1360,7 +1381,11 @@ static int rockchip_usb2phy_probe(struct platform_device *pdev)
+@@ -1353,7 +1374,11 @@ static int rockchip_usb2phy_probe(struct platform_device *pdev)
  	if (!rphy)
  		return -ENOMEM;
  
@@ -154,7 +154,7 @@ index 111111111111..222222222222 100644
  		rphy->grf = syscon_regmap_lookup_by_phandle(np, "rockchip,usbgrf");
  		if (IS_ERR(rphy->grf)) {
  			dev_err(dev, "failed to locate usbgrf\n");
-@@ -1370,16 +1395,7 @@ static int rockchip_usb2phy_probe(struct platform_device *pdev)
+@@ -1363,16 +1388,7 @@ static int rockchip_usb2phy_probe(struct platform_device *pdev)
  		rphy->grf = syscon_node_to_regmap(dev->parent->of_node);
  		if (IS_ERR(rphy->grf))
  			return PTR_ERR(rphy->grf);
@@ -172,7 +172,7 @@ index 111111111111..222222222222 100644
  	}
  
  	if (of_property_read_u32_index(np, "reg", 0, &reg)) {
-@@ -1521,6 +1537,36 @@ static int rk3128_usb2phy_tuning(struct rockchip_usb2phy *rphy)
+@@ -1514,6 +1530,36 @@ static int rk3128_usb2phy_tuning(struct rockchip_usb2phy *rphy)
  				BIT(2) << BIT_WRITEABLE_SHIFT | 0);
  }
  
@@ -209,7 +209,7 @@ index 111111111111..222222222222 100644
  static int rk3576_usb2phy_tuning(struct rockchip_usb2phy *rphy)
  {
  	int ret;
-@@ -1934,6 +1980,57 @@ static const struct rockchip_usb2phy_cfg rk3399_phy_cfgs[] = {
+@@ -1927,6 +1973,57 @@ static const struct rockchip_usb2phy_cfg rk3399_phy_cfgs[] = {
  	{ /* sentinel */ }
  };
  
@@ -267,7 +267,7 @@ index 111111111111..222222222222 100644
  static const struct rockchip_usb2phy_cfg rk3562_phy_cfgs[] = {
  	{
  		.reg = 0xff740000,
-@@ -2301,6 +2398,7 @@ static const struct of_device_id rockchip_usb2phy_dt_match[] = {
+@@ -2294,6 +2391,7 @@ static const struct of_device_id rockchip_usb2phy_dt_match[] = {
  	{ .compatible = "rockchip,rk3328-usb2phy", .data = &rk3328_phy_cfgs },
  	{ .compatible = "rockchip,rk3366-usb2phy", .data = &rk3366_phy_cfgs },
  	{ .compatible = "rockchip,rk3399-usb2phy", .data = &rk3399_phy_cfgs },

@@ -1,13 +1,16 @@
+diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+index f6e9695301dd6a103f4fe0698d8918b1918d07c8..1daec1b260aa647ce10848fd7c21a5a9ebc0516d 100644
 --- a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
 +++ b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
-@@ -221,5 +221,10 @@ static int rockchip_hdmi_parse_dt(struct rockchip_hdmi *hdmi)
- 		dev_err(hdmi->dev, "Unable to get rockchip,grf\n");
+@@ -222,6 +222,11 @@ static int rockchip_hdmi_parse_dt(struct rockchip_hdmi *hdmi)
  		return PTR_ERR(hdmi->regmap);
  	}
-+
+ 
 +	if (hdmi->chip_data == &rk3528_chip_data)
 +		regmap_write(hdmi->regmap, RK3528_VO_GRF_HDMI_MASK,
 +			     FIELD_PREP_WM16(RK3528_HDMI_SDAIN_MSK, 1) |
 +			     FIELD_PREP_WM16(RK3528_HDMI_SCLIN_MSK, 1));
- 
++
  	hdmi->ref_clk = devm_clk_get_optional_enabled(hdmi->dev, "ref");
+ 	if (!hdmi->ref_clk)
+ 		hdmi->ref_clk = devm_clk_get_optional_enabled(hdmi->dev, "vpll");

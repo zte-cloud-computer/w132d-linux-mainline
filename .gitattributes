@@ -10,6 +10,6 @@ LICENSES/** text eol=lf
 *.conf text eol=lf
 *.csc text eol=lf
 *.dts text eol=lf
-*.patch text eol=lf
+*.patch text eol=lf -whitespace
 *.service text eol=lf
 *.md text eol=lf

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
-# ZTE Cloud Computer W132D - experimental Linux v7.1 board metadata
-BOARD_NAME="ZTE Cloud Computer W132D (mainline 7.1 experiment)"
+# ZTE Cloud Computer W132D - experimental Linux v7.1.10 board metadata
+BOARD_NAME="ZTE Cloud Computer W132D (mainline 7.1.10 experiment)"
 BOARD_VENDOR="zte"
 BOARDFAMILY="rk35xx-mainline"
 BOARD_MAINTAINER="w132d"
