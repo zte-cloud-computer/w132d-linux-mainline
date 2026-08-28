@@ -809,3 +809,40 @@
 		};
 	};
 };
+
+&{/firmware} {
+	/*
+	 * OP-TEE is already running: our U-Boot FIT loads it at 0x08400000, and
+	 * U-Boot removes that range from /memory before entering Linux, so the
+	 * kernel never maps it.  Only the DT node was missing, which is why
+	 * /dev/tee0 never appeared.
+	 */
+	optee {
+		compatible = "linaro,optee-tz";
+		method = "smc";
+	};
+};
+
+&{/reserved-memory} {
+	/*
+	 * Crash log storage that survives a warm reset - it is ordinary DRAM in
+	 * the firmware-reserved low 2 MB that neither Linux nor the TPL touches.
+	 * It does not survive a power cycle.
+	 *
+	 * 0x110000..0x1effff is free: the ATF images end at 0xa2f71 and the SCMI
+	 * shmem sits at 0x10f000+0x100.
+	 *
+	 * record-size and console-size must be powers of two; ramoops rounds
+	 * anything else down without a diagnostic.
+	 */
+	ramoops@110000 {
+		compatible = "ramoops";
+		reg = <0x0 0x110000 0x0 0xe0000>;
+		record-size = <0x10000>;
+		console-size = <0x40000>;
+		pmsg-size = <0x0>;
+		ftrace-size = <0x0>;
+		/* KMSG_DUMP_EMERG, so emergency_restart() is captured too. */
+		max-reason = <3>;
+	};
+};
