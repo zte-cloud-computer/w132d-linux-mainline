@@ -12,6 +12,7 @@
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/phy/phy.h>
 #include <dt-bindings/soc/rockchip,vop2.h>
+#include <dt-bindings/thermal/thermal.h>
 
 / {
 	model = "ZTE Cloud Computer W132D";
@@ -305,4 +306,182 @@
 
 &sdio1 {
 	mmc-pwrseq = <&sdio_pwrseq>;
+};
+
+/*
+ * Board hardware that mainline v7.1.10 does not describe for the RK3528 yet.
+ *
+ * The SoC-level blocks below are added through &{/soc} the same way the
+ * display path above is: they are not board wiring, but keeping them in the
+ * board file avoids carrying a second rk3528.dtsi patch while the register
+ * data is still being validated.  Every register address, interrupt and clock
+ * topology comes from this machine's own vendor DTB, with the vendor BSP
+ * clock/reset IDs re-mapped onto the mainline rockchip,rk3528-cru.h numbering.
+ */
+&{/} {
+	/*
+	 * vdd_cpu drives the CPU rail from PWM1.
+	 *
+	 * pwm-dutycycle-range is mandatory here.  Mainline pwm-rockchip handles
+	 * PWM_POLARITY_INVERSED in the opposite direction from the vendor kernel,
+	 * so copying the vendor description verbatim maps a high voltage request
+	 * onto a low duty cycle; the board then browns out at 2016 MHz.
+	 *
+	 * regulator-init-microvolt is deliberately absent: applying a voltage at
+	 * probe time, before the mapping direction has been observed, is what
+	 * bricked an earlier bring-up attempt.
+	 */
+	vdd_cpu: regulator-vdd-cpu {
+		compatible = "pwm-regulator";
+		pwms = <&pwm1 0 5000 1>;
+		pwm-dutycycle-range = <100 0>;
+		regulator-name = "vdd_cpu";
+		regulator-min-microvolt = <746000>;
+		regulator-max-microvolt = <1201000>;
+		regulator-settling-time-up-us = <250>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+};
+
+&pwm1 {
+	status = "okay";
+};
+
+/*
+ * The mainline opp-table-cpu starts at 1200 MHz.  This machine is idle over
+ * 90% of the time, and the SCMI firmware itself reports 408 MHz as the lower
+ * bound (clk_min_rate on scmi_clk_cpu), so add the four vendor low steps.
+ *
+ * All four use 875000 uV rather than the vendor 825000 uV base: the vendor
+ * kernel picks a voltage from an nvmem leakage bin and raises everything at or
+ * below 1200 MHz to 875000 uV anyway.  Mainline already uses 875000 uV at
+ * 1200 MHz, so this reuses a value the tree already trusts.
+ */
+&cpu_opp_table {
+	opp-408000000 {
+		opp-hz = /bits/ 64 <408000000>;
+		opp-microvolt = <875000 875000 1100000>;
+		clock-latency-ns = <40000>;
+	};
+
+	opp-600000000 {
+		opp-hz = /bits/ 64 <600000000>;
+		opp-microvolt = <875000 875000 1100000>;
+		clock-latency-ns = <40000>;
+	};
+
+	opp-816000000 {
+		opp-hz = /bits/ 64 <816000000>;
+		opp-microvolt = <875000 875000 1100000>;
+		clock-latency-ns = <40000>;
+	};
+
+	opp-1008000000 {
+		opp-hz = /bits/ 64 <1008000000>;
+		opp-microvolt = <875000 875000 1100000>;
+		clock-latency-ns = <40000>;
+	};
+};
+
+&cpu0 {
+	cpu-supply = <&vdd_cpu>;
+	#cooling-cells = <2>;
+	dynamic-power-coefficient = <147>;
+};
+
+&cpu1 {
+	cpu-supply = <&vdd_cpu>;
+	#cooling-cells = <2>;
+	dynamic-power-coefficient = <147>;
+};
+
+&cpu2 {
+	cpu-supply = <&vdd_cpu>;
+	#cooling-cells = <2>;
+	dynamic-power-coefficient = <147>;
+};
+
+&cpu3 {
+	cpu-supply = <&vdd_cpu>;
+	#cooling-cells = <2>;
+	dynamic-power-coefficient = <147>;
+};
+
+&{/soc} {
+	watchdog@ffac0000 {
+		compatible = "snps,dw-wdt";
+		reg = <0x0 0xffac0000 0x0 0x100>;
+		clocks = <&cru TCLK_WDT_NS>, <&cru PCLK_WDT_NS>;
+		clock-names = "tclk", "pclk";
+		resets = <&cru SRST_P_WDT_NS>;
+		reset-names = "reset";
+		status = "okay";
+	};
+
+
+
+
+	tsadc: tsadc@ffad0000 {
+		compatible = "rockchip,rk3528-tsadc";
+		reg = <0x0 0xffad0000 0x0 0x400>;
+		interrupts = <GIC_SPI 139 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru CLK_TSADC>, <&cru CLK_TSADC_TSEN>,
+			 <&cru PCLK_TSADC>;
+		clock-names = "tsadc", "tsadc_tsen", "apb_pclk";
+		assigned-clocks = <&cru CLK_TSADC>, <&cru CLK_TSADC_TSEN>;
+		assigned-clock-rates = <1200000>, <12000000>;
+		resets = <&cru SRST_TSADC>, <&cru SRST_P_TSADC>;
+		reset-names = "tsadc", "tsadc-apb";
+		rockchip,grf = <&vpu_grf>;
+		rockchip,hw-tshut-temp = <120000>;
+		rockchip,hw-tshut-mode = <0>;
+		rockchip,hw-tshut-polarity = <0>;
+		#thermal-sensor-cells = <1>;
+		status = "okay";
+	};
+};
+
+/*
+ * Three trips: 95 C and 110 C passive, 120 C critical.  Only the 110 C trip
+ * throttles the CPU; the 95 C one is left for the GPU to use first, so the
+ * GPU gives up headroom before the CPU does.  Measured peak with four CPUs
+ * loaded is 58 C, so this never fires in normal use.
+ */
+&{/} {
+	thermal-zones {
+		soc_thermal: soc-thermal {
+			polling-delay-passive = <20>;
+			polling-delay = <1000>;
+			thermal-sensors = <&tsadc 0>;
+
+			trips {
+				soc_alert0: trip-point-0 {
+					temperature = <95000>;
+					hysteresis = <2000>;
+					type = "passive";
+				};
+
+				soc_alert1: trip-point-1 {
+					temperature = <110000>;
+					hysteresis = <2000>;
+					type = "passive";
+				};
+
+				soc-crit {
+					temperature = <120000>;
+					hysteresis = <2000>;
+					type = "critical";
+				};
+			};
+
+			cooling-maps {
+				map0 {
+					trip = <&soc_alert1>;
+					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+					contribution = <1024>;
+				};
+			};
+		};
+	};
 };

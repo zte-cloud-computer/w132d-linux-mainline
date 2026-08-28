@@ -18,6 +18,7 @@ DRIVER_SRC="$WIN_DIR/drivers/phy-rockchip-rk3528-usb2.c"
 USB2_PATCH="$WIN_DIR/patches/rk3528-inno-usb2-7.1.patch"
 USB_DTSI_PATCH="$WIN_DIR/patches/rk3528-usb-dtsi-7.1.patch"
 HS400_PATCH="$WIN_DIR/patches/rk3528-dwcmshc-hs400-7.1.patch"
+TSADC_PATCH="$WIN_DIR/patches/rk3528-tsadc-7.1.patch"
 HDMI_PHY_SRC="$WIN_DIR/drivers/phy-rockchip-inno-hdmi-phy.c"
 HDMI_2415_PATCH="$WIN_DIR/patches/rk3528-hdmi-2415mhz-7.1.patch"
 HDMI_FORCE_RESET_PATCH="$WIN_DIR/patches/rk3528-hdmi-force-phy-reset-7.1.patch"
@@ -48,6 +49,7 @@ VOP_VENDOR_DELAY_PATCH="$WIN_DIR/patches/rk3528-vop2-vendor-delay-7.1.patch"
 [ -s "$USB2_PATCH" ] || { echo "ERROR: missing RK3528 USB2 PHY patch: $USB2_PATCH" >&2; exit 1; }
 [ -s "$USB_DTSI_PATCH" ] || { echo "ERROR: missing RK3528 USB DTS patch: $USB_DTSI_PATCH" >&2; exit 1; }
 [ -s "$HS400_PATCH" ] || { echo "ERROR: missing RK3528 HS400 patch: $HS400_PATCH" >&2; exit 1; }
+[ -s "$TSADC_PATCH" ] || { echo "ERROR: missing RK3528 TSADC patch: $TSADC_PATCH" >&2; exit 1; }
 if [ "$ENABLE_HDMI" = 1 ]; then
 [ -s "$HDMI_PHY_SRC" ] || { echo "ERROR: missing RK3528 HDMI PHY backport: $HDMI_PHY_SRC" >&2; exit 1; }
 [ -s "$HDMI_2415_PATCH" ] || { echo "ERROR: missing RK3528 HDMI 241.5 MHz patch: $HDMI_2415_PATCH" >&2; exit 1; }
@@ -186,6 +188,9 @@ fi
 if ! grep -q 'hs400_tx_tap' "$KERNEL_DIR/drivers/mmc/host/sdhci-of-dwcmshc.c"; then
 	patch -d "$KERNEL_DIR" -p1 --forward --batch --fuzz=0 < "$HS400_PATCH"
 fi
+if ! grep -q 'rockchip,rk3528-tsadc' "$KERNEL_DIR/drivers/thermal/rockchip_thermal.c"; then
+	patch -d "$KERNEL_DIR" -p1 --forward --batch --fuzz=0 < "$TSADC_PATCH"
+fi
 if ! grep -q 'ignoring invalid default link policy response' "$KERNEL_DIR/net/bluetooth/hci_sync.c"; then
 	perl -0pi -e 's/(\tu16 link_policy = 0;\n)/$1\tint err;\n/; s/\treturn __hci_cmd_sync_status\(hdev, HCI_OP_WRITE_DEF_LINK_POLICY,\n\t\s+sizeof\(cp\), &cp, HCI_CMD_TIMEOUT\);/\terr = __hci_cmd_sync_status(hdev, HCI_OP_WRITE_DEF_LINK_POLICY,\n\t\t\t\t    sizeof(cp), \&cp, HCI_CMD_TIMEOUT);\n\t\/\* UWE5622 advertises this command but returns Invalid Parameters. \*\/\n\tif (err == -EINVAL) {\n\t\tbt_dev_warn(hdev, "ignoring invalid default link policy response");\n\t\treturn 0;\n\t}\n\n\treturn err;/s' \
 		"$KERNEL_DIR/net/bluetooth/hci_sync.c"
@@ -222,6 +227,12 @@ make -C "$KERNEL_DIR" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION= 
 	--enable CONFIG_SYSFB_SIMPLEFB \
 	--enable CONFIG_MMC_CQHCI \
 	--enable CONFIG_MMC_SDHCI_OF_DWCMSHC \
+	--enable CONFIG_THERMAL \
+	--module CONFIG_ROCKCHIP_THERMAL \
+	--enable CONFIG_WATCHDOG \
+	--enable CONFIG_DW_WATCHDOG \
+	--enable CONFIG_PWM_ROCKCHIP \
+	--enable CONFIG_REGULATOR_PWM \
 	--module CONFIG_RFKILL \
 	--module CONFIG_CFG80211 \
 	--module CONFIG_BT \
