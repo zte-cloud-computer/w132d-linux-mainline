@@ -103,14 +103,17 @@ fi
 if ! grep -q 'RK3528_HDMI_SDAIN_MSK, 1' "$KERNEL_DIR/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c"; then
 	patch -d "$KERNEL_DIR" -p1 --forward --batch < "$HDMI_GRF_PATCH"
 fi
-if grep -q 'RK3528_VO_GRF_HDMI_MASK.*0x60014' "$KERNEL_DIR/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c"; then
-	patch -d "$KERNEL_DIR" -p1 --forward --batch < "$HDMI_GRF_OFFSET_PATCH"
-fi
 if ! grep -q 'rk3528_gpio_hpd_sync' "$KERNEL_DIR/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c"; then
 	patch -d "$KERNEL_DIR" -p1 --forward --batch < "$HDMI_HPD_PATCH"
 fi
+if grep -q 'RK3528_VO_GRF_HDMI_MASK.*0x60014' "$KERNEL_DIR/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c"; then
+	patch -d "$KERNEL_DIR" -p1 --forward --batch < "$HDMI_GRF_OFFSET_PATCH"
+fi
 if ! grep -q 'failed to get EDID over DDC' "$KERNEL_DIR/drivers/gpu/drm/bridge/synopsys/dw-hdmi.c"; then
 	patch -d "$KERNEL_DIR" -p1 --forward --batch < "$HDMI_EDID_DEBUG_PATCH"
+fi
+if ! grep -q 'RK3528 bring-up descriptor' "$KERNEL_DIR/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c"; then
+	patch -d "$KERNEL_DIR" -p1 --forward --batch < "$VOP_PATCH"
 fi
 if ! grep -q 'The RK3528 vendor VOP descriptor sets hdmi_dclk_pol=1' \
 	"$KERNEL_DIR/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c"; then
@@ -124,9 +127,6 @@ fi
 if ! grep -q 'PHY table explicitly supports the 241.5 MHz CVT-RB mode' \
 	"$KERNEL_DIR/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c"; then
 	patch -d "$KERNEL_DIR" -p1 --forward --batch < "$HDMI_MODE_VALID_PATCH"
-fi
-if ! grep -q 'RK3528 bring-up descriptor' "$KERNEL_DIR/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c"; then
-	patch -d "$KERNEL_DIR" -p1 --forward --batch < "$VOP_PATCH"
 fi
 # The explanatory comment is wrapped across source lines; use its stable
 # single-line prefix so repeated preparation remains idempotent.
