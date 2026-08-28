@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: MIT
 set -euo pipefail
 
-# Stage exact upstream source snapshots for a Linux 7.1 out-of-tree port.
+# Stage exact upstream source snapshots for a Linux 7.1.10 out-of-tree port.
 # This script deliberately does not modify the board DTS, kernel .config, or
 # any image. It also does not copy proprietary firmware.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 MAINLINE_DIR="${W132D_MAINLINE_DIR:-$(cd -- "$SCRIPT_DIR/.." && pwd)}"
 BUILD_ROOT="${W132D_BUILD_ROOT:-/root/w132d-build}"
-KERNEL_DIR="${W132D_MAINLINE_KERNEL_DIR:-$BUILD_ROOT/linux-v7.1}"
+KERNEL_DIR="${W132D_MAINLINE_KERNEL_DIR:-$BUILD_ROOT/linux-v7.1.10}"
 WIFI_SRC="${W132D_WIFI_SRC:-$MAINLINE_DIR/../.research-uwe5621ds-aml}"
 BT_SRC="${W132D_BT_SRC:-$MAINLINE_DIR/../.research-uwe5631-aml}"
 STAGE="${W132D_WIRELESS_STAGE:-$BUILD_ROOT/w132d-wireless-mainline}"
@@ -55,7 +55,7 @@ cross_compile=$CROSS_COMPILE
 EOF
 
 cat > "$STAGE/manifest/porting-checklist.txt" <<'EOF'
-1. Build uwe5622_bsp_sdio.ko against Linux 7.1 and resolve all API/modpost errors.
+1. Build uwe5622_bsp_sdio.ko against Linux 7.1.10 and resolve all API/modpost errors.
 2. Build sprdwl_ng.ko with the BSP Module.symvers as KBUILD_EXTRA_SYMBOLS.
 3. Build sprdbt_tty.ko with the same BSP symbols and verify tty core APIs.
 4. Check module vermagic, depends, softdep, and exported symbols.
@@ -63,7 +63,7 @@ cat > "$STAGE/manifest/porting-checklist.txt" <<'EOF'
 6. Test SDIO enumeration and WiFi before starting the Bluetooth HCI service.
 EOF
 
-echo '=== Linux 7.1 wireless config baseline (read-only check) ==='
+echo '=== Linux 7.1.10 wireless config baseline (read-only check) ==='
 if [ -s "$KERNEL_DIR/.config" ]; then
 	grep -E '^(CONFIG_(CFG80211|MAC80211|BT|BT_HCIUART|BT_HCIUART_H4|MMC|MMC_SDHCI|MMC_SDHCI_OF_DWCMSHC))=' \
 		"$KERNEL_DIR/.config" || true

@@ -1,7 +1,9 @@
+diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+index 971eefb39bdd45064942a8ef759a157024446f96..f56db484f087bfc1d99fb9f66e429c8e7feb4770 100644
 --- a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
 +++ b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
 @@ -4,6 +4,7 @@
- */
+  */
  
  #include <linux/clk.h>
 +#include <linux/gpio/consumer.h>
@@ -20,7 +22,7 @@
  #define RK3568_GRF_VO_CON1		0x0364
  #define RK3568_HDMI_SDAIN_MSK		BIT(15)
  #define RK3568_HDMI_SCLIN_MSK		BIT(14)
-@@ -80,6 +86,7 @@
+@@ -80,6 +86,7 @@ struct rockchip_hdmi {
  	struct clk *grf_clk;
  	struct dw_hdmi *hdmi;
  	struct phy *phy;
@@ -28,7 +30,7 @@
  };
  
  static struct rockchip_hdmi *to_rockchip_hdmi(struct drm_encoder *encoder)
-@@ -195,11 +202,20 @@
+@@ -195,11 +202,20 @@ static const struct dw_hdmi_phy_config rockchip_phy_config[] = {
  	{ ~0UL,	     0x0000, 0x0000, 0x0000}
  };
  
@@ -49,7 +51,7 @@
  	hdmi->regmap = syscon_regmap_lookup_by_phandle(np, "rockchip,grf");
  	if (IS_ERR(hdmi->regmap)) {
  		dev_err(hdmi->dev, "Unable to get rockchip,grf\n");
-@@ -445,6 +461,8 @@
+@@ -469,6 +485,8 @@ static const struct dw_hdmi_plat_data rk3288_hdmi_drv_data = {
  	.phy_data = &rk3288_chip_data,
  };
  
@@ -58,7 +60,7 @@
  static const struct dw_hdmi_phy_ops rk3328_hdmi_phy_ops = {
  	.init		= dw_hdmi_rockchip_genphy_init,
  	.disable	= dw_hdmi_rockchip_genphy_disable,
-@@ -453,6 +471,35 @@
+@@ -477,6 +495,35 @@ static const struct dw_hdmi_phy_ops rk3328_hdmi_phy_ops = {
  	.setup_hpd	= dw_hdmi_rk3328_setup_hpd,
  };
  
@@ -94,7 +96,7 @@
  static struct rockchip_hdmi_chip_data rk3328_chip_data = {
  	.lcdsel_grf_reg = -1,
  	.max_tmds_clock = 594000,
-@@ -467,6 +514,21 @@
+@@ -491,6 +538,21 @@ static const struct dw_hdmi_plat_data rk3328_hdmi_drv_data = {
  	.use_drm_infoframe = true,
  };
  
@@ -116,7 +118,7 @@
  static struct rockchip_hdmi_chip_data rk3368_chip_data = {
  	.lcdsel_grf_reg = -1,
  };
-@@ -520,6 +582,9 @@
+@@ -544,6 +606,9 @@ static const struct of_device_id dw_hdmi_rockchip_dt_ids[] = {
  	{ .compatible = "rockchip,rk3328-dw-hdmi",
  	  .data = &rk3328_hdmi_drv_data
  	},

@@ -1,6 +1,10 @@
+diff --git a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
+index f6899d897009e61361df2b3f3f4f8b9825cad8e2..e5b1998a24ede2c1e4fb78979acc2b14bb10b808 100644
 --- a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
 +++ b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
-@@ -2528,6 +2528,11 @@ static void rk3528_vop2_setup_bg_dly(struct vop2_video_port *vp)
+@@ -2545,8 +2545,13 @@ static void rk3528_vop2_setup_bg_dly(struct vop2_video_port *vp)
+ 	u16 hdisplay = mode->crtc_hdisplay;
+ 	u16 hsync_len = mode->crtc_hsync_end - mode->crtc_hsync_start;
  	u32 bg_dly = vp->data->pre_scan_max_dly[3];
 +	u32 bg_mix_ctrl;
  

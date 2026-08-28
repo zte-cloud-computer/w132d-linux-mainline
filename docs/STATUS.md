@@ -1,9 +1,12 @@
-# Mainline 7.1 status
+# Linux 7.1.10 stable baseline status
 
 ## Current snapshot (2026-08-23)
 
-- The project target is a mainline Linux v7.1 runtime; vendor SPL/U-Boot is
+- The project target is a Linux v7.1.10 stable runtime; vendor SPL/U-Boot is
   retained only as a temporary private boot-chain input.
+- The source baseline is stable commit
+  `8d4e6356173a7b2e4a6a8ee1669060c33528fdb9`; the patch series and defconfig
+  preparation complete from a clean v7.1.10 tree without fuzzy patch matches.
 - eMMC, USB2, USB3, wired Ethernet, Wi-Fi, and Bluetooth are hardware-tested
   and must remain regression gates. 3.5 mm audio and infrared are dropped.
 - HDMI is experimentally working on one 2K monitor at 2560x1440@60. The
@@ -18,8 +21,11 @@
 
 ## Current snapshot (English)
 
-- The project targets a mainline Linux v7.1 runtime; vendor SPL/U-Boot remains
+- The project targets a Linux v7.1.10 stable runtime; vendor SPL/U-Boot remains
   only as a temporary private boot-chain input.
+- The source baseline is stable commit
+  `8d4e6356173a7b2e4a6a8ee1669060c33528fdb9`; patch and defconfig preparation
+  complete from a clean v7.1.10 tree without fuzzy matches.
 - eMMC, USB2, USB3, wired Ethernet, Wi-Fi, and Bluetooth are hardware-tested
   regression gates. 3.5 mm audio and infrared are dropped.
 - HDMI is experimentally working on one 2K monitor at 2560x1440@60. The tested
@@ -93,7 +99,7 @@ The image is an experimental bring-up artifact. It has not been tested on the
 physical W132D. HDMI, USB, Wi-Fi, Bluetooth, GPU, VPU, and automatic rootfs
 expansion are intentionally out of scope for this first boot test.
 
-## Confirmed in upstream v7.1
+## Confirmed in Linux v7.1.10
 
 - RK3528 common device tree and pinctrl definitions
 - Cortex-A53 CPU/PSCI and SCMI clock description
@@ -114,8 +120,8 @@ chronology. It is superseded by the later HDMI/VOP and wireless checkpoints.
 - W132D-specific power/reset GPIO definitions
 - HDMI/VOP2 board wiring for this device
 - RK3528 VOP2/HDMI mainline binding and glue support (generic DRM code exists,
-  but RK3528 is absent from the v7.1 match tables)
-- USB host controller nodes for this RK3528 v7.1 DTS baseline
+  but RK3528 is absent from the v7.1.10 match tables)
+- USB host controller nodes for this RK3528 v7.1.10 DTS baseline
 - Unisoc UWE5622 SDIO/WCN support in mainline
 - W132D mainline U-Boot support
 

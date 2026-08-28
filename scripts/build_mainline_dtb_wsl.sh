@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 WIN_DIR="${W132D_MAINLINE_DIR:-$(cd -- "$SCRIPT_DIR/.." && pwd)}"
-KERNEL_DIR="${W132D_MAINLINE_KERNEL_DIR:-/root/w132d-build/linux-v7.1}"
+KERNEL_DIR="${W132D_MAINLINE_KERNEL_DIR:-/root/w132d-build/linux-v7.1.10}"
 ARCH=arm64
 CROSS_COMPILE="${CROSS_COMPILE:-aarch64-linux-gnu-}"
 DTS_NAME=rk3528-w132d

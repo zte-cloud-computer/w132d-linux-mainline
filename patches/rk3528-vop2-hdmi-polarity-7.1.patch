@@ -1,8 +1,10 @@
 diff --git a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
+index 20f819d87ce5901868df03cdef9fd8430ed594c7..f6899d897009e61361df2b3f3f4f8b9825cad8e2 100644
 --- a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
 +++ b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
-@@ -2591,4 +2591,23 @@ static unsigned long rk3528_set_intf_mux(struct vop2_video_port *vp,
- 						 int id, u32 polflags)
+@@ -2517,7 +2517,26 @@ static const struct vop2_ops rk3588_vop_ops = {
+ static unsigned long rk3528_set_intf_mux(struct vop2_video_port *vp,
+ 					 int id, u32 polflags)
  {
 -	return rk3568_set_intf_mux(vp, id, polflags);
 +	struct vop2 *vop2 = vp->vop2;
@@ -26,3 +28,5 @@ diff --git a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c b/drivers/gpu/drm/rock
 +
 +	return clock;
  }
+ 
+ static void rk3528_vop2_setup_bg_dly(struct vop2_video_port *vp)

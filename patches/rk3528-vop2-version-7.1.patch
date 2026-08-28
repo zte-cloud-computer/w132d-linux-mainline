@@ -1,4 +1,5 @@
 diff --git a/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c b/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c
+index 521013324653f9c227aea75ff962cf174b322108..80a8983a30059167a108870d30652e910bedeee7 100644
 --- a/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c
 +++ b/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c
 @@ -809,7 +809,14 @@ static void vop2_enable(struct vop2 *vop2)

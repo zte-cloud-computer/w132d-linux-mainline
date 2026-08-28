@@ -1,4 +1,5 @@
 diff --git a/drivers/phy/rockchip/phy-rockchip-inno-hdmi.c b/drivers/phy/rockchip/phy-rockchip-inno-hdmi.c
+index c5caa24fff4c320529ab5ce76e6acbc533ac7f1c..a683e08b4da1637279cf65989951dfbb156b76eb 100644
 --- a/drivers/phy/rockchip/phy-rockchip-inno-hdmi.c
 +++ b/drivers/phy/rockchip/phy-rockchip-inno-hdmi.c
 @@ -269,6 +269,8 @@ static const struct pre_pll_config pre_pll_cfg_table[] = {

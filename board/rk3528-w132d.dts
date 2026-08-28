@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 /*
- * ZTE Cloud Computer W132D - first Linux v7.1 mainline baseline.
+ * ZTE Cloud Computer W132D - Linux v7.1.10 stable baseline.
  *
  * This file intentionally starts from the upstream RK3528 SoC description.
  * Vendor-only rk3528-linux.dtsi nodes are not included here.
@@ -71,7 +71,7 @@
 	bus-width = <8>;
 	cap-mmc-highspeed;
 	/*
-	 * The v7.1 RK3528 DWCMShc path has no W132D voltage-switch/regulator
+	 * The v7.1.10 RK3528 DWCMShc path has no W132D voltage-switch/regulator
 	 * description yet.  Keep eMMC in the 3.3 V MMC High-Speed mode (52 MHz)
 	 * for bring-up; advertising HS200 makes the driver enter its DLL path and
 	 * fail to enumerate the card when it has to fall back below 52 MHz.
@@ -255,7 +255,7 @@
 &{/} {
 	sdio_pwrseq: sdio-pwrseq {
 		compatible = "mmc-pwrseq-simple";
-		/* Linux 7.1's simple pwrseq treats a single reset GPIO as a
+		/* Linux 7.1.10's simple pwrseq treats a single reset GPIO as a
 		 * reset-controller candidate. Keep both board WCN control lines in
 		 * the GPIO array so it uses the intended GPIO fallback path. */
 		reset-gpios = <&gpio3 RK_PB2 GPIO_ACTIVE_LOW>,

@@ -1,7 +1,9 @@
 diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+index 1baf5b4361f43ffd231d589d8c62e8dd800d30da..1cd1c6c85a16489b4dd2c4dec72ca1459764e647 100644
 --- a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
 +++ b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
-@@ -381,11 +381,12 @@ static void dw_hdmi_rockchip_encoder_mode_set(struct drm_encoder *encoder,
+@@ -281,15 +281,16 @@ static void dw_hdmi_rockchip_encoder_mode_set(struct drm_encoder *encoder,
+ {
  	struct rockchip_hdmi *hdmi = to_rockchip_hdmi(encoder);
  
 -	/* RK3528 exposes the pixel PLL as the HDMI dclk_vp0 clock. */
@@ -24,10 +26,14 @@ diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockc
 +		 drm_mode_vrefresh(adj_mode), adj_mode->clock,
 +		 hdmi->hdmiphy_clk ? clk_get_rate(hdmi->hdmiphy_clk) : 0UL);
  }
+ 
+ static void dw_hdmi_rockchip_encoder_enable(struct drm_encoder *encoder)
 diff --git a/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c b/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c
+index 843c7ef979b21893d28f14e2e01562838573bb14..521013324653f9c227aea75ff962cf174b322108 100644
 --- a/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c
 +++ b/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c
-@@ -1804,3 +1804,10 @@ static void vop2_crtc_atomic_enable(struct drm_crtc *crtc,
+@@ -1797,7 +1797,14 @@ static void vop2_crtc_atomic_enable(struct drm_crtc *crtc,
+ 		}
  	}
  
 -	clk_set_rate(vp->dclk, clock);
@@ -41,3 +47,4 @@ diff --git a/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c b/drivers/gpu/drm/rock
 +			 vp->id, clock, clk_get_rate(vp->dclk));
  
  	vop2_post_config(crtc);
+ 

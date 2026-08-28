@@ -1,8 +1,8 @@
 diff --git a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
-index 8f1b9f3..8f1b9f3 100644
+index 02a788a4dfddaa028f90ff41c931cd3ff1608303..20f819d87ce5901868df03cdef9fd8430ed594c7 100644
 --- a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
 +++ b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
-@@ -2500,6 +2500,113 @@ static const struct vop2_ops rk3588_vop_ops = {
+@@ -2504,6 +2504,113 @@ static const struct vop2_ops rk3588_vop_ops = {
  	.setup_overlay = rk3568_vop2_setup_overlay,
  };
  
@@ -116,13 +116,13 @@ index 8f1b9f3..8f1b9f3 100644
  static const struct vop2_data rk3566_vop = {
  	.version = VOP_VERSION_RK3568,
  	.feature = VOP2_FEATURE_HAS_SYS_GRF,
-@@ -2598,6 +2632,9 @@ static const struct of_device_id vop2_dt_match[] = {
+@@ -2585,6 +2692,9 @@ static const struct of_device_id vop2_dt_match[] = {
+ 	{
  		.compatible = "rockchip,rk3566-vop",
  		.data = &rk3566_vop,
- 	}, {
++	}, {
 +		.compatible = "rockchip,rk3528-vop",
 +		.data = &rk3528_vop,
-+	}, {
+ 	}, {
  		.compatible = "rockchip,rk3568-vop",
  		.data = &rk3568_vop,
- 	}, {

@@ -1,7 +1,14 @@
 diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+index 15fcd255f9d5b44271ab7c1534d92c5c6a0b5efe..baa039b751badeb8dc45d0a78ff4a4167be61d3c 100644
 --- a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
 +++ b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
-@@ -57,1 +57,2 @@
+@@ -54,7 +54,8 @@
+ #define RK3399_GRF_SOC_CON20		0x6250
+ #define RK3399_HDMI_LCDC_SEL		BIT(6)
+ 
 -#define RK3528_VO_GRF_HDMI_MASK		0x60014
 +/* The W132D DT maps the VO-GRF window at 0xff360000. */
 +#define RK3528_VO_GRF_HDMI_MASK		0x00014
+ #define RK3528_HDMI_SNKDET_SEL		BIT(6)
+ #define RK3528_HDMI_SNKDET			BIT(5)
+ #define RK3528_HDMI_SDAIN_MSK		BIT(1)

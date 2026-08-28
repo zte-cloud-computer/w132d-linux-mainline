@@ -1,4 +1,5 @@
 diff --git a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
+index 9c47c46900ca0618cddcb39b2b0ad64cc2477d8b..25528d85d3f334f5bc1d5f00e203e5248f7910b5 100644
 --- a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
 +++ b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
 @@ -2673,7 +2673,8 @@ static const struct vop2_video_port_data rk3528_vop_video_ports[] = {

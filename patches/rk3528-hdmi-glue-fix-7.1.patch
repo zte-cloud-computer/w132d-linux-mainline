@@ -1,7 +1,8 @@
+diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+index f56db484f087bfc1d99fb9f66e429c8e7feb4770..f6e9695301dd6a103f4fe0698d8918b1918d07c8 100644
 --- a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
 +++ b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
-@@ -485,9 +485,8 @@ dw_hdmi_rk3528_read_hpd(struct dw_hdmi *dw_hdmi, void *data)
- 	if (value < 0)
+@@ -509,9 +509,8 @@ dw_hdmi_rk3528_read_hpd(struct dw_hdmi *dw_hdmi, void *data)
  		return connector_status_unknown;
  
  	regmap_write(hdmi->regmap, RK3528_VO_GRF_HDMI_MASK,

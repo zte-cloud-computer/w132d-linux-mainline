@@ -1,10 +1,14 @@
 diff --git a/drivers/gpu/drm/drm_modes.c b/drivers/gpu/drm/drm_modes.c
+index 3f8e025fd6d996acc96eade503b185aa5ae475fc..665cb5be6d5654ab74cce0d78d64020eb7daee58 100644
 --- a/drivers/gpu/drm/drm_modes.c
 +++ b/drivers/gpu/drm/drm_modes.c
-@@ -1814,4 +1814,5 @@
+@@ -1813,7 +1813,8 @@ void drm_mode_prune_invalid(struct drm_device *dev,
+ 			list_del(&mode->head);
  			if (mode->type & DRM_MODE_TYPE_USERDEF) {
  				drm_warn(dev, "User-defined mode not supported: "
 -					 DRM_MODE_FMT "\n", DRM_MODE_ARG(mode));
 +					 DRM_MODE_FMT " (%s)\n", DRM_MODE_ARG(mode),
 +					 drm_get_mode_status_name(mode->status));
  			}
+ 			if (verbose) {
+ 				drm_dbg_kms(dev, "Rejected mode: " DRM_MODE_FMT " (%s)\n",

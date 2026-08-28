@@ -1,9 +1,8 @@
 diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+index 0dc1eb5d2ae390f465b6e4b2df88730fd8b75e15..1baf5b4361f43ffd231d589d8c62e8dd800d30da 100644
 --- a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
 +++ b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
-@@ -350,9 +350,13 @@ dw_hdmi_rockchip_mode_valid(struct dw_hdmi *dw_hdmi, void *data,
- 	if (hdmi->hdmiphy_clk) {
- 		int rpclk = clk_round_rate(hdmi->hdmiphy_clk, pclk);
+@@ -254,6 +254,10 @@ dw_hdmi_rockchip_mode_valid(struct dw_hdmi *dw_hdmi, void *data,
  
  		if (rpclk < 0 || abs(rpclk - pclk) > pclk / 1000)
  			return MODE_NOCLOCK;
@@ -14,8 +13,7 @@ diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockc
  	}
  
  	return MODE_OK;
- }
-@@ -379,5 +379,13 @@ dw_hdmi_rockchip_encoder_mode_set(struct drm_encoder *encoder,
+@@ -277,7 +281,15 @@ static void dw_hdmi_rockchip_encoder_mode_set(struct drm_encoder *encoder,
  {
  	struct rockchip_hdmi *hdmi = to_rockchip_hdmi(encoder);
  
@@ -30,7 +28,9 @@ diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockc
 +			 drm_mode_vrefresh(adj_mode), adj_mode->clock, ret);
 +	}
  }
-@@ -744,13 +751,10 @@ static int dw_hdmi_rockchip_bind(struct device *dev, struct device *master,
+ 
+ static void dw_hdmi_rockchip_encoder_enable(struct drm_encoder *encoder)
+@@ -588,13 +600,10 @@ static int dw_hdmi_rockchip_bind(struct device *dev, struct device *master,
  		return dev_err_probe(hdmi->dev, ret, "failed to get phy\n");
  	}
  
@@ -41,11 +41,10 @@ diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockc
 -		hdmi->hdmiphy_clk = of_clk_get_from_provider(&clkspec);
 -		if (IS_ERR(hdmi->hdmiphy_clk))
 -			hdmi->hdmiphy_clk = NULL;
--	}
 +	hdmi->hdmiphy_clk = devm_clk_get_optional(dev, "dclk_vp0");
 +	if (IS_ERR(hdmi->hdmiphy_clk)) {
 +		ret = PTR_ERR(hdmi->hdmiphy_clk);
 +		return dev_err_probe(dev, ret, "failed to get HDMI pixel clock\n");
-+	}
+ 	}
  
  	if (hdmi->chip_data == &rk3568_chip_data) {

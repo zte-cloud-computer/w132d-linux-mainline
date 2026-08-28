@@ -1,7 +1,10 @@
 diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+index baa039b751badeb8dc45d0a78ff4a4167be61d3c..15e1c6471f0342752883dc0ea8efb7ab2767b7bc 100644
 --- a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
 +++ b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
-@@ -344,1 +344,7 @@
+@@ -342,6 +342,12 @@ dw_hdmi_rockchip_mode_valid(struct dw_hdmi *dw_hdmi, void *data,
+ 	    mode->clock > hdmi->chip_data->max_tmds_clock)
+ 		return MODE_CLOCK_HIGH;
  
 +	/* The RK3528 PHY table explicitly supports the 241.5 MHz CVT-RB mode. */
 +	if (mode->clock == 241500 &&
@@ -9,3 +12,6 @@ diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockc
 +				    "rockchip,rk3528-dw-hdmi"))
 +		return MODE_OK;
 +
+ 	if (hdmi->ref_clk) {
+ 		int rpclk = clk_round_rate(hdmi->ref_clk, pclk);
+ 

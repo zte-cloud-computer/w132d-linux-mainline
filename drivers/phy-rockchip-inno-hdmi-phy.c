@@ -485,7 +485,7 @@ static int inno_hdmi_phy_power_on(struct phy *phy)
 		return -EINVAL;
 	}
 
-	/* Linux 7.1 has no vendor rockchip_get_cpu_version() helper.  RK3328
+	/* Linux 7.1.10 has no vendor rockchip_get_cpu_version() helper.  RK3328
 	 * keeps the conservative default table; RK3528 uses its own entries. */
 	if (inno->plat_data->dev_type == INNO_HDMI_PHY_RK3228 &&
 		 tmdsclock <= 33750000 && inno->efuse_flag)

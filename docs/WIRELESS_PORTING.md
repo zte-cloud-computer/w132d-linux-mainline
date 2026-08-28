@@ -25,7 +25,7 @@ W132D 使用 Unisoc UWE5622 Marlin 控制器。Wi-Fi 和蓝牙共享 RK3528 的 
 
 ## 构建顺序
 
-准备好 Linux v7.1 源码树后，在 root WSL2 shell 中运行：
+准备好 Linux v7.1.10 源码树后，在 root WSL2 shell 中运行：
 
 ```bash
 bash scripts/prepare_wireless_mainline_wsl.sh
@@ -85,7 +85,7 @@ The staging directory defaults to `/root/w132d-build/w132d-wireless-mainline` an
 
 ## Build Order
 
-Run the following from a root WSL2 shell after preparing the Linux v7.1 tree:
+Run the following from a root WSL2 shell after preparing the Linux v7.1.10 tree:
 
 ```bash
 bash scripts/prepare_wireless_mainline_wsl.sh
