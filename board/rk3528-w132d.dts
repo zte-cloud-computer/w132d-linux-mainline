@@ -72,20 +72,7 @@
 &sdhci {
 	bus-width = <8>;
 	cap-mmc-highspeed;
-	/*
-	 * HS400 needs the RK3528 DLL tap values added by
-	 * patches/rk3528-dwcmshc-hs400-7.1.patch.  Without that patch the driver
-	 * falls back to the RK3588 taps (10/8/4) and the eMMC does not enumerate.
-	 */
-	max-frequency = <200000000>;
-	mmc-hs200-1_8v;
-	mmc-hs400-1_8v;
-	mmc-hs400-enhanced-strobe;
-	/*
-	 * The command queue is enabled from the DT property alone; the driver
-	 * reads it with device_property_read_bool(pdev, "supports-cqe").
-	 */
-	supports-cqe;
+	max-frequency = <52000000>;
 	/*
 	 * Deliberately no fixed-emmc-driver-type: the vendor reference board uses
 	 * type 4, but the Samsung 07S000 part fitted here rejects it and the MMC
