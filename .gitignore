@@ -1,0 +1,22 @@
+# 拉来的上游输入：内核源码、上游仓库克隆。丢了跑 tools/fetch-inputs.sh 重来。
+/cache/
+
+# 构建产物
+/out/
+
+# 逐机数据：BL31 原版、RF 校准、SN/MAC/HDCP/IMEI。
+# **不可再生，且泄漏即泄漏设备身份** —— 永远不要提交。
+/private/
+
+# Armbian 构建框架的本地克隆（按需 clone，不随本仓库分发）
+/build-armbian/
+
+.DS_Store
+._*
+*.swp
+*~
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
