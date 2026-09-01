@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 /*
- * 本文件由 tools/make-board-dts.py 从上游板级 DTS 生成，不要手改。
+ * 本文件由 patches-src/import-board-dts.py 从上游一次性导入。
  * 上游：zte-cloud-computer/w132d-linux-mainline board/rk3528-w132d.dts
  * 改动：移除显示路径（VOP2 / HDMI / HDMI PHY）——主线 7.2 对 RK3528 显示链
  *       零支持，相关补丁按 7.1 锚定且多数打不上，见生成器抬头。

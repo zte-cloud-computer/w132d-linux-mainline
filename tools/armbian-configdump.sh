@@ -34,9 +34,9 @@ step(){ echo; echo "########## $* ##########"; }
 
 step "0/3 依赖"
 export DEBIAN_FRONTEND=noninteractive
-apt-get -qq update >/dev/null
+apt-get -qq update >/dev/null 2>&1
 apt-get -qq install -y --no-install-recommends \
-  git ca-certificates python3 jq bc >/dev/null
+  git ca-certificates python3 jq bc >/dev/null 2>&1
 echo "  bash $BASH_VERSION"
 
 step "1/3 取 armbian/build"

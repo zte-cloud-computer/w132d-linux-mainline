@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: (GPL-2.0+ OR MIT)
-"""从上游板级 DTS 生成不含显示路径的 rk3528-w132d.dts。
+"""【一次性导入工具，不在构建路径上】从上游板级 DTS 生成去显示版。
+
+板级 DTS 现在由本仓库自己拿着（userpatches/board/rk3528-w132d.dts，已入库），
+这个脚本保留下来只为**记录它是怎么来的** —— 出处、做了哪些变换、每处变换的理由。
+日常构建不跑它。
+
+上游 zte-cloud-computer/w132d-linux-mainline 已经往我们不跟的方向走了（把 eMMC
+从 HS400 降回 52MHz），所以不再作为构建依赖。真要重新同步上游改动时才跑这个。
+
+---
+
+原说明：从上游板级 DTS 生成不含显示路径的 rk3528-w132d.dts。
 
 ## 为什么要去掉显示
 
@@ -18,7 +29,7 @@ VDEC/红外/LED/ramoops 全都不受影响，补丁数从 31 个降到 4 个。
 
 ## 用法
 
-    tools/make-board-dts.py <上游DTS> <输出DTS>
+    patches-src/import-board-dts.py <上游DTS> userpatches/board/rk3528-w132d.dts
 
 每一处删除都断言"确实删掉了、且只删了一处"，漏删或多删立即失败 —— 否则会产出一份
 "看着能编、实际引用了不存在节点"的 DTS。
@@ -149,7 +160,7 @@ def main():
         sys.exit(f"❌ 上游 DTS 首行不是 SPDX：{lines[0]!r}")
     header = (
         "/*\n"
-        " * 本文件由 tools/make-board-dts.py 从上游板级 DTS 生成，不要手改。\n"
+        " * 出处：由 patches-src/import-board-dts.py 从上游板级 DTS 一次性导入。\n"
         " * 上游：zte-cloud-computer/w132d-linux-mainline board/rk3528-w132d.dts\n"
         " * 改动：移除显示路径（VOP2 / HDMI / HDMI PHY）——主线 7.2 对 RK3528 显示链\n"
         " *       零支持，相关补丁按 7.1 锚定且多数打不上，见生成器抬头。\n"

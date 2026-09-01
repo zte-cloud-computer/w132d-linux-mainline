@@ -1,0 +1,45 @@
+From 566d1d4b3133f9f53348e43e58bcf65aca4d6b1d Mon Sep 17 00:00:00 2001
+From: wenziwanka <tech@wenziwanka.com>
+Date: Tue, 1 Sep 2026 14:36:27 +0000
+Subject: [PATCH 1/5] media: rkvdec: add RK3528 support
+
+The RK3528 ships the VDPU382 decoder.  Rockchip's own BSP drives it with
+the same dev_ops, trans_info and hw_info as the RK3588's VDPU381: the
+register count (279), enable register (10), format register (9) and
+return-status register (224) all match field for field.  The only
+difference in the BSP is hw_ops->reset, which exists for the BSP's
+multi-core scheduling; the mainline driver has no reset_control at all.
+
+Point the RK3528 compatible at the existing vdpu381 variant.
+
+Tested on a ZTE Cloud Computer W132D (RK3528): H.264 and HEVC decode
+produce frame-for-frame identical output to software decoding.
+
+Signed-off-by: wenziwanka <tech@wenziwanka.com>
+---
+ drivers/media/platform/rockchip/rkvdec/rkvdec.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/drivers/media/platform/rockchip/rkvdec/rkvdec.c b/drivers/media/platform/rockchip/rkvdec/rkvdec.c
+index 1d1e9bf..c5a8cb8 100644
+--- a/drivers/media/platform/rockchip/rkvdec/rkvdec.c
++++ b/drivers/media/platform/rockchip/rkvdec/rkvdec.c
+@@ -1760,6 +1760,15 @@ static const struct of_device_id of_rkvdec_match[] = {
+ 		.compatible = "rockchip,rk3576-vdec",
+ 		.data = &vdpu383_variant,
+ 	},
++	{
++		/*
++		 * RK3528's decoder is VDPU382. Rockchip's own BSP drives it with
++		 * the same dev_ops/trans_info/hw_info as RK3588's VDPU381; the only
++		 * delta is the reset routine, which this driver does not use.
++		 */
++		.compatible = "rockchip,rk3528-vdec",
++		.data = &vdpu381_variant,
++	},
+ 	{ /* sentinel */ }
+ };
+ MODULE_DEVICE_TABLE(of, of_rkvdec_match);
+-- 
+2.47.3
+

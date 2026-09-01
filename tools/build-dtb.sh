@@ -22,60 +22,55 @@ B=/build
 KVER="${KVER:-7.2.2}"
 SRC="/src/linux-$KVER.tar.xz"
 TREE="$B/linux-$KVER"
-PORT="$W/cache/upstream/w132d-port"
+PATCHDIR="$W/userpatches/kernel/archive/rockchip64-7.2"
 OUT="$B/out"
 
 step(){ echo; echo "########## $* ##########"; }
 
-step "0/4 依赖"
+step "0/3 依赖"
 export DEBIAN_FRONTEND=noninteractive
-apt-get -qq update >/dev/null
+apt-get -qq update >/dev/null 2>&1
 apt-get -qq install -y --no-install-recommends \
   build-essential bc bison flex libssl-dev libelf-dev python3 xz-utils \
-  patch device-tree-compiler >/dev/null
+  patch device-tree-compiler >/dev/null 2>&1
 echo "  gcc $(gcc -dumpversion) / $(nproc) 核"
 
-step "1/4 展开内核 $KVER"
+step "1/3 展开内核 $KVER"
 if [ ! -d "$TREE" ]; then
   [ -f "$SRC" ] || { echo "❌ 缺内核 tarball: $SRC"; exit 1; }
   mkdir -p "$TREE"; tar -xf "$SRC" -C "$TREE" --strip-components=1
 fi
 echo "  $(grep -m1 '^VERSION' "$TREE/Makefile" | tr -d ' \t')$(grep -m1 '^PATCHLEVEL' "$TREE/Makefile" | sed 's/.*=/./;s/ //g')$(grep -m1 '^SUBLEVEL' "$TREE/Makefile" | sed 's/.*=/./;s/ //g')"
 
-step "2/4 内核补丁（4 个，全部来自上游板级仓库）"
-for p in rk3528-audio rk3528-dwcmshc-hs400 rk3528-rkvdec rk3528-tsadc; do
-  f="$PORT/patches/$p-7.1.patch"
-  [ -f "$f" ] || { echo "  ❌ 缺 $f"; exit 1; }
+step "2/3 应用 Armbian 补丁目录里的那批"
+# 测的就是 Armbian 实际会应用的东西 —— 用 patches-src/ 里的原始导入件去测，
+# 测的是没出货的版本，没意义。这批里第 5 个就是板级 DTS（含 Makefile 条目）。
+shopt -s nullglob
+PATCHES=("$PATCHDIR"/*.patch)
+[ "${#PATCHES[@]}" -gt 0 ] || { echo "  ❌ $PATCHDIR 里没有补丁 —— 先跑 tools/make-patch-series.sh"; exit 1; }
+for f in "${PATCHES[@]}"; do
+  name=$(basename "$f" .patch)
   # 幂等：先用反向 dry-run 判断是不是已经打过了。
-  # 不能靠解析 patch 的报错文本 —— GNU patch 说的是
-  # "Reversed (or previously applied) patch detected!"，而且同一个补丁里
-  # 「新建文件」的 hunk 报的又是另一句话，逐条匹配很脆。
+  # 不能靠解析 patch 的报错文本 —— GNU patch 对"已应用"和"文件已存在"说的是
+  # 两句不同的话，逐条匹配很脆。
   if patch -d "$TREE" -p1 -R --dry-run --batch -f < "$f" >/dev/null 2>&1; then
-    printf '  ⏭  %-26s 已应用\n' "$p"; continue
+    printf '  ⏭  %-46s 已应用\n' "${name:0:46}"; continue
   fi
   out=$(patch -d "$TREE" -p1 --forward --batch < "$f" 2>&1) || {
-    printf '  ❌ %-26s\n' "$p"; sed 's/^/     /' <<<"$out"; exit 1
+    printf '  ❌ %-46s\n' "${name:0:46}"; sed 's/^/     /' <<<"$out"; exit 1
   }
   if grep -q 'with fuzz' <<<"$out"; then
-    printf '  ⚠️  %-26s 带 fuzz 应用\n' "$p"
+    printf '  ⚠️  %-46s 带 fuzz\n' "${name:0:46}"
   else
-    printf '  ✅ %-26s 干净\n' "$p"
+    printf '  ✅ %-46s 干净\n' "${name:0:46}"
   fi
 done
 if find "$TREE" -name '*.rej' -print -quit | grep -q .; then
   echo "  ❌ 存在 .rej"; find "$TREE" -name '*.rej'; exit 1
 fi
-echo "  ✅ 零 .rej"
+echo "  ✅ 零 .rej（板级 DTS 与 Makefile 条目由第 5 个补丁带入）"
 
-step "3/4 装入板级 DTS"
-cp -f "$W/userpatches/kernel/archive/rockchip64-7.2/rk3528-w132d.dts" \
-      "$TREE/arch/arm64/boot/dts/rockchip/"
-MK="$TREE/arch/arm64/boot/dts/rockchip/Makefile"
-grep -qxF 'dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3528-w132d.dtb' "$MK" \
-  || printf '\ndtb-$(CONFIG_ARCH_ROCKCHIP) += rk3528-w132d.dtb\n' >> "$MK"
-echo "  ✅ DTS 与 Makefile 条目就位"
-
-step "4/4 编译 DTB"
+step "3/3 编译 DTB"
 make -C "$TREE" ARCH=arm64 CROSS_COMPILE= LOCALVERSION= defconfig >/dev/null 2>&1
 make -C "$TREE" ARCH=arm64 CROSS_COMPILE= LOCALVERSION= \
   rockchip/rk3528-w132d.dtb -j"$(nproc)" 2>&1 | grep -vE '^ *(HOSTCC|LEX|YACC|HOSTLD|UPD|WRAP|GEN|SYNC|CALL)' | tail -8
