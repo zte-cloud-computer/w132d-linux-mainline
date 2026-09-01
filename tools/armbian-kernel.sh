@@ -4,7 +4,11 @@
 #
 # 用法（容器里）：
 #   bash /w/tools/armbian-kernel.sh [命令]
-#     kernel-patch   只拉源码并应用补丁，不编译（快，用来先验补丁栈）
+#     kernel-patch   只拉源码并应用补丁（快，用来先验补丁栈）
+#                    ⚠️ 它本身是**交互式的补丁重写工具**，补丁阶段跑完会因为
+#                    "stdin is not a terminal" 退出 43。补丁栈的结论看
+#                    "Summary: kernel patching: N total; N applied" 那一行即可，
+#                    退出码在这个模式下没有意义。
 #     kernel         完整构建，产出 linux-image-*.deb（慢）
 #   默认 kernel-patch
 #

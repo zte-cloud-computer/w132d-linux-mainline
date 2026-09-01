@@ -105,8 +105,12 @@ function post_family_tweaks_bsp__w132d_rootfs_overlay() {
 # HDMI 相关的 unit 本版不带，所以不在列表里。
 function post_family_tweaks__w132d_enable_services() {
 	display_alert "W132D" "使能板级服务" "info"
+	# 没有 w132d-bt-calib：它与 w132d-btattach 重复（两者都下发
+	# 0xFCA0/0xFCA2/0xFCA1），而且它要读 /lib/firmware/uwe5622/bt_configure_*.ini
+	# ——那是厂商逐板校准数据，再分发授权不明，不进可公开的镜像。
+	# btattach 自己在代码里构造 pskey 与 RF 配置，不依赖那些文件。
 	chroot_sdcard systemctl enable \
-		w132d-wireless.service w132d-bluetooth.service w132d-bt-calib.service \
+		w132d-wireless.service w132d-bluetooth.service \
 		w132d-ble-remote.service w132d-ir-keymap.service w132d-led-status.service \
 		w132d-soft-standby.service
 	# 主线内核没有 ttyFIQ0（那是 Rockchip vendor 内核的 FIQ debugger 串口），
@@ -134,3 +138,7 @@ function custom_kernel_config__w132d_audio() {
 	scripts/config --module CONFIG_SND_SOC_RK3528
 	scripts/config --module CONFIG_SND_SOC_ES7202
 }
+
+# w132d-btattach 是 aarch64 可执行文件，编译产物不进仓库，所以由 extension 从
+# 源码在 chroot 里编。overlay 里只有对应的 systemd unit。
+enable_extension "w132d-btattach"

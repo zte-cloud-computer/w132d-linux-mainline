@@ -21,3 +21,9 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# Armbian 运行时会往 ${USERPATCHES_PATH} 里写自己的模板（我们把 userpatches 软链
+# 进它的克隆，于是落到本仓库里）。这些不是我们的东西。
+/userpatches/config-example.conf
+/userpatches/customize-image.sh
+/userpatches/.tmp/
