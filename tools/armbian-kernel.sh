@@ -17,6 +17,12 @@
 #
 # 先跑 kernel-patch：补丁栈过不了，编译再久也是白费。
 #
+# ## 日志过滤
+#
+# 部分 Debian 镜像上 apt 会把 "Tried to start delayed item" 刷成上百万行 stderr，
+# 经 Armbian 的 logger 一转就是几百 MB 日志，真正的报错全被淹掉（实测一次 371 MB、
+# 其中 239 万行是这一句）。这里在入 tee 之前先滤掉它和 update-alternatives 的噪音。
+#
 # ## USE_TMPFS=no 是必须的
 #
 # Armbian 默认给日志挂 tmpfs，容器里没 CAP_SYS_ADMIN 会直接失败。官方留了这个
@@ -58,7 +64,9 @@ set +e
 ./compile.sh "$CMD" \
   BOARD=w132d BRANCH=edge RELEASE=trixie BUILD_MINIMAL=yes \
   SHOW_LOG=yes USE_TMPFS=no ARMBIAN_RUNNING_IN_CONTAINER=yes \
-  2>&1 | tee "$B/armbian-$CMD.log" | grep -vE "^\s*$"
+  2>&1 \
+  | grep -vE "Tried to start delayed item|update-alternatives:|^\s*$" \
+  | tee "$B/armbian-$CMD.log"
 RC=${PIPESTATUS[0]}
 set -e
 

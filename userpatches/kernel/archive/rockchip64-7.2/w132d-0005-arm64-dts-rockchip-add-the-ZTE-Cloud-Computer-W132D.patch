@@ -1,6 +1,6 @@
-From 59341b85e4b2a8e25fcc188905346c350839cad2 Mon Sep 17 00:00:00 2001
+From ef313c2b0fac5dd0b22fdf525c3e5fce1c0f7646 Mon Sep 17 00:00:00 2001
 From: wenziwanka <tech@wenziwanka.com>
-Date: Tue, 1 Sep 2026 14:36:28 +0000
+Date: Tue, 1 Sep 2026 15:09:01 +0000
 Subject: [PATCH 5/5] arm64: dts: rockchip: add the ZTE Cloud Computer W132D
 
 The W132D is an RK3528-based set-top box with 1 GB of DDR4, 8 GB of eMMC,
@@ -38,13 +38,13 @@ index 761d82b..ff9f9b5 100644
 +dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3528-w132d.dtb
 diff --git a/arch/arm64/boot/dts/rockchip/rk3528-w132d.dts b/arch/arm64/boot/dts/rockchip/rk3528-w132d.dts
 new file mode 100644
-index 0000000..3417202
+index 0000000..1b2a840
 --- /dev/null
 +++ b/arch/arm64/boot/dts/rockchip/rk3528-w132d.dts
 @@ -0,0 +1,725 @@
 +// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 +/*
-+ * 本文件由 tools/make-board-dts.py 从上游板级 DTS 生成，不要手改。
++ * 本文件由 patches-src/import-board-dts.py 从上游一次性导入。
 + * 上游：zte-cloud-computer/w132d-linux-mainline board/rk3528-w132d.dts
 + * 改动：移除显示路径（VOP2 / HDMI / HDMI PHY）——主线 7.2 对 RK3528 显示链
 + *       零支持，相关补丁按 7.1 锚定且多数打不上，见生成器抬头。

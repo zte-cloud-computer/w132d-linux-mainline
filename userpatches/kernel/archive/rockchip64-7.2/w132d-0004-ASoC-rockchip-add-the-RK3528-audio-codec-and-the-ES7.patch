@@ -1,6 +1,6 @@
-From 18e4b514e44bd5507d6d94b52ec65ee76848c544 Mon Sep 17 00:00:00 2001
+From cdac979208b0d15099c431135d80450ff8d13bdc Mon Sep 17 00:00:00 2001
 From: wenziwanka <tech@wenziwanka.com>
-Date: Tue, 1 Sep 2026 14:36:27 +0000
+Date: Tue, 1 Sep 2026 15:09:01 +0000
 Subject: [PATCH 4/5] ASoC: rockchip: add the RK3528 audio codec and the ES7202
  PDM ADC
 
@@ -40,10 +40,10 @@ Signed-off-by: wenziwanka <tech@wenziwanka.com>
  create mode 100644 sound/soc/codecs/rk3528_codec.h
 
 diff --git a/sound/soc/codecs/Kconfig b/sound/soc/codecs/Kconfig
-index e4d1391..4814db0 100644
+index 9bf869e..7b7df8d 100644
 --- a/sound/soc/codecs/Kconfig
 +++ b/sound/soc/codecs/Kconfig
-@@ -2920,4 +2920,25 @@ config SND_SOC_LPASS_TX_MACRO
+@@ -2932,4 +2932,25 @@ config SND_SOC_LPASS_TX_MACRO
  	select SND_SOC_LPASS_MACRO_COMMON
  	tristate "Qualcomm TX Macro in LPASS(Low Power Audio SubSystem)"
  
@@ -70,10 +70,10 @@ index e4d1391..4814db0 100644
 +
  endmenu
 diff --git a/sound/soc/codecs/Makefile b/sound/soc/codecs/Makefile
-index aa0396e..90a64c8 100644
+index 4177c0a..227c2d4 100644
 --- a/sound/soc/codecs/Makefile
 +++ b/sound/soc/codecs/Makefile
-@@ -891,3 +891,8 @@ obj-$(CONFIG_SND_SOC_LPASS_TX_MACRO)	+= snd-soc-lpass-tx-macro.o
+@@ -893,3 +893,8 @@ obj-$(CONFIG_SND_SOC_LPASS_TX_MACRO)	+= snd-soc-lpass-tx-macro.o
  
  # Mux
  obj-$(CONFIG_SND_SOC_SIMPLE_MUX)	+= snd-soc-simple-mux.o

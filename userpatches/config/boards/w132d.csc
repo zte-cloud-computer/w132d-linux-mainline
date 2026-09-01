@@ -54,9 +54,65 @@ function post_family_config__w132d_partition_geometry() {
 	display_alert "W132D" "分区几何 OFFSET=${OFFSET} BOOTSIZE=${BOOTSIZE}（p2@24576 扇区）" "info"
 }
 
-# ⚠️ 还差两样必须靠 hook 补：固定的 GPT label-id / 三个分区 UUID，以及 p2 的
-# LegacyBIOSBootable 属性 —— 厂商 U-Boot 的 distro boot 靠它扫到 boot.scr，
-# **缺了不启动**。等实际出镜像那一步再填 pre_prepare_partitions。
+# ## GPT 身份与 p2 的 LegacyBIOSBootable
+#
+# Armbian 的 prepare_partitions 会自己生成随机的 label-id 与分区 UUID，且不设任何
+# 分区属性。两处都得改回来：
+#
+#   * **LegacyBIOSBootable 缺了设备起不来。** 厂商 U-Boot 走 distro boot，靠扫
+#     带这个属性的分区去找 boot.scr。这是实测值 —— 从设备 `sfdisk -d` 读回来的
+#     p2 就带着 `attrs="LegacyBIOSBootable"`。
+#   * **固定 UUID** 让镜像可复现，也让 fstab / 文档 / 救砖流程始终对得上。
+#
+# 这些值不是逐机数据，是镜像格式的一部分（每台刷本镜像的设备都拿到同一组），
+# 和 SN/MAC/HDCP 那类不可再生的东西是两回事。
+declare -g W132D_GPT_LABEL_ID="9460D758-5782-409D-ACD6-FE1596D204B3"
+declare -g W132D_UUID_P1="A67F44A9-997D-4AA6-A64C-14CED9E9CFD6"
+declare -g W132D_UUID_P2="6EA179DE-730E-4C8D-A85C-AE1CC68EF1D7"
+declare -g W132D_UUID_P3="EF7972D4-085A-44C6-B550-DB6494052869"
+
+function post_create_partitions__w132d_gpt_identity() {
+	[[ -b "${LOOP}" ]] || return 0
+	display_alert "W132D" "固定 GPT 身份并给 p2 打 LegacyBIOSBootable" "info"
+	# sgdisk 的 -A 用的是分区属性位号，2 = LegacyBIOSBootable
+	run_host_command_logged sgdisk \
+		--disk-guid="${W132D_GPT_LABEL_ID}" \
+		--partition-guid=1:"${W132D_UUID_P1}" \
+		--partition-guid=2:"${W132D_UUID_P2}" \
+		--partition-guid=3:"${W132D_UUID_P3}" \
+		--attributes=2:set:2 \
+		"${LOOP}"
+	run_host_command_logged partprobe "${LOOP}" "||" true
+}
+
+# ## rootfs 定制文件
+#
+# Armbian 的按板 overlay 目录（config/optional/boards/<board>/_packages/bsp-cli/）
+# 查找用的是 `${SRC}` 而**不是** `${USERPATCHES_PATH}`（utils-bsp.sh:22），所以
+# userpatches 里放了也不会被收。用钩子自己拷 —— radxa-e20c.csc 写 armbian-leds.conf
+# 用的也是这一类钩子。
+#
+# 「毕业」成 armbian/build 的 PR 时，这些文件直接搬进
+# config/optional/boards/w132d/_packages/bsp-cli/，这个钩子随之删掉。
+function post_family_tweaks_bsp__w132d_rootfs_overlay() {
+	declare src="${USERPATCHES_PATH}/overlay/bsp-cli"
+	[[ -d "${src}" ]] || { display_alert "W132D" "没有 overlay 目录，跳过" "wrn"; return 0; }
+	display_alert "W132D" "铺 $(find "${src}" -type f | wc -l) 个设备定制文件" "info"
+	run_host_command_logged cp -a "${src}/." "${destination}/"
+}
+
+# 服务使能：overlay 只是把 unit 文件放进去，不会自动 enable。
+# HDMI 相关的 unit 本版不带，所以不在列表里。
+function post_family_tweaks__w132d_enable_services() {
+	display_alert "W132D" "使能板级服务" "info"
+	chroot_sdcard systemctl enable \
+		w132d-wireless.service w132d-bluetooth.service w132d-bt-calib.service \
+		w132d-ble-remote.service w132d-ir-keymap.service w132d-led-status.service \
+		w132d-soft-standby.service
+	# 主线内核没有 ttyFIQ0（那是 Rockchip vendor 内核的 FIQ debugger 串口），
+	# 而 Armbian 基底使能着对应的 getty —— 不 mask 每次开机白等 90 秒
+	chroot_sdcard systemctl mask serial-getty@ttyFIQ0.service "||" true
+}
 
 # ## 内核 config：只补两个符号
 #

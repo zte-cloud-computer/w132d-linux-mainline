@@ -1,0 +1,18 @@
+[Unit]
+Description=W132D IR/BLE power-key software standby
+Documentation=file:/root/w132d-soft-standby-README
+After=w132d-ir-keymap.service w132d-hdmi.service
+Wants=w132d-ir-keymap.service w132d-hdmi.service
+
+[Service]
+Type=simple
+ExecStartPre=-/sbin/modprobe dw_hdmi_cec
+ExecStart=/usr/local/sbin/w132d-soft-standby --daemon
+Restart=always
+RestartSec=2
+RuntimeDirectory=w132d-soft-standby
+RuntimeDirectoryPreserve=restart
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

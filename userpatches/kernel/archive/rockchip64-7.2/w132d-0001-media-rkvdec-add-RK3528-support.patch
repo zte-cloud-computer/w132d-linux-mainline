@@ -1,6 +1,6 @@
-From 566d1d4b3133f9f53348e43e58bcf65aca4d6b1d Mon Sep 17 00:00:00 2001
+From 251d57990602b9becf6a6f20be5b2be1b01ff946 Mon Sep 17 00:00:00 2001
 From: wenziwanka <tech@wenziwanka.com>
-Date: Tue, 1 Sep 2026 14:36:27 +0000
+Date: Tue, 1 Sep 2026 15:09:00 +0000
 Subject: [PATCH 1/5] media: rkvdec: add RK3528 support
 
 The RK3528 ships the VDPU382 decoder.  Rockchip's own BSP drives it with
@@ -21,10 +21,10 @@ Signed-off-by: wenziwanka <tech@wenziwanka.com>
  1 file changed, 9 insertions(+)
 
 diff --git a/drivers/media/platform/rockchip/rkvdec/rkvdec.c b/drivers/media/platform/rockchip/rkvdec/rkvdec.c
-index 1d1e9bf..c5a8cb8 100644
+index 509bedb..8c2ee22 100644
 --- a/drivers/media/platform/rockchip/rkvdec/rkvdec.c
 +++ b/drivers/media/platform/rockchip/rkvdec/rkvdec.c
-@@ -1760,6 +1760,15 @@ static const struct of_device_id of_rkvdec_match[] = {
+@@ -1754,6 +1754,15 @@ static const struct of_device_id of_rkvdec_match[] = {
  		.compatible = "rockchip,rk3576-vdec",
  		.data = &vdpu383_variant,
  	},

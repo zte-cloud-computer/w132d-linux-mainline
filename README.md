@@ -23,7 +23,7 @@
 | `patches-src/import/` · `patches-src/messages/` | 补丁的原始导入件与提交信息 |
 | `tools/` | 构建与校验脚本 |
 | `cache/` | 拉来的内核源码。**不入库**，`tools/fetch-inputs.sh` 可重来 |
-| `out/` · `private/` | 构建产物 · 逐机数据（BL31 原版、RF 校准、SN/MAC）。**均不入库** |
+| `out/` · `private/` | 构建产物 · 逐机数据（BL31 原版、RF 校准、SN/MAC）。均不入库；后者从自己的整盘备份里取 |
 
 ## 快速开始
 

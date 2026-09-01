@@ -1,6 +1,6 @@
-From 0f0dea479f6537d8c6bb3a161750bfba36e9b522 Mon Sep 17 00:00:00 2001
+From be5d7087ef604dfdc94fbb737d7fc9f468822824 Mon Sep 17 00:00:00 2001
 From: wenziwanka <tech@wenziwanka.com>
-Date: Tue, 1 Sep 2026 14:36:27 +0000
+Date: Tue, 1 Sep 2026 15:09:01 +0000
 Subject: [PATCH 3/5] thermal: rockchip: add RK3528 TSADC support
 
 The RK3528 TSADC is close to the RK3568 one but needs its own code table,
@@ -22,7 +22,7 @@ Signed-off-by: wenziwanka <tech@wenziwanka.com>
  1 file changed, 126 insertions(+)
 
 diff --git a/drivers/thermal/rockchip_thermal.c b/drivers/thermal/rockchip_thermal.c
-index c49ddf7..a6e7b25 100644
+index 2668550..2aad0bb 100644
 --- a/drivers/thermal/rockchip_thermal.c
 +++ b/drivers/thermal/rockchip_thermal.c
 @@ -234,6 +234,19 @@ struct rockchip_thermal_data {
@@ -140,7 +140,7 @@ index c49ddf7..a6e7b25 100644
  static void rk_tsadcv8_initialize(struct regmap *grf, void __iomem *regs,
  				  enum tshut_polarity tshut_polarity)
  {
-@@ -1280,6 +1374,34 @@ static const struct rockchip_tsadc_chip rk3399_tsadc_data = {
+@@ -1302,6 +1396,34 @@ static const struct rockchip_tsadc_chip rk3399_tsadc_data = {
  	},
  };
  
@@ -175,7 +175,7 @@ index c49ddf7..a6e7b25 100644
  static const struct rockchip_tsadc_chip rk3568_tsadc_data = {
  	/* cpu, gpu */
  	.chn_offset = 0,
-@@ -1383,6 +1505,10 @@ static const struct of_device_id of_rockchip_thermal_match[] = {
+@@ -1409,6 +1531,10 @@ static const struct of_device_id of_rockchip_thermal_match[] = {
  		.compatible = "rockchip,rk3399-tsadc",
  		.data = (void *)&rk3399_tsadc_data,
  	},

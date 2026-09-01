@@ -1,0 +1,17 @@
+[Unit]
+Description=W132D BLE voice remote bridge (CMIOT_REMOTE)
+After=bluetooth.service
+Requires=bluetooth.service
+PartOf=bluetooth.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStartPre=/usr/local/bin/w132d-bt-smp-ensure
+ExecStart=/usr/bin/python3 /usr/local/bin/w132d-ble-remote.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

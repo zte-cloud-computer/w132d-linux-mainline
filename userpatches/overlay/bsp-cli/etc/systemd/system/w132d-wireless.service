@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=W132D UWE5622 WiFi/Bluetooth kernel transport
+After=local-fs.target systemd-modules-load.service
+Before=NetworkManager.service w132d-bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/modprobe kpp
+ExecStart=/sbin/modprobe ecc
+ExecStart=/sbin/modprobe ecdh_generic
+ExecStart=/sbin/modprobe cmac
+ExecStart=/sbin/modprobe rfkill
+ExecStart=/sbin/modprobe bluetooth
+ExecStart=/sbin/modprobe hci_uart
+ExecStart=/sbin/modprobe cfg80211
+ExecStart=/sbin/modprobe uwe5622_bsp_sdio
+ExecStart=/sbin/modprobe sprdwl_ng
+ExecStart=/sbin/modprobe sprdbt_tty
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

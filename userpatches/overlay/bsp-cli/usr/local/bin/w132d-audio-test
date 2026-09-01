@@ -1,0 +1,95 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# W132D 3.5mm 耳机/话筒实机自测
+#   放音：左 -> 右 -> 双声道，1kHz
+#   录音：10 秒，逐秒报电平；判据是「峰值比本底高多少」，不是固定阈值
+#         （本底会随 PGA 和 Mic Boost 变，写死阈值会误判）
+# 用法: w132d-audio-test [放音幅度 0-32767，默认 12000]
+set -u
+AMP=${1:-12000}
+PLAY=$(aplay -l 2>/dev/null | sed -n 's/^card [0-9]*: \([A-Za-z0-9_]*\).*/\1/p' | head -1)
+CAP=$(arecord -l 2>/dev/null | sed -n 's/^card [0-9]*: \([A-Za-z0-9_]*\).*/\1/p' | head -1)
+echo "放音卡: ${PLAY:-无}   录音卡: ${CAP:-无}"
+echo "耳机插入检测: $(amixer -c "$PLAY" cget numid=1 2>/dev/null | sed -n 's/.*values=//p' | head -1)  (on/1=已插入)"
+echo "麦克风偏置 SARADC ch2: $(cat /sys/bus/iio/devices/iio:device0/in_voltage2_raw 2>/dev/null)  (只有录音时才会升起来)"
+echo
+
+python3 - "$AMP" <<'PY'
+import wave, struct, math, sys
+amp = int(sys.argv[1]); sr = 48000
+def seg(n, l, r, f=1000):
+    o = []
+    for i in range(int(sr*n)):
+        v = int(amp*math.sin(2*math.pi*f*i/sr))
+        o.append(struct.pack("<hh", v if l else 0, v if r else 0))
+    return b"".join(o)
+w = wave.open("/tmp/w132d-lr.wav", "w")
+w.setnchannels(2); w.setsampwidth(2); w.setframerate(sr)
+w.writeframes(seg(0.5,0,0) + seg(1.5,1,0) + seg(0.5,0,0) + seg(1.5,0,1) + seg(0.5,0,0) + seg(1.5,1,1))
+w.close()
+o = []
+for i in range(int(sr*0.25)):
+    v = int(9000*math.sin(2*math.pi*1760*i/sr)); o.append(struct.pack("<hh", v, v))
+w = wave.open("/tmp/w132d-beep.wav", "w")
+w.setnchannels(2); w.setsampwidth(2); w.setframerate(sr)
+w.writeframes(b"".join(o)); w.close()
+PY
+
+echo "▶ 放音 6 秒：静音 / 【左】1.5s / 静音 / 【右】1.5s / 静音 / 【双】1.5s"
+aplay -D default -q /tmp/w132d-lr.wav
+sleep 1                    # acodec 只有一路 substream，不等一下下一个 aplay 会 EBUSY
+echo
+
+echo "🎤 倒数 3 秒后「嘀」一声开始录音，听到嘀声就对着耳麦持续说话"
+for i in 3 2 1; do echo "   $i..."; sleep 1; done
+aplay -D default -q /tmp/w132d-beep.wav
+sleep 1
+echo "   —— 现在说话 ——"
+arecord -D default -f S16_LE -r 16000 -c 2 -d 10 /tmp/w132d-mic.wav 2>/dev/null
+echo "   —— 结束 ——"
+echo
+
+python3 - <<'PY'
+import wave, struct, math
+w = wave.open("/tmp/w132d-mic.wav"); sr = w.getframerate()
+d = w.readframes(w.getnframes())
+s = struct.unpack("<%dh" % (len(d)//2), d)
+db = lambda x: 20*math.log10(x/32768 + 1e-12)
+
+# 100ms 一格，跳过第 0 秒的 ES7202 上电瞬态
+env = {0: [], 1: []}
+for c in (0, 1):
+    v = s[c::2]
+    for j in range(10, 100):
+        seg = v[int(j*0.1*sr):int((j+1)*0.1*sr)]
+        if not seg:
+            break
+        env[c].append(db(math.sqrt(sum(x*x for x in seg)/len(seg))))
+
+print("逐秒电平 (dBFS)：")
+print("  秒 :   ch0     ch1")
+for t in range(1, 10):
+    row = []
+    for c in (0, 1):
+        seg = s[t*sr*2 + c:(t+1)*sr*2:2]
+        row.append(db(math.sqrt(sum(x*x for x in seg)/len(seg))))
+    print("  %2d : %6.1f  %6.1f" % (t, row[0], row[1]))
+print()
+for c in (0, 1):
+    e = sorted(env[c])
+    floor = e[len(e)//4]          # 下四分位当本底
+    peak = e[-2]                  # 次高，躲开单点脉冲
+    print("  ch%d: 本底 %.1f dBFS  峰值 %.1f dBFS  信噪比 %+.1f dB  %s"
+          % (c, floor, peak, peak - floor,
+             "← 收到声音了 ✅" if peak - floor > 10 else "← 只有本底噪声"))
+print()
+print("耳麦一般是单麦，接在 ch0；ch1 没接东西，只有放大器自噪声，属正常。")
+PY
+echo
+echo "录音增益  模拟 ES7202 PGA (0-12, 每级 3dB):  amixer -c $CAP cset numid=1 12"
+echo "          数字 softvol (-20~+20dB, 40=0dB):  amixer -c $CAP sset 'Mic Boost' 52"
+echo "放音音量  模拟 LINEOUT (0-30, 每级 1.5dB, 26=0dB, 30=+6dB 已是硬件上限):"
+echo "                                             amixer -c $PLAY sset 'DAC LEFT LINEOUT' 30"
+echo "          数字增益 (0-255, 每级 0.5dB, 225=0dB, 255=+15dB, 会削大信号):"
+echo "                                             amixer -c $PLAY sset 'DAC Digital' 245"
+echo "改完存盘                                     alsactl store"

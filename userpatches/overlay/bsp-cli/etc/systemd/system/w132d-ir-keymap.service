@@ -1,0 +1,12 @@
+[Unit]
+Description=Load W132D IR keymap
+After=systemd-modules-load.service
+ConditionPathExists=/sys/class/rc/rc0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/ir-keytable -c -w /etc/rc_keymaps/w132d.toml -s rc0
+
+[Install]
+WantedBy=multi-user.target
