@@ -1,0 +1,2 @@
+# 厂商 RF 配置按字节原样保存：是 CRLF 就保持 CRLF，git 不得做行尾转换
+userpatches/overlay/bsp-cli/lib/firmware/** -text

@@ -1,0 +1,97 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# W132D 面板指示灯。
+#
+# ── 硬件事实（2026-08-27 实机逐个点亮确认）────────────────────
+# 面板上只有**一颗双色灯**（红+绿共位）。原厂 DTB 里定义的 4 颗中，
+# net-red/net-green 那两个引脚**没有接实物** —— 点了看不见。
+# 本脚本仍然驱动它们（代价为零），将来若有硬件直接可用。
+#
+# 可用颜色：灭 / 绿 / 红 / 红绿同亮。闪烁靠 timer 触发器（delay_on/off 任意 ms）。
+#
+# ── 灯语（pwr 灯，唯一有实物的那颗）──────────────────────────
+#   🔴 红常亮    启动中    —— DT default-state=on，内核一起来就亮，到本服务就绪为止
+#                关机中    —— 本脚本退出时的 cleanup
+#   🟢 绿常亮    正常运行  —— 静止不闪（闪烁会干扰，用家明确不要）
+#   🟢 绿慢闪    故障      —— 有 systemd 单元 failed
+#   🔴 红慢闪    预警      —— SoC 温度 ≥85°C（热降频第一档是 95°C）
+#   🟡 红绿同亮  内核panic —— panic 触发器点红，绿还亮着 → 自然同亮
+# 优先级：故障 > 预警 > 正常。
+#
+# ── 四个设计决定 ──────────────────────────────────────────────
+# 1. **「同亮」只留给 panic**（最严重、且不可恢复）。它是**免费的**：
+#    panic 触发器只能控制红灯，触发时绿灯还亮着，自然形成同亮 ——
+#    零代码，且用户态已经死了照样有效。
+# 2. **故障用绿慢闪**：绿=用户态还活着、还在跑，闪=有单元挂了要人管。
+#    红灯因此腾出来，故障期间仍挂着 panic 触发器 —— 故障态下 panic 依旧看得见
+#    （红亮 + 绿闪）。
+# 3. **过热用红闪而不是同亮**：95°C 才降频，85°C 时系统仍正常工作，
+#    是「注意一下」不是「出事了」。
+#    ⚠️ 唯一的盲区：预警态下红灯被 timer 触发器占用，panic 触发器不在它身上，
+#    此时若 panic，红灯只会停在当时的亮/灭状态。属边缘情况，接受。
+# 4. **网络状态不进 pwr 灯**（用家指定），只驱动 lan 灯。
+set -euo pipefail
+IFACE="${W132D_LED_IFACE:-end0}"
+L=/sys/class/leds
+PG=$L/green:power
+PR=$L/red:power
+NG=$L/green:lan
+NR=$L/red:lan
+TEMP_WARN="${W132D_LED_TEMP_WARN:-85000}"   # 可用环境变量压低以便测试
+BLINK_MS=1000
+INTERVAL="${W132D_LED_INTERVAL:-2}"
+
+w(){    [ -e "$1/brightness" ] && echo "$2" > "$1/brightness" 2>/dev/null || true; }
+trig(){ [ -e "$1/trigger" ]    && echo "$2" > "$1/trigger"    2>/dev/null || true; }
+blink(){ trig "$1" timer
+         [ -e "$1/delay_on"  ] && echo "$BLINK_MS" > "$1/delay_on"  2>/dev/null || true
+         [ -e "$1/delay_off" ] && echo "$BLINK_MS" > "$1/delay_off" 2>/dev/null || true; }
+
+# 红灯交给内核的 panic 触发器：平时灭，panic 时亮。
+# 顺序不能换 —— 见下方 case 里的说明。
+arm_panic(){ trig "$PR" none; w "$PR" 0; trig "$PR" panic; }
+
+# ── 启动完成：红灭、绿亮，并把 panic 触发器挂上 ──
+# 先接管红灯（清掉 DT 的 default-state=on），再点绿灯。
+arm_panic
+w "$PG" 1
+
+cleanup(){
+  # 退出时别留下"一切正常"的假象：绿灭、红亮（= 关机中/服务挂了）
+  trig "$PG" none; w "$PG" 0
+  trig "$PR" none; w "$PR" 1
+  w "$NG" 0; w "$NR" 0
+  exit 0
+}
+trap cleanup TERM INT EXIT
+
+state=""   # 只在状态变化时动灯，避免每 2 秒重复写 sysfs
+while :; do
+  failed=$(systemctl list-units --state=failed --no-legend 2>/dev/null | wc -l)
+  temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo 0)
+  link=0
+  [ "$(cat /sys/class/net/$IFACE/carrier 2>/dev/null || echo 0)" = "1" ] && link=1
+
+  if   [ "$failed" -gt 0 ];          then new=fault   # 🟢 绿慢闪
+  elif [ "$temp" -ge "$TEMP_WARN" ]; then new=warn    # 🔴 红慢闪
+  else                                    new=ok      # 🟢 绿常亮
+  fi
+
+  if [ "$new" != "$state" ]; then
+    case "$new" in
+      # 每个分支都把两颗灯写全，别依赖上一个状态残留
+      # ⚠️ 红灯必须「先 none、再灭、最后挂 panic」：内核 brightness_store() 在
+      #    写入 0 时会调 led_trigger_remove()，先挂触发器再写 0 会把它悄悄摘掉。
+      fault) arm_panic;             blink "$PG" ;;                       # 绿慢闪，红仍守着 panic
+      warn)  trig "$PG" none;  w "$PG" 0; blink "$PR" ;;                 # 红慢闪、绿灭
+      ok)    trig "$PG" none;  w "$PG" 1; arm_panic ;;                   # 绿常亮，红交回 panic
+    esac
+    state="$new"
+  fi
+
+  # lan 灯：目前无实物，逻辑保留（将来有硬件直接可用）
+  w "$NG" "$link"
+  w "$NR" $((1 - link))
+
+  sleep "$INTERVAL"
+done

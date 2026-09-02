@@ -1,0 +1,9 @@
+# 本板的内核包与 Armbian 官方的**同名**（linux-image-edge-rockchip64 —— family 共用内核，
+# 名字由 BRANCH-LINUXFAMILY 决定），而官方那份没有 rk3528-w132d.dtb、也没有本板的补丁。
+# 镜像默认开着 apt.armbian.com，一旦官方版本号追上来，apt upgrade 就会把它装上，
+# 设备直接起不来。所以禁止从 apt.armbian.com 取这三个包；本板内核只从本项目的
+# 发布物 / 软件源装（tools/verify-debs.sh 验过的那份）。
+# 补丁进了 armbian/build 之后删掉这个文件即可。
+Package: linux-image-edge-rockchip64 linux-dtb-edge-rockchip64 linux-headers-edge-rockchip64
+Pin: origin apt.armbian.com
+Pin-Priority: -1

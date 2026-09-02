@@ -1,0 +1,88 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# 开启一次蓝牙遥控配对窗口（复刻原厂 persist.sys.ch.bt.pair.timeout=600000）。
+#
+# 平时桥接「已绑定就不扫描、只连」——与原厂 "has device bonded, not connect"
+# 一致。要（重新）配对必须显式开窗口：本命令会让桥接解绑旧记录并开始扫描，
+# 因为遥控器进入配对模式时会清掉自己那侧的密钥，本地不清就只会
+# Encryption Change: PIN or Key Missing。
+#
+# 用法: w132d-ble-pair [--force] [分钟数，默认 10]
+#
+# 默认拒绝破坏一个已经有 LTK 的绑定。确实要换遥控器或重建密钥时必须显式
+# 加 --force；重复执行一个尚未结束的配对会话只重新附着日志，不重写会话，
+# 避免旧 Pair() 回调误删新窗口，也避免刚配好又立刻被第二次命令解绑。
+set -euo pipefail
+
+PAIR_FLAG=/run/w132d-ble-pair-until
+PAIR_LOCK=/run/w132d-ble-pair.lock
+FORCE=0
+MIN=10
+SEEN_MIN=0
+
+usage() {
+  echo "用法: w132d-ble-pair [--force] [分钟数，1-60，默认 10]" >&2
+}
+
+for arg in "$@"; do
+  case "$arg" in
+    --force) FORCE=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *)
+      if [ "$SEEN_MIN" = 1 ]; then usage; exit 2; fi
+      MIN=$arg
+      SEEN_MIN=1
+      ;;
+  esac
+done
+
+if ! [[ "$MIN" =~ ^[0-9]+$ ]] || (( MIN < 1 || MIN > 60 )); then
+  usage
+  exit 2
+fi
+
+# Serialize only the short session update.  The journal follower must not keep
+# the lock, otherwise a later invocation would appear to hang behind the first
+# terminal even though the pairing session is already active.
+exec 9>"$PAIR_LOCK"
+flock -x 9
+
+NOW=$(date +%s)
+if [ -r "$PAIR_FLAG" ]; then
+  read -r ACTIVE_END _ACTIVE_TOKEN < "$PAIR_FLAG" || true
+  if [[ "${ACTIVE_END:-}" =~ ^[0-9]+$ ]] && (( ACTIVE_END > NOW )); then
+    echo "已有配对窗口正在运行（至 $(date -d "@$ACTIVE_END" '+%H:%M:%S')）。"
+    echo "本次不会重新解绑，只重新附着实时日志。"
+    flock -u 9
+    exec journalctl -u w132d-ble-remote -f -o cat -n 0
+  fi
+fi
+
+shopt -s nullglob
+for INFO in /var/lib/bluetooth/*/*/info; do
+  NAME=$(sed -n 's/^Name=//p' "$INFO" | head -n 1)
+  if [[ "$NAME" =~ ^(CMCC_Voice|IFLY|YYYKQ|电信) ]] &&
+     grep -Eq '^\[(LongTermKey|PeripheralLongTermKey)\]$' "$INFO"; then
+    if [ "$FORCE" = 0 ]; then
+      ADDR=$(basename "$(dirname "$INFO")")
+      echo "遥控器 $NAME ($ADDR) 已有绑定密钥；为防误删，本次未重新配对。"
+      echo "确实需要清除并重建密钥时执行: w132d-ble-pair --force $MIN"
+      exit 0
+    fi
+  fi
+done
+
+TOKEN=$(cat /proc/sys/kernel/random/uuid)
+END=$(( NOW + MIN * 60 ))
+umask 022
+PAIR_TMP=${PAIR_FLAG}.$$
+trap 'rm -f "$PAIR_TMP"' EXIT
+printf '%s %s fresh\n' "$END" "$TOKEN" > "$PAIR_TMP"
+mv "$PAIR_TMP" "$PAIR_FLAG"
+trap - EXIT
+flock -u 9
+echo "配对窗口已开启 ${MIN} 分钟（至 $(date -d "@$END" '+%H:%M:%S')，会话 ${TOKEN%%-*}）"
+echo "现在按住遥控器的配对组合键约 5 秒，让指示灯快闪。"
+echo
+echo "实时日志（Ctrl-C 退出，不影响配对）:"
+exec journalctl -u w132d-ble-remote -f -o cat -n 0

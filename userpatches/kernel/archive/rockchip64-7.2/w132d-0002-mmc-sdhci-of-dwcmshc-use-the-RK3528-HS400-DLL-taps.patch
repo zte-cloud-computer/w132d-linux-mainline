@@ -1,0 +1,111 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wenziwanka <tech@wenziwanka.com>
+Date: Wed, 2 Sep 2026 06:07:24 +0000
+Subject: [PATCH 2/5] mmc: sdhci-of-dwcmshc: use the RK3528 HS400 DLL taps
+
+The revision==1 HS400 path hardcodes the RK3588 DLL taps (10/8/4).  The
+RK3528 needs 6/6/3; with the RK3588 values the eMMC does not enumerate
+at HS400 at all.  The correct values come from the GPL-2.0 Rockchip BSP
+(drivers/mmc/host/sdhci-of-dwcmshc.c, rk3528_drvdata).
+
+Add three optional tap overrides to struct rockchip_pltfm_data, keeping
+the existing defaults when they are zero, and a RK3528 pdata that fills
+them in.
+
+Tested on a ZTE Cloud Computer W132D (RK3528): eMMC enumerates and runs
+at HS400 with enhanced strobe and command queueing enabled.
+
+Signed-off-by: wenziwanka <tech@wenziwanka.com>
+---
+ drivers/mmc/host/sdhci-of-dwcmshc.c | 46 ++++++++++++++++++++++++++---
+ 1 file changed, 42 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/mmc/host/sdhci-of-dwcmshc.c b/drivers/mmc/host/sdhci-of-dwcmshc.c
+index 5ec5906..60a4235 100644
+--- a/drivers/mmc/host/sdhci-of-dwcmshc.c
++++ b/drivers/mmc/host/sdhci-of-dwcmshc.c
+@@ -347,6 +347,14 @@ struct rockchip_pltfm_data {
+ 	 * than on revision == 1 (which is shared by all revision-1 SoCs).
+ 	 */
+ 	bool needs_hs400_dll_calibration;
++	/*
++	 * Optional HS400 DLL tap overrides for revision-1 SoCs that do not use
++	 * the calibration above.  Ported from the GPL-2.0 Rockchip BSP.  Zero
++	 * keeps the generic values, so existing SoCs are unaffected.
++	 */
++	u8 hs400_tx_tap;
++	u8 hs400_cmd_tap;
++	u8 hs400_strbin_tap;
+ };
+ 
+ static void dwcmshc_enable_card_clk(struct sdhci_host *host)
+@@ -895,13 +903,18 @@ static void dwcmshc_rk3568_set_clock(struct sdhci_host *host, unsigned int clock
+ 				DLL_TAP_VALUE_SEL |
+ 				dll_lock_value << DLL_TAP_VALUE_OFFSET;
+ 		} else {
+-			/* rk3588 and other revision-1 SoCs: original fixed taps */
+-			txclk_tapnum = DLL_TXCLK_TAPNUM_90_DEGREES;
++			/*
++			 * rk3588 and other revision-1 SoCs: fixed taps, with
++			 * optional per-SoC overrides (rk3528 needs 6/6/3).
++			 */
++			txclk_tapnum = rockchip_pdata->hs400_tx_tap ?:
++				       DLL_TXCLK_TAPNUM_90_DEGREES;
+ 
+ 			extra = DLL_CMDOUT_SRC_CLK_NEG |
+ 				DLL_CMDOUT_EN_SRC_CLK_NEG |
+ 				DWCMSHC_EMMC_DLL_DLYENA |
+-				DLL_CMDOUT_TAPNUM_90_DEGREES |
++				(rockchip_pdata->hs400_cmd_tap ?:
++				 DLL_CMDOUT_TAPNUM_90_DEGREES) |
+ 				DLL_CMDOUT_TAPNUM_FROM_SW;
+ 		}
+ 		sdhci_writel(host, extra, DECMSHC_EMMC_DLL_CMDOUT);
+@@ -925,7 +938,8 @@ static void dwcmshc_rk3568_set_clock(struct sdhci_host *host, unsigned int clock
+ 			 DLL_TAP_VALUE_SEL |
+ 			 dll_lock_value << DLL_TAP_VALUE_OFFSET;
+ 	else
+-		extra |= DLL_STRBIN_TAPNUM_DEFAULT;
++		extra |= rockchip_pdata->hs400_strbin_tap ?:
++			 DLL_STRBIN_TAPNUM_DEFAULT;
+ 	sdhci_writel(host, extra, DWCMSHC_EMMC_DLL_STRBIN);
+ 
+ enable_clk:
+@@ -2177,6 +2191,26 @@ static const struct cqhci_host_ops rk35xx_cqhci_ops = {
+ 	.set_tran_desc	= dwcmshc_set_tran_desc,
+ };
+ 
++static const struct rockchip_pltfm_data sdhci_dwcmshc_rk3528_pdata = {
++	.dwcmshc_pdata = {
++		.pdata = {
++			.ops = &sdhci_dwcmshc_rk35xx_ops,
++			.quirks = SDHCI_QUIRK_CAP_CLOCK_BASE_BROKEN |
++				  SDHCI_QUIRK_BROKEN_TIMEOUT_VAL,
++			.quirks2 = SDHCI_QUIRK2_PRESET_VALUE_BROKEN |
++				   SDHCI_QUIRK2_CLOCK_DIV_ZERO_BROKEN,
++		},
++		.cqhci_host_ops = &rk35xx_cqhci_ops,
++		.init = dwcmshc_rk35xx_init,
++		.postinit = dwcmshc_rk35xx_postinit,
++	},
++	.revision = 1,
++	/* Rockchip BSP rk3528_drvdata: hs400 tx/cmd/strbin = 6/6/3 */
++	.hs400_tx_tap = 6,
++	.hs400_cmd_tap = 6,
++	.hs400_strbin_tap = 3,
++};
++
+ static const struct rockchip_pltfm_data sdhci_dwcmshc_rk3568_pdata = {
+ 	.dwcmshc_pdata = {
+ 		.pdata = {
+@@ -2392,6 +2426,10 @@ static const struct of_device_id sdhci_dwcmshc_dt_ids[] = {
+ 		.compatible = "canaan,k230-sdio",
+ 		.data = &k230_sdio_data.dwcmshc_pdata,
+ 	},
++	{
++		.compatible = "rockchip,rk3528-dwcmshc",
++		.data = &sdhci_dwcmshc_rk3528_pdata,
++	},
+ 	{
+ 		.compatible = "rockchip,rk3588-dwcmshc",
+ 		.data = &sdhci_dwcmshc_rk3588_pdata,

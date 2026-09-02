@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wenziwanka <tech@wenziwanka.com>
+Date: Wed, 2 Sep 2026 09:30:00 +0000
+Subject: [PATCH] unisocwcn: free the firmware buffer, not the advanced data pointer
+
+marlin_request_firmware() reads the firmware into a vmalloc() buffer and
+points both mfirmware->data and mfirmware->priv at it.
+marlin_firmware_parse_image() then advances data past the WCNM pack
+header to the image selected for the chip (and the function-mask path
+advances it by 8), but priv keeps the original address.
+
+marlin_release_firmware() frees mfirmware->data. With a WCNM pack such
+as wcnmodem-38222.bin this is not the address vmalloc() returned, so
+vfree() warns ("Trying to vfree() nonexistent vm area") and the buffer
+leaks on every power-on:
+
+  WARNING: mm/vmalloc.c:3342 at remove_vm_area+0x60/0x6c
+  WARNING: mm/vmalloc.c:3477 at vfree+0x260/0x284
+
+The reload path in marlin_firmware_parse_image() already frees priv.
+Do the same here.
+
+Tested on a ZTE W132D (UWE5623, Marlin3E AB) with wcnmodem-38222.bin.
+
+Signed-off-by: wenziwanka <tech@wenziwanka.com>
+---
+
+--- a/drivers/net/wireless/uwe5622/unisocwcn/platform/wcn_boot.c
++++ b/drivers/net/wireless/uwe5622/unisocwcn/platform/wcn_boot.c
+@@ -1291,7 +1291,12 @@
+ 		if (mfirmware->is_from_fs)
+ 			release_firmware(mfirmware->priv);
+ 		else
+-			vfree(mfirmware->data);
++			/*
++			 * data may have been advanced past the WCNM pack header
++			 * (marlin_firmware_parse_image) or the 8-byte function
++			 * mask; priv still holds what vmalloc() returned.
++			 */
++			vfree(mfirmware->priv);
+ 		kfree(mfirmware);
+ 	}
+ }

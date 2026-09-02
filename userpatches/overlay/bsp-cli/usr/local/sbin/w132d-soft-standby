@@ -1,0 +1,557 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""W132D IR/BLE power-key software standby daemon.
+
+The box itself always stays awake.  Standby means:
+  1. send HDMI-CEC Standby when a usable CEC address exists;
+  2. set the Rockchip HDMI connector's DRM DPMS property to Off;
+  3. turn off only the green power LED.
+
+Wake performs the inverse.  Input devices are never grabbed, so all non-power
+keys remain visible to the rest of the system.
+"""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import glob
+import logging
+import os
+from pathlib import Path
+import queue
+import re
+import select
+import signal
+import struct
+import subprocess
+import sys
+import threading
+import time
+from typing import Sequence
+
+
+IR_INPUT_DEVICE = "/dev/input/by-path/platform-ir-receiver-event"
+INPUT_NAMES = {"gpio_ir_recv", "CMIOT_REMOTE Keyboard"}
+CEC_DEVICE = "/dev/cec0"
+RUNTIME_DIR = Path("/run/w132d-soft-standby")
+STATE_FILE = RUNTIME_DIR / "state"
+LOCK_FILE = RUNTIME_DIR / "lock"
+POWER_LED = Path("/sys/class/leds/green:power/brightness")
+
+EV_SYN = 0x00
+EV_KEY = 0x01
+EV_MSC = 0x04
+SYN_REPORT = 0x00
+MSC_SCAN = 0x04
+KEY_POWER = 116
+KEY_PRESS = 1
+INPUT_EVENT = struct.Struct("@llHHI")
+POWER_SCANCODES = {0x22DC, 0x00070066, 0x000C0030}
+POWER_DEBOUNCE_SECONDS = 0.5
+RAW_SCAN_GAP_SECONDS = 0.5
+
+STATE_AWAKE = "awake"
+STATE_STANDBY = "standby"
+
+LOG = logging.getLogger("w132d-soft-standby")
+STOP = False
+
+
+def setup_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s: %(message)s",
+        stream=sys.stderr,
+    )
+
+
+def ensure_runtime() -> None:
+    RUNTIME_DIR.mkdir(mode=0o755, parents=True, exist_ok=True)
+
+
+def read_state() -> str:
+    try:
+        state = STATE_FILE.read_text(encoding="ascii").strip()
+    except FileNotFoundError:
+        return STATE_AWAKE
+    return state if state in (STATE_AWAKE, STATE_STANDBY) else STATE_AWAKE
+
+
+def write_state(state: str) -> None:
+    tmp = STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(state + "\n", encoding="ascii")
+    tmp.replace(STATE_FILE)
+
+
+def run(
+    argv: Sequence[str],
+    *,
+    timeout: float = 8.0,
+    quiet: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        proc = subprocess.run(
+            list(argv),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        if not quiet:
+            LOG.warning("command failed: %s: %s", " ".join(argv), exc)
+        return subprocess.CompletedProcess(list(argv), 127, str(exc), None)
+    if proc.returncode and not quiet:
+        detail = proc.stdout.strip().replace("\n", "; ")
+        LOG.warning("command rc=%d: %s%s", proc.returncode, " ".join(argv),
+                    f" ({detail})" if detail else "")
+    return proc
+
+
+def drm_connector() -> tuple[int, Path] | None:
+    connectors = [Path(p) for p in sorted(glob.glob("/sys/class/drm/card*-HDMI-A-*"))]
+    if not connectors:
+        return None
+
+    proc = run(("modetest", "-M", "rockchip", "-c"), quiet=True)
+    if proc.returncode:
+        return None
+    ids: dict[str, int] = {}
+    for line in proc.stdout.splitlines():
+        match = re.match(r"^\s*(\d+)\s+\d+\s+\S+\s+(HDMI-A-\d+)\s+", line)
+        if match:
+            ids[match.group(2)] = int(match.group(1))
+    for connector in connectors:
+        name = connector.name.split("-", 1)[1]
+        if name in ids:
+            return ids[name], connector
+    return None
+
+
+def drm_dpms(on: bool) -> bool:
+    found = drm_connector()
+    if found is None:
+        LOG.warning("no Rockchip HDMI connector found; DRM DPMS skipped")
+        return False
+    connector_id, path = found
+    value = 0 if on else 3
+    wanted = "On" if on else "Off"
+    proc = run(("modetest", "-M", "rockchip", "-w",
+                f"{connector_id}:DPMS:{value}"))
+    try:
+        actual = (path / "dpms").read_text(encoding="ascii").strip()
+    except OSError:
+        actual = "unknown"
+    ok = proc.returncode == 0 and actual == wanted
+    if ok:
+        LOG.info("DRM %s DPMS=%s", path.name, wanted)
+    else:
+        LOG.warning("DRM DPMS requested %s, read back %s", wanted, actual)
+    return ok
+
+
+def cec_exists() -> bool:
+    if Path(CEC_DEVICE).exists():
+        return True
+    run(("modprobe", "dw_hdmi_cec"), quiet=True)
+    return Path(CEC_DEVICE).exists()
+
+
+def cec_value(option: str, pattern: str) -> str | None:
+    if not cec_exists():
+        return None
+    proc = run(("cec-ctl", "-d", CEC_DEVICE, "--skip-info", option), quiet=True)
+    if proc.returncode:
+        return None
+    match = re.search(pattern, proc.stdout.strip(), re.IGNORECASE)
+    return match.group(0).lower() if match else None
+
+
+def cec_physical_address() -> str | None:
+    address = cec_value("--physical-address", r"[0-9a-f]\.[0-9a-f]\.[0-9a-f]\.[0-9a-f]")
+    return None if address in (None, "f.f.f.f") else address
+
+
+def cec_logical_address() -> int | None:
+    value = cec_value("--logical-address", r"\b(?:[0-9]|1[0-5])\b")
+    return int(value) if value is not None else None
+
+
+def cec_prepare() -> tuple[int | None, str | None]:
+    if not cec_exists():
+        LOG.info("CEC adapter unavailable")
+        return None, None
+    physical = cec_physical_address()
+    if physical is not None:
+        run(("cec-ctl", "-d", CEC_DEVICE, "--skip-info", "--playback",
+             "--osd-name", "W132D"), timeout=8.0, quiet=True)
+    elif cec_logical_address() is None:
+        # Some TVs drop HPD in standby.  The DRM driver then reports f.f.f.f
+        # and the CEC core may discard the Playback logical address.  CEC still
+        # permits transmission from the Unregistered address, which gives us a
+        # last-resort IMAGE_VIEW_ON path while HPD is low.
+        run(("cec-ctl", "-d", CEC_DEVICE, "--skip-info", "--unregistered",
+             "--allow-unreg-fallback", "--osd-name", "W132D"),
+            timeout=4.0, quiet=True)
+    logical = cec_logical_address()
+    return logical, physical
+
+
+def cec_standby() -> bool:
+    logical, physical = cec_prepare()
+    if logical is None:
+        LOG.info("CEC standby skipped (logical=%s physical=%s)", logical, physical)
+        return False
+    proc = run(("cec-ctl", "-d", CEC_DEVICE, "--skip-info", "--from", str(logical),
+                "--to", "0", "--no-reply", "--standby"), timeout=3.0)
+    if proc.returncode == 0:
+        LOG.info("CEC Standby sent (logical=%d physical=%s)", logical, physical)
+        return True
+    return False
+
+
+def cec_wake() -> bool:
+    logical, physical = cec_prepare()
+    if logical is None:
+        LOG.info("CEC wake skipped (logical=%s physical=%s)", logical, physical)
+        return False
+    first = run(("cec-ctl", "-d", CEC_DEVICE, "--skip-info", "--from", str(logical),
+                 "--to", "0", "--no-reply", "--image-view-on"), timeout=3.0)
+    second_ok = True
+    if physical is not None:
+        second = run(("cec-ctl", "-d", CEC_DEVICE, "--skip-info", "--no-reply",
+                      "--active-source", f"phys-addr={physical}"), timeout=3.0)
+        second_ok = second.returncode == 0
+    ok = first.returncode == 0 and second_ok
+    if ok:
+        LOG.info("CEC Image View On sent (logical=%d physical=%s)", logical, physical)
+    return ok
+
+
+def power_led(on: bool) -> bool:
+    try:
+        POWER_LED.write_text("1\n" if on else "0\n", encoding="ascii")
+        LOG.info("green power LED=%s", "on" if on else "off")
+        return True
+    except OSError as exc:
+        LOG.warning("cannot set green power LED: %s", exc)
+        return False
+
+
+def hardware_matches(state: str) -> bool:
+    """Check persisted intent against the two locally observable actuators."""
+    found = drm_connector()
+    if found is None:
+        return False
+    _, connector = found
+    try:
+        dpms = (connector / "dpms").read_text(encoding="ascii").strip()
+        led = POWER_LED.read_text(encoding="ascii").strip()
+    except OSError:
+        return False
+    expected_dpms = "On" if state == STATE_AWAKE else "Off"
+    expected_led = "1" if state == STATE_AWAKE else "0"
+    return dpms == expected_dpms and led == expected_led
+
+
+def reconcile_hardware(state: str) -> None:
+    """Repair a partial transition without sending unsolicited CEC commands."""
+    awake = state == STATE_AWAKE
+    drm_dpms(awake)
+    power_led(awake)
+    write_state(state)
+    LOG.info("reconciled local hardware to state=%s", state)
+
+
+def enter_standby() -> None:
+    # CEC must be sent while the HDMI path is still active.
+    cec_standby()
+    drm_dpms(False)
+    power_led(False)
+    write_state(STATE_STANDBY)
+    LOG.info("state=%s (Linux, network and IR remain awake)", STATE_STANDBY)
+
+
+def leave_standby() -> None:
+    # Restore the source before asking the TV to select it.
+    drm_dpms(True)
+    power_led(True)
+    time.sleep(0.5)
+    cec_wake()
+    write_state(STATE_AWAKE)
+    LOG.info("state=%s", STATE_AWAKE)
+
+
+def set_state(target: str) -> None:
+    ensure_runtime()
+    with LOCK_FILE.open("a+", encoding="ascii") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        current = read_state()
+        if target == current and hardware_matches(target):
+            LOG.info("already %s", current)
+            return
+        if target == current:
+            LOG.warning("state file says %s but hardware disagrees; reapplying", target)
+        if target == STATE_STANDBY:
+            enter_standby()
+        else:
+            leave_standby()
+
+
+def toggle() -> None:
+    ensure_runtime()
+    with LOCK_FILE.open("a+", encoding="ascii") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        if read_state() == STATE_AWAKE:
+            enter_standby()
+        else:
+            leave_standby()
+
+
+def discover_input_devices(configured: Sequence[str] = ()) -> list[str]:
+    """Return deduplicated live IR/BLE evdev nodes.
+
+    IR has a stable by-path link.  The BLE bridge is a uhid device without a
+    by-path/by-id link, so find it by sysfs name on every scan; its event
+    number may change whenever the bridge is recreated.
+    """
+    candidates: list[str] = list(configured)
+    if not candidates:
+        candidates.append(IR_INPUT_DEVICE)
+        for name_file in sorted(Path("/sys/class/input").glob("event*/device/name")):
+            try:
+                name = name_file.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            if name in INPUT_NAMES:
+                candidates.append("/dev/input/" + name_file.parents[1].name)
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for path in candidates:
+        real = os.path.realpath(path)
+        if not os.path.exists(real) or real in seen:
+            continue
+        seen.add(real)
+        result.append(real)
+    return result
+
+
+def status() -> int:
+    found = drm_connector()
+    dpms = "unavailable"
+    connector = "none"
+    if found is not None:
+        _, path = found
+        connector = path.name
+        try:
+            dpms = (path / "dpms").read_text(encoding="ascii").strip()
+        except OSError:
+            dpms = "unknown"
+    led = "unknown"
+    try:
+        led = POWER_LED.read_text(encoding="ascii").strip()
+    except OSError:
+        pass
+    print(f"state={read_state()}")
+    inputs = discover_input_devices()
+    print(f"inputs={','.join(inputs) if inputs else 'unavailable'}")
+    print(f"drm_connector={connector}")
+    print(f"drm_dpms={dpms}")
+    print(f"green_power_led={led}")
+    print(f"cec_physical_address={cec_physical_address() or 'unavailable'}")
+    logical = cec_logical_address()
+    print(f"cec_logical_address={logical if logical is not None else 'unavailable'}")
+    return 0
+
+
+def stop_handler(_signum: int, _frame: object) -> None:
+    global STOP
+    STOP = True
+
+
+def power_action_worker(actions: queue.Queue[str], transitioning: threading.Event) -> None:
+    """Run slow CEC/DRM transitions away from the evdev reader.
+
+    cec-ctl and modetest can each take noticeable time.  Keeping them out of
+    the input loop prevents power presses from accumulating in the kernel
+    queue and being mistaken for fresh presses after the transition ends.
+    """
+    # SIGTERM may arrive after a power press was accepted but while CEC/DRM is
+    # still running.  Drain that one accepted action before exiting so the
+    # state file can never describe only half of a transition.
+    while not STOP or not actions.empty():
+        try:
+            source = actions.get(timeout=0.5)
+        except queue.Empty:
+            continue
+        try:
+            LOG.info("processing KEY_POWER from %s", source)
+            toggle()
+        except Exception:
+            LOG.exception("power transition failed")
+        finally:
+            transitioning.clear()
+            actions.task_done()
+
+
+def daemon(configured_inputs: Sequence[str]) -> int:
+    global STOP
+    ensure_runtime()
+    if not STATE_FILE.exists():
+        write_state(STATE_AWAKE)
+    persisted = read_state()
+    if not hardware_matches(persisted):
+        LOG.warning("startup state=%s disagrees with hardware; reconciling", persisted)
+        # Do not send CEC wake/standby merely because the daemon restarted.
+        reconcile_hardware(persisted)
+
+    signal.signal(signal.SIGTERM, stop_handler)
+    signal.signal(signal.SIGINT, stop_handler)
+    LOG.info("auto-discovering IR/BLE inputs; KEY_POWER toggles software standby")
+    actions: queue.Queue[str] = queue.Queue(maxsize=1)
+    transitioning = threading.Event()
+    worker = threading.Thread(
+        target=power_action_worker,
+        args=(actions, transitioning),
+        name="w132d-power-action",
+        daemon=False,
+    )
+    worker.start()
+
+    last_power_event = float("-inf")
+    fds: dict[int, str] = {}
+    buffers: dict[int, bytes] = {}
+    pending_scans: dict[int, tuple[float, int, bool]] = {}
+    last_raw_scans: dict[tuple[int, int], float] = {}
+    last_scan = 0.0
+
+    def enqueue_power(event_at: float, source: str) -> None:
+        nonlocal last_power_event
+        if event_at - last_power_event < POWER_DEBOUNCE_SECONDS:
+            LOG.info("ignored duplicate KEY_POWER from %s", source)
+            return
+        last_power_event = event_at
+        if transitioning.is_set():
+            LOG.info("ignored KEY_POWER during transition from %s", source)
+            return
+        transitioning.set()
+        try:
+            actions.put_nowait(source)
+        except queue.Full:
+            transitioning.clear()
+            LOG.info("ignored queued KEY_POWER from %s", source)
+
+    while not STOP:
+        now = time.monotonic()
+        if now - last_scan >= 2.0:
+            last_scan = now
+            open_paths = set(fds.values())
+            for path in discover_input_devices(configured_inputs):
+                if path in open_paths:
+                    continue
+                try:
+                    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+                except OSError as exc:
+                    LOG.warning("cannot open %s: %s", path, exc)
+                    continue
+                fds[fd] = path
+                buffers[fd] = b""
+                LOG.info("listening on %s", path)
+
+        if not fds:
+            time.sleep(1.0)
+            continue
+
+        ready, _, _ = select.select(tuple(fds), (), (), 1.0)
+        for fd in ready:
+            path = fds.get(fd, "unknown")
+            try:
+                chunk = os.read(fd, INPUT_EVENT.size * 16)
+                if not chunk:
+                    raise OSError("input device reached EOF")
+            except OSError as exc:
+                if not STOP:
+                    LOG.warning("input stream %s: %s; rescanning", path, exc)
+                os.close(fd)
+                fds.pop(fd, None)
+                buffers.pop(fd, None)
+                pending_scans.pop(fd, None)
+                for key in [key for key in last_raw_scans if key[0] == fd]:
+                    last_raw_scans.pop(key, None)
+                continue
+
+            buffer = buffers[fd] + chunk
+            while len(buffer) >= INPUT_EVENT.size:
+                raw, buffer = buffer[:INPUT_EVENT.size], buffer[INPUT_EVENT.size:]
+                sec, usec, event_type, code, value = INPUT_EVENT.unpack(raw)
+                event_at = sec + usec / 1_000_000.0
+
+                if event_type == EV_MSC and code == MSC_SCAN and value in POWER_SCANCODES:
+                    key = (fd, value)
+                    previous = last_raw_scans.get(key, float("-inf"))
+                    is_new_sequence = event_at - previous >= RAW_SCAN_GAP_SECONDS
+                    last_raw_scans[key] = event_at
+                    pending_scans[fd] = (event_at, value, is_new_sequence)
+                    continue
+
+                if event_type == EV_KEY and code == KEY_POWER:
+                    # A mapped EV_KEY is authoritative.  Clear the preceding
+                    # MSC_SCAN for press, repeat and release so SYN_REPORT does
+                    # not turn it into a second action.
+                    pending_scans.pop(fd, None)
+                    if value == KEY_PRESS:
+                        enqueue_power(event_at, path + ":KEY_POWER")
+                    continue
+
+                if event_type == EV_SYN and code == SYN_REPORT:
+                    pending = pending_scans.pop(fd, None)
+                    if pending is not None:
+                        scan_at, scancode, is_new_sequence = pending
+                        if is_new_sequence:
+                            enqueue_power(scan_at, f"{path}:MSC_SCAN=0x{scancode:x}")
+            buffers[fd] = buffer
+
+    for fd in tuple(fds):
+        os.close(fd)
+    worker.join(timeout=60.0)
+    if worker.is_alive():
+        LOG.warning("power transition still running during shutdown")
+    LOG.info("stopped")
+    return 0
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    actions = parser.add_mutually_exclusive_group(required=True)
+    actions.add_argument("--daemon", action="store_true", help="listen for IR/BLE KEY_POWER")
+    actions.add_argument("--toggle", action="store_true", help="toggle immediately")
+    actions.add_argument("--standby", action="store_true", help="enter software standby")
+    actions.add_argument("--wake", action="store_true", help="leave software standby")
+    actions.add_argument("--status", action="store_true", help="show current state")
+    parser.add_argument("--input", action="append", default=[],
+                        help="input event device (repeatable; default: auto-discover IR and BLE)")
+    return parser.parse_args()
+
+
+def main() -> int:
+    setup_logging()
+    args = parse_args()
+    if args.daemon:
+        return daemon(args.input)
+    if args.toggle:
+        toggle()
+        return 0
+    if args.standby:
+        set_state(STATE_STANDBY)
+        return 0
+    if args.wake:
+        set_state(STATE_AWAKE)
+        return 0
+    return status()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
