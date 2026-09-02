@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""从 Rockchip vendor storage 读出厂 MAC，设到有线网卡上。
+
+## 为什么需要
+
+厂商 U-Boot 本该把 vendor storage 里的 MAC 修进 DTB（ethernet0 别名），但在本板的
+主线 DTB 上没有生效（2026-09-02 首刷实测：网卡拿到随机地址，systemd 再按 machine-id
+派生成一个"本机稳定"的本地管理地址）。结果是每台机器、每次重刷都是不同的 MAC，
+DHCP 租约跟着变，按 MAC 找设备的办法失效。老构建链是自己读 vendor storage 的。
+
+## 格式（Rockchip rk_vendor_storage / U-Boot vendor.c）
+
+eMMC 扇区 7168 起（EMMC_VENDOR_PART_START = 1024*7），4 份副本各 128 扇区（64 KiB）。
+这一段在我们永不写入的 64–24575 之内，只读。每份：
+
+    u32 tag = 0x524B5644 ("RKVD")     u32 version
+    u16 next_index  u16 item_num  u16 free_offset  u16 free_size
+    struct { u16 id; u16 offset; u16 size; u16 flag; } item[126]   -> 数据区从 1024 起
+    u8  data[...]                       u32 hash   u32 version2
+
+取 version == version2 且 version 最大的那份。条目 id：1=SN 2=WiFi MAC 3=LAN MAC 4=BT MAC。
+
+用法：
+    w132d-vendor-mac                 只打印（SN 与三个 MAC）
+    w132d-vendor-mac --apply         设到 rk_gmac-dwmac 驱动的第一块网卡上
+    w132d-vendor-mac --dump FILE     从文件解析（离线测试）
+读不到/格式不对时打印警告并退出 0：这是锦上添花，不能把开机卡住。
+"""
+import os
+import struct
+import subprocess
+import sys
+
+DEV = "/dev/mmcblk0"
+PART_START_SECTOR = 1024 * 7
+PART_SECTORS = 128
+PART_COPIES = 4
+TAG = 0x524B5644
+ITEM_NUM = 126
+DATA_OFF = 16 + ITEM_NUM * 8
+ITEM_IDS = {1: "SN", 2: "WIFI_MAC", 3: "LAN_MAC", 4: "BT_MAC"}
+
+
+def parse(blob):
+    """返回 {id: bytes}，或 None（无效副本）"""
+    if len(blob) < PART_SECTORS * 512:
+        return None
+    tag, version, _next, item_num, _foff, _fsize = struct.unpack_from("<IIHHHH", blob, 0)
+    version2 = struct.unpack_from("<I", blob, PART_SECTORS * 512 - 4)[0]
+    if tag != TAG or version != version2 or item_num > ITEM_NUM:
+        return None
+    items = {}
+    for i in range(item_num):
+        iid, off, size, _flag = struct.unpack_from("<HHHH", blob, 16 + i * 8)
+        start = DATA_OFF + off
+        if start + size > len(blob):
+            continue
+        items[iid] = blob[start:start + size]
+    return version, items
+
+
+def read_best(src):
+    best = None
+    with open(src, "rb") as f:
+        for n in range(PART_COPIES):
+            f.seek((PART_START_SECTOR + n * PART_SECTORS) * 512)
+            r = parse(f.read(PART_SECTORS * 512))
+            if r and (best is None or r[0] > best[0]):
+                best = r
+    return best
+
+
+def mac_ok(b):
+    return len(b) == 6 and any(b) and not (b[0] & 1)
+
+
+def fmt(b):
+    return ":".join("%02x" % x for x in b)
+
+
+def gmac_ifaces():
+    out = []
+    for name in sorted(os.listdir("/sys/class/net")):
+        drv = os.path.join("/sys/class/net", name, "device", "driver")
+        if os.path.islink(drv) and os.path.basename(os.readlink(drv)) == "rk_gmac-dwmac":
+            out.append(name)
+    return out
+
+
+def main():
+    apply_ = "--apply" in sys.argv
+    src = DEV
+    if "--dump" in sys.argv:
+        src = sys.argv[sys.argv.index("--dump") + 1]
+    try:
+        best = read_best(src)
+    except OSError as e:
+        print(f"w132d-vendor-mac: 读不了 {src}: {e}", file=sys.stderr)
+        return 0
+    if not best:
+        print("w132d-vendor-mac: vendor storage 里没有有效副本（tag/version 对不上）", file=sys.stderr)
+        return 0
+    version, items = best
+    print(f"vendor storage version {version}, {len(items)} items")
+    for iid, name in ITEM_IDS.items():
+        if iid in items:
+            v = items[iid]
+            shown = fmt(v) if name.endswith("MAC") else v.rstrip(b"\0").decode("ascii", "replace")
+            print(f"  {name:9s} {shown}")
+    if not apply_:
+        return 0
+    mac = items.get(3)
+    if not mac or not mac_ok(mac):
+        print("w132d-vendor-mac: 没有可用的 LAN MAC，网卡保持现状", file=sys.stderr)
+        return 0
+    ifs = gmac_ifaces()
+    if not ifs:
+        print("w132d-vendor-mac: 没找到 rk_gmac-dwmac 的网卡", file=sys.stderr)
+        return 0
+    dev = ifs[0]
+    cur = open(f"/sys/class/net/{dev}/address").read().strip()
+    if cur == fmt(mac):
+        print(f"  {dev} 已是 {cur}")
+        return 0
+    subprocess.run(["ip", "link", "set", "dev", dev, "down"], check=False)
+    r = subprocess.run(["ip", "link", "set", "dev", dev, "address", fmt(mac)])
+    print(f"  {dev}: {cur} -> {fmt(mac)} ({'ok' if r.returncode == 0 else 'failed'})")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,8 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wenziwanka <tech@wenziwanka.com>
+Date: Wed, 2 Sep 2026 06:07:25 +0000
+Subject: [PATCH] ASoC: rockchip: add the RK3528 audio codec and the ES7202
+ PDM ADC
+
+The RK3528 has an on-chip DAC-only audio codec ("acodec") and boards
+commonly pair it with an Everest ES7202 analogue-microphone-to-PDM
+bridge for capture.  Neither driver exists in mainline.
+
+Both drivers are taken from the GPL-2.0 Rockchip BSP
+(armbian/linux-rockchip, rk-6.1-rkr5).  The changes here are limited to
+6.1 -> 7.x API adaptation:
+
+  - of_gpio.h was removed in 6.15; both drivers only use the gpiod_*
+    descriptor API, so include linux/gpio/consumer.h instead
+  - SND_SOC_DAIFMT_CBS_CFS / CBM_CFM were dropped after 6.7; use the
+    clock-provider naming (CBC_CFC / CBP_CFP)
+  - platform_driver::remove returns void since 6.11
+
+Register sequences, timings and default values are unchanged.
+
+Tested on a ZTE Cloud Computer W132D (RK3528): 3.5 mm playback through
+the on-chip codec and headset-microphone capture through the ES7202 both
+work.
+
+Signed-off-by: wenziwanka <tech@wenziwanka.com>
+---
+ sound/soc/codecs/Kconfig          |   21 +
+ sound/soc/codecs/Makefile         |    5 +
+ sound/soc/codecs/es7202.c         | 1157 +++++++++++++++++++++++++++++
+ sound/soc/codecs/es7202.h         |  102 +++
+ sound/soc/codecs/rk3528_codec.c   |  783 +++++++++++++++++++
+ sound/soc/codecs/rk3528_codec.h   |  236 ++++++
+ sound/soc/rockchip/rockchip_sai.c |    2 +
+ 7 files changed, 2306 insertions(+)
+ create mode 100644 sound/soc/codecs/es7202.c
+ create mode 100644 sound/soc/codecs/es7202.h
+ create mode 100644 sound/soc/codecs/rk3528_codec.c
+ create mode 100644 sound/soc/codecs/rk3528_codec.h
+
 diff --git a/sound/soc/codecs/Kconfig b/sound/soc/codecs/Kconfig
-index 269c31ce08143173abc996cc2936d2998c78351b..a35ddc62310973de9a2a1923ca1fb153e8c2b9e5 100644
+index e4d1391..4814db0 100644
 --- a/sound/soc/codecs/Kconfig
 +++ b/sound/soc/codecs/Kconfig
-@@ -2881,4 +2881,25 @@ config SND_SOC_LPASS_TX_MACRO
+@@ -2920,4 +2920,25 @@ config SND_SOC_LPASS_TX_MACRO
  	select SND_SOC_LPASS_MACRO_COMMON
  	tristate "Qualcomm TX Macro in LPASS(Low Power Audio SubSystem)"
  
@@ -29,10 +70,10 @@ index 269c31ce08143173abc996cc2936d2998c78351b..a35ddc62310973de9a2a1923ca1fb153
 +
  endmenu
 diff --git a/sound/soc/codecs/Makefile b/sound/soc/codecs/Makefile
-index 172861d17cfd0618b247a77d7d912f1fcacb1040..96f5734c9a2727c84ca78db1a63dbc93f9b8b116 100644
+index aa0396e..90a64c8 100644
 --- a/sound/soc/codecs/Makefile
 +++ b/sound/soc/codecs/Makefile
-@@ -883,3 +883,8 @@ obj-$(CONFIG_SND_SOC_LPASS_TX_MACRO)	+= snd-soc-lpass-tx-macro.o
+@@ -891,3 +891,8 @@ obj-$(CONFIG_SND_SOC_LPASS_TX_MACRO)	+= snd-soc-lpass-tx-macro.o
  
  # Mux
  obj-$(CONFIG_SND_SOC_SIMPLE_MUX)	+= snd-soc-simple-mux.o
@@ -43,7 +84,7 @@ index 172861d17cfd0618b247a77d7d912f1fcacb1040..96f5734c9a2727c84ca78db1a63dbc93
 +obj-$(CONFIG_SND_SOC_ES7202) += snd-soc-es7202.o
 diff --git a/sound/soc/codecs/es7202.c b/sound/soc/codecs/es7202.c
 new file mode 100644
-index 0000000000000000000000000000000000000000..da72662930da0b718072574995049ae43e49dfc1
+index 0000000..ce26e79
 --- /dev/null
 +++ b/sound/soc/codecs/es7202.c
 @@ -0,0 +1,1157 @@
@@ -1206,7 +1247,7 @@ index 0000000000000000000000000000000000000000..da72662930da0b718072574995049ae4
 +MODULE_LICENSE("GPL v2");
 diff --git a/sound/soc/codecs/es7202.h b/sound/soc/codecs/es7202.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..1a84e6de01ed6d902cdb6317f57fe07011967707
+index 0000000..95efc47
 --- /dev/null
 +++ b/sound/soc/codecs/es7202.h
 @@ -0,0 +1,102 @@
@@ -1314,7 +1355,7 @@ index 0000000000000000000000000000000000000000..1a84e6de01ed6d902cdb6317f57fe070
 +#endif
 diff --git a/sound/soc/codecs/rk3528_codec.c b/sound/soc/codecs/rk3528_codec.c
 new file mode 100644
-index 0000000000000000000000000000000000000000..0663b05c922779ab06a86e06bd9c47c6a43ab690
+index 0000000..c4b36b4
 --- /dev/null
 +++ b/sound/soc/codecs/rk3528_codec.c
 @@ -0,0 +1,783 @@
@@ -2103,7 +2144,7 @@ index 0000000000000000000000000000000000000000..0663b05c922779ab06a86e06bd9c47c6
 +MODULE_LICENSE("GPL");
 diff --git a/sound/soc/codecs/rk3528_codec.h b/sound/soc/codecs/rk3528_codec.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..db16e0a6cf50181a5d1c458e5c4738a1c4047343
+index 0000000..48003a7
 --- /dev/null
 +++ b/sound/soc/codecs/rk3528_codec.h
 @@ -0,0 +1,236 @@
@@ -2344,10 +2385,10 @@ index 0000000000000000000000000000000000000000..db16e0a6cf50181a5d1c458e5c4738a1
 +
 +#endif /* __RK3528_CODEC_H__ */
 diff --git a/sound/soc/rockchip/rockchip_sai.c b/sound/soc/rockchip/rockchip_sai.c
-index ed393e5034a49d397d0b19c9a57d379ccd8f6b6e..4c79393001b71f0359b5308e5b440f16cee30152 100644
+index 585e89f..7c2b3e0 100644
 --- a/sound/soc/rockchip/rockchip_sai.c
 +++ b/sound/soc/rockchip/rockchip_sai.c
-@@ -1512,7 +1512,9 @@ static const struct dev_pm_ops rockchip_sai_pm_ops = {
+@@ -1513,7 +1513,9 @@ static const struct dev_pm_ops rockchip_sai_pm_ops = {
  };
  
  static const struct of_device_id rockchip_sai_match[] = {

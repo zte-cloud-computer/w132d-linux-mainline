@@ -1,12 +1,12 @@
 [Unit]
 Description=W132D IR/BLE power-key software standby
-Documentation=file:/root/w132d-soft-standby-README
-After=w132d-ir-keymap.service w132d-hdmi.service
-Wants=w132d-ir-keymap.service w132d-hdmi.service
+# 本版不含 HDMI：脚本里的 CEC Standby / DRM DPMS 两步在没有 HDMI 连接器时
+# 会自行跳过（只记一条 warning），所以这里不再依赖 w132d-hdmi.service。
+After=w132d-ir-keymap.service
+Wants=w132d-ir-keymap.service
 
 [Service]
 Type=simple
-ExecStartPre=-/sbin/modprobe dw_hdmi_cec
 ExecStart=/usr/local/sbin/w132d-soft-standby --daemon
 Restart=always
 RestartSec=2

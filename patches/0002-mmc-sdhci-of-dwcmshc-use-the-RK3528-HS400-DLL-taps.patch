@@ -1,5 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wenziwanka <tech@wenziwanka.com>
+Date: Wed, 2 Sep 2026 06:07:24 +0000
+Subject: [PATCH] mmc: sdhci-of-dwcmshc: use the RK3528 HS400 DLL taps
+
+The revision==1 HS400 path hardcodes the RK3588 DLL taps (10/8/4).  The
+RK3528 needs 6/6/3; with the RK3588 values the eMMC does not enumerate
+at HS400 at all.  The correct values come from the GPL-2.0 Rockchip BSP
+(drivers/mmc/host/sdhci-of-dwcmshc.c, rk3528_drvdata).
+
+Add three optional tap overrides to struct rockchip_pltfm_data, keeping
+the existing defaults when they are zero, and a RK3528 pdata that fills
+them in.
+
+Tested on a ZTE Cloud Computer W132D (RK3528): eMMC enumerates and runs
+at HS400 with enhanced strobe and command queueing enabled.
+
+Signed-off-by: wenziwanka <tech@wenziwanka.com>
+---
+ drivers/mmc/host/sdhci-of-dwcmshc.c | 45 +++++++++++++++++++++++++++--
+ 1 file changed, 42 insertions(+), 3 deletions(-)
+
 diff --git a/drivers/mmc/host/sdhci-of-dwcmshc.c b/drivers/mmc/host/sdhci-of-dwcmshc.c
-index 29af07561a86104f9790ef9e67d9144ea5a76a65..d7c668b7382ef8ae909e1464ae155d393b883ebe 100644
+index c688f3e..a053a9f 100644
 --- a/drivers/mmc/host/sdhci-of-dwcmshc.c
 +++ b/drivers/mmc/host/sdhci-of-dwcmshc.c
 @@ -333,6 +333,13 @@ struct rockchip_pltfm_data {
@@ -55,7 +77,7 @@ index 29af07561a86104f9790ef9e67d9144ea5a76a65..d7c668b7382ef8ae909e1464ae155d39
  		DLL_STRBIN_TAPNUM_FROM_SW;
  	sdhci_writel(host, extra, DWCMSHC_EMMC_DLL_STRBIN);
  
-@@ -2128,6 +2143,26 @@ static const struct cqhci_host_ops rk35xx_cqhci_ops = {
+@@ -2122,6 +2137,26 @@ static const struct cqhci_host_ops rk35xx_cqhci_ops = {
  	.set_tran_desc	= dwcmshc_set_tran_desc,
  };
  
@@ -82,7 +104,7 @@ index 29af07561a86104f9790ef9e67d9144ea5a76a65..d7c668b7382ef8ae909e1464ae155d39
  static const struct rockchip_pltfm_data sdhci_dwcmshc_rk3568_pdata = {
  	.dwcmshc_pdata = {
  		.pdata = {
-@@ -2342,6 +2377,10 @@ static const struct of_device_id sdhci_dwcmshc_dt_ids[] = {
+@@ -2336,6 +2371,10 @@ static const struct of_device_id sdhci_dwcmshc_dt_ids[] = {
  		.compatible = "canaan,k230-sdio",
  		.data = &k230_sdio_data.dwcmshc_pdata,
  	},

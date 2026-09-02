@@ -27,7 +27,13 @@ set -uo pipefail
 
 W="${W132D_ROOT:-/w}"
 B=/build
-PATCHDIR="$W/userpatches/kernel/archive/rockchip64-7.2"
+# 测主线形态（patches/），不是 userpatches/kernel/ 里的 Armbian 形态：这里的树是纯净
+# 内核，Armbian 形态的 0002 重锚在 Armbian 补丁栈之上，纯净树上必然打不上。
+# Armbian 那一侧的漂移由真实构建验：tools/armbian-kernel.sh kernel-patch。
+PATCHDIR="$W/patches"
+DTS="$W/patches/rk3528-w132d.dts"
+# shellcheck source=tools/lib.sh
+. "$(dirname "$0")/lib.sh"
 
 VERSIONS=("$@")
 if [ "${#VERSIONS[@]}" -eq 0 ]; then
@@ -41,8 +47,9 @@ apt-get -qq install -y --no-install-recommends \
   patch device-tree-compiler curl ca-certificates >/dev/null 2>&1
 
 shopt -s nullglob
-PATCHES=("$PATCHDIR"/*.patch)
-[ "${#PATCHES[@]}" -gt 0 ] || { echo "❌ $PATCHDIR 里没有补丁 —— 先跑 tools/make-patch-series.sh"; exit 1; }
+PATCHES=("$PATCHDIR"/[0-9][0-9][0-9][0-9]-*.patch)
+[ "${#PATCHES[@]}" -gt 0 ] || { echo "❌ $PATCHDIR 里没有补丁"; exit 1; }
+[ -f "$DTS" ] || { echo "❌ 缺板级 DTS：$DTS"; exit 1; }
 
 TOTAL_FAIL=0
 TOTAL_FUZZ=0
@@ -93,6 +100,7 @@ for KVER in "${VERSIONS[@]}"; do
 
   # 板级 DTS：补丁全绿也可能因为上游 dtsi 变了而编不过
   if [ "$fail" -eq 0 ]; then
+    w132d_place_dts "$T" "$DTS" || exit 1
     make -C "$T" ARCH=arm64 CROSS_COMPILE= LOCALVERSION= defconfig >/dev/null 2>&1
     if dtb_out=$(make -C "$T" ARCH=arm64 CROSS_COMPILE= LOCALVERSION= \
                    rockchip/rk3528-w132d.dtb -j"$(nproc)" 2>&1); then
@@ -124,7 +132,7 @@ done
 echo
 echo "DRIFT_RESULT fail=$TOTAL_FAIL fuzz=$TOTAL_FUZZ"
 if [ "$TOTAL_FAIL" -gt 0 ]; then
-  echo "❌ 有补丁打不上了 —— 在出问题的那个版本上重新锚定，见 tools/README.md"
+  echo "❌ 有补丁打不上了 —— 在出问题的那个版本上重新锚定 patches/ 里的源补丁（README「防漂与上游化」）"
   exit 1
 fi
 if [ "$TOTAL_FUZZ" -gt 0 ]; then

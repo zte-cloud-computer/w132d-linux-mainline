@@ -6,7 +6,7 @@
 #
 # ## 为什么需要
 #
-# 板级 DTS 在本仓库自己手里（userpatches/board/rk3528-w132d.dts）。但改它的人不
+# 板级 DTS 在本仓库自己手里（patches/rk3528-w132d.dts）。但改它的人不
 # 一定意识到某个属性掉了会怎样 —— DTB 照样编得出来、照样是合法的树，只是设备起不来，
 # 或者起来了缺一半功能。上游那份 DTS 就有现成的例子：我们导入的那个提交之后紧接着
 # 的一次改动把 eMMC 从 HS400 降回了 52MHz，纯 DTS 属性变更，编译毫无异常。
@@ -35,6 +35,15 @@ chk() {  # chk <节点> <属性> <说明>
   fi
 }
 
+chkval() {  # chkval <节点> <属性> <期望值> <说明> —— 字符串属性必须等于期望值
+  local v; v=$(fdtget -t s "$D" "$1" "$2" 2>/dev/null)
+  if [ "$v" = "$3" ]; then
+    printf '  ✅ %-30s %s\n' "$4" "$(head -c 40 <<<"$v")"
+  else
+    printf '  ❌ %-30s 是 "%s"，应为 "%s"\n' "$4" "${v:-<缺失>}" "$3"; FAIL=1
+  fi
+}
+
 nochk() {  # nochk <节点> <属性> <说明> —— 断言不存在
   if fdtget "$D" "$1" "$2" >/dev/null 2>&1; then
     printf '  ❌ %-30s 不应存在（%s %s）\n' "$3" "$1" "$2"; FAIL=1
@@ -56,6 +65,8 @@ chk /cpus/cpu@0               cpu-supply                "cpu-supply"
 chk /regulator-vdd-logic      pwm-dutycycle-range       "vdd_logic"
 chk /soc/gpu@ff700000         mali-supply               "GPU 供电"
 chk /soc/video-codec@ff740000 compatible                "VDEC"
+# WCN 固件必须指向 Armbian 包自带的合并镜像：指回 wcnmodem.bin 就是 SC2355 的，WiFi/蓝牙起不来
+chkval /uwe-bsp unisoc,btwf-file-name /lib/firmware/uwe5622/wcnmodem-38222.bin "WCN 固件文件名"
 chk /ir-receiver              compatible                "红外接收"
 chk /leds                     compatible                "面板指示灯"
 chk /reserved-memory/ramoops@110000 reg                 "ramoops 崩溃留存"

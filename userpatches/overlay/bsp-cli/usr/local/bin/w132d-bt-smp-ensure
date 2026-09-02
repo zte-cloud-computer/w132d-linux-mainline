@@ -1,0 +1,62 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# 确保 LE 的 SMP 固定通道 (CID 0x0006) 已注册后，才让 BLE 桥接启动。
+#
+# 该通道只在 smp_register() 里创建，而 smp_register() 【只】被
+# hci_powered_update_sync() 调用；后者又要求适配器是被 mgmt 客户端上电的
+# （hci_dev_open_sync() 里 hci_dev_test_flag(hdev, HCI_MGMT) 那个条件）。
+# 任何 ioctl 上电（hciconfig hci0 up）都会让它缺席，且事后无法补救——
+# 因为 hci_power_on_sync() 看到 HCI_UP 且 HCI_AUTO_OFF 未置位就直接返回。
+#
+# 缺席的症状很有迷惑性：LE 能扫描、能建连，但每条连接约 2 秒后被本地拆掉，
+# 全程零 ATT 流量，dmesg 里只有一行 "security requested but not available"。
+# 根因是 conn->smp == NULL 让 setsockopt(BT_SECURITY) 恒回 EINVAL，
+# bluetoothd 的 device_attach_att() 因此 return false，ATT 通道压根没挂上。
+set -uo pipefail
+DEV=${DEV:-hci0}
+L2=/sys/kernel/debug/bluetooth/l2cap
+log() { echo "w132d-bt-smp-ensure: $*"; }
+smp_ok() { awk '$7=="0x0006"{f=1} END{exit !f}' "$L2"; }
+
+if [ ! -r "$L2" ]; then
+  log "$L2 不可读，无法证明 SMP 固定通道已注册"
+  exit 1
+fi
+
+for _ in $(seq 1 30); do
+  hciconfig "$DEV" 2>/dev/null | grep -q "UP RUNNING" && break
+  sleep 1
+done
+
+if ! hciconfig "$DEV" 2>/dev/null | grep -q "UP RUNNING"; then
+  log "$DEV 未上电，补一次 btmgmt power on"
+  if ! timeout 25 btmgmt -i "$DEV" power on >/dev/null 2>&1; then
+    log "btmgmt power on 失败"
+    exit 1
+  fi
+  sleep 3
+fi
+
+if smp_ok; then
+  log "SMP 固定通道 (CID 0x0006) 已注册"
+  exit 0
+fi
+
+log "SMP 固定通道缺失，做一次 mgmt 上电循环补救"
+if ! timeout 15 btmgmt -i "$DEV" power off >/dev/null 2>&1; then
+  log "btmgmt power off 失败"
+  exit 1
+fi
+sleep 2
+if ! timeout 25 btmgmt -i "$DEV" power on >/dev/null 2>&1; then
+  log "btmgmt power on 失败"
+  exit 1
+fi
+sleep 3
+if smp_ok; then
+  log "已补救：SMP 固定通道注册成功"
+else
+  log "SMP 固定通道仍缺失 —— 拒绝启动 BLE 桥接"
+  exit 1
+fi
+exit 0

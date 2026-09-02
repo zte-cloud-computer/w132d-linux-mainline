@@ -7,9 +7,9 @@
 #
 # ## 这一步在验什么
 #
-# 第一版 Armbian 板级支持只带 4 个内核补丁（audio / dwcmshc-hs400 / rkvdec /
-# tsadc），全部来自上游板级仓库、且都是本项目此前上游过去的。显示路径（25 个
-# HDMI/VOP2 补丁）已剔除，理由见 tools/make-board-dts.py 抬头。
+# 第一版 Armbian 板级支持只带 4 个驱动补丁（rkvdec / dwcmshc-hs400 / tsadc / audio）
+# 加板级 DTS，源头在 patches/。显示路径（上游那 25 个 HDMI/VOP2 补丁）已剔除：
+# 主线 7.2 对 RK3528 显示链零支持，那批补丁只能整体带、无法逐个上游。
 #
 # 主线 7.2 相比 7.1 的两处变化直接影响这里：
 #   * USB2 PHY 驱动与 rk3528.dtsi 里的 usb 节点**上游已自带** —— 所以上游那两个
@@ -22,10 +22,13 @@ B=/build
 KVER="${KVER:-7.2.2}"
 SRC="/src/linux-$KVER.tar.xz"
 TREE="$B/linux-$KVER"
-PATCHDIR="$W/userpatches/kernel/archive/rockchip64-7.2"
+PATCHDIR="$W/patches"
+DTS="$W/patches/rk3528-w132d.dts"
 OUT="$B/out"
 
 step(){ echo; echo "########## $* ##########"; }
+# shellcheck source=tools/lib.sh
+. "$(dirname "$0")/lib.sh"
 
 step "0/3 依赖"
 export DEBIAN_FRONTEND=noninteractive
@@ -42,12 +45,15 @@ if [ ! -d "$TREE" ]; then
 fi
 echo "  $(grep -m1 '^VERSION' "$TREE/Makefile" | tr -d ' \t')$(grep -m1 '^PATCHLEVEL' "$TREE/Makefile" | sed 's/.*=/./;s/ //g')$(grep -m1 '^SUBLEVEL' "$TREE/Makefile" | sed 's/.*=/./;s/ //g')"
 
-step "2/3 应用 Armbian 补丁目录里的那批"
-# 测的就是 Armbian 实际会应用的东西 —— 用 patches-src/ 里的原始导入件去测，
-# 测的是没出货的版本，没意义。这批里第 5 个就是板级 DTS（含 Makefile 条目）。
+step "2/3 应用 patches/ 里的主线形态补丁"
+# 这里的树是**纯净**内核，所以只能打主线形态（patches/0001–0004，能 git am 到干净
+# 主线的那份）。userpatches/kernel/ 里的 Armbian 形态是重锚到 Armbian 补丁栈之上的
+# —— 0002 在纯净树上必然打不上，拿它来测是错位的（早先就是这么错的）。
+# Armbian 形态由真实构建验：tools/armbian-kernel.sh kernel-patch。
+# GNU patch 会跳过 git 补丁的邮件头，直接 -p1 即可。
 shopt -s nullglob
-PATCHES=("$PATCHDIR"/*.patch)
-[ "${#PATCHES[@]}" -gt 0 ] || { echo "  ❌ $PATCHDIR 里没有补丁 —— 先跑 tools/make-patch-series.sh"; exit 1; }
+PATCHES=("$PATCHDIR"/[0-9][0-9][0-9][0-9]-*.patch)
+[ "${#PATCHES[@]}" -gt 0 ] || { echo "  ❌ $PATCHDIR 里没有补丁"; exit 1; }
 for f in "${PATCHES[@]}"; do
   name=$(basename "$f" .patch)
   # 幂等：先用反向 dry-run 判断是不是已经打过了。
@@ -68,7 +74,9 @@ done
 if find "$TREE" -name '*.rej' -print -quit | grep -q .; then
   echo "  ❌ 存在 .rej"; find "$TREE" -name '*.rej'; exit 1
 fi
-echo "  ✅ 零 .rej（板级 DTS 与 Makefile 条目由第 5 个补丁带入）"
+echo "  ✅ 零 .rej"
+w132d_place_dts "$TREE" "$DTS" || exit 1
+echo "  ✅ 板级 DTS 已放入树中（含 Makefile 条目）"
 
 step "3/3 编译 DTB"
 make -C "$TREE" ARCH=arm64 CROSS_COMPILE= LOCALVERSION= defconfig >/dev/null 2>&1

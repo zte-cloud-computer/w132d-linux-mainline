@@ -4,14 +4,6 @@
 # 构建产物
 /out/
 
-# 逐机数据：BL31 原版、RF 校准、SN/MAC/HDCP/IMEI。
-# 这些在整盘备份里都有，不是孤本；放这里只是为了**不进仓库** —— 提交它们等于
-# 公开设备身份。需要时从自己的镜像备份里取。
-/private/
-
-# Armbian 构建框架的本地克隆（按需 clone，不随本仓库分发）
-/build-armbian/
-
 .DS_Store
 ._*
 *.swp
@@ -27,3 +19,6 @@ __pycache__/
 /userpatches/config-example.conf
 /userpatches/customize-image.sh
 /userpatches/.tmp/
+
+# rkdeveloptool 会在当前工作目录写自己的 log/（内容是它找不到 config.ini 的抱怨）
+/log/

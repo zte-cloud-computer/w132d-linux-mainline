@@ -1,6 +1,6 @@
-From be5d7087ef604dfdc94fbb737d7fc9f468822824 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: wenziwanka <tech@wenziwanka.com>
-Date: Tue, 1 Sep 2026 15:09:01 +0000
+Date: Wed, 2 Sep 2026 06:07:25 +0000
 Subject: [PATCH 3/5] thermal: rockchip: add RK3528 TSADC support
 
 The RK3528 TSADC is close to the RK3568 one but needs its own code table,
@@ -186,6 +186,3 @@ index 2668550..2aad0bb 100644
  	{
  		.compatible = "rockchip,rk3568-tsadc",
  		.data = (void *)&rk3568_tsadc_data,
--- 
-2.47.3
-

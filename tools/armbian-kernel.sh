@@ -9,7 +9,8 @@
 #                    "stdin is not a terminal" 退出 43。补丁栈的结论看
 #                    "Summary: kernel patching: N total; N applied" 那一行即可，
 #                    退出码在这个模式下没有意义。
-#     kernel         完整构建，产出 linux-image-*.deb（慢）
+#     kernel         构建内核，产出 linux-image/dtb/headers/libc-dev 四个 deb
+#     build          完整镜像（需要 --privileged：要 losetup/mount）
 #   默认 kernel-patch
 #
 # ## 这一步在验什么
@@ -26,6 +27,21 @@
 # 部分 Debian 镜像上 apt 会把 "Tried to start delayed item" 刷成上百万行 stderr，
 # 经 Armbian 的 logger 一转就是几百 MB 日志，真正的报错全被淹掉（实测一次 371 MB、
 # 其中 239 万行是这一句）。这里在入 tee 之前先滤掉它和 update-alternatives 的噪音。
+#
+# ## 非交互所需的参数
+#
+# 少给一个 Armbian 就会弹 dialog，而容器里没有终端，直接 `stdin is not a terminal`
+# 退出 43。实测 `build` 会问 KERNEL_CONFIGURE（"Select the kernel configuration"），
+# 所以 BUILD_MINIMAL / BUILD_DESKTOP / KERNEL_CONFIGURE 三个都得显式给。
+#
+# ## build 还需要 CONTAINER_COMPAT=yes 和 -v /dev:/tmp/dev
+#
+# 容器里没有 udev，`losetup -P` 之后 /dev/loop0p2 这类分区节点不会自动出现，
+# Armbian 会重试 5 次然后 "Device node /dev/loop0p2 does not exist"。
+# 官方给了 CONTAINER_COMPAT 开关（loop.sh:25）：它从 /tmp/<device> 读设备号、
+# 用 mknod 手工建节点 —— 所以宿主 /dev 必须挂到容器的 /tmp/dev：
+#
+#   docker run --privileged -v /dev:/tmp/dev ...
 #
 # ## USE_TMPFS=no 是必须的
 #
@@ -64,10 +80,24 @@ echo "    内核补丁  $(ls "$W/userpatches/kernel/archive/rockchip64-7.2/" | w
 
 step "2/3 ./compile.sh $CMD"
 cd "$ARMBIAN"
+# ⚠️ bsp 包必须每次重打。
+#
+# Armbian 的包哈希只按**它自己认得的输入**算，而我们的 overlay 是通过
+# post_family_tweaks_bsp 钩子塞进去的 —— 改了 userpatches/overlay/ 它一无所知，
+# 于是直接复用缓存的 deb。实测：删掉 pstore.conf 之后重建三次，装的还是那个
+# 带着 pstore.conf 的旧包，报同一个 dpkg 冲突。
+# 通配要用 `w132d*` 而不是 `w132d-*`：产物有两种命名（armbian-bsp-cli-w132d_… 与
+# armbian-bsp-cli-w132d-edge_…），只匹配带横杠的会漏掉一半，于是照样装到旧包。
+# 而且不能只删 .deb：Armbian 的产物缓存是 output/packages-hashed/ 里的 **.tar**
+# （"deb-tar" artifact），deb 是从它解出来再改版本号的。只删 deb 时它照样从 tar
+# 里解出旧包 —— 实测加了新 unit 后"Failed to enable unit: does not exist"。
+find "$ARMBIAN/output" -name 'armbian-bsp-cli-w132d*' -type f -delete 2>/dev/null || true
+rm -rf "$ARMBIAN/cache/memoize" 2>/dev/null || true
 set +e
 ./compile.sh "$CMD" \
-  BOARD=w132d BRANCH=edge RELEASE=trixie BUILD_MINIMAL=yes \
-  SHOW_LOG=yes USE_TMPFS=no ARMBIAN_RUNNING_IN_CONTAINER=yes \
+  BOARD=w132d BRANCH=edge RELEASE=trixie \
+  BUILD_MINIMAL=yes BUILD_DESKTOP=no KERNEL_CONFIGURE=no \
+  SHOW_LOG=yes USE_TMPFS=no ARMBIAN_RUNNING_IN_CONTAINER=yes CONTAINER_COMPAT=yes \
   2>&1 \
   | grep -vE "Tried to start delayed item|update-alternatives:|^\s*$" \
   | tee "$B/armbian-$CMD.log"

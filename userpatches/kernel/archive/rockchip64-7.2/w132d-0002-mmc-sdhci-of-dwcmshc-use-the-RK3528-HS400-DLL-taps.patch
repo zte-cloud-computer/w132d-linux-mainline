@@ -1,6 +1,6 @@
-From 13ac82f0af1e903783a45d87357dd22698ceec7e Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: wenziwanka <tech@wenziwanka.com>
-Date: Tue, 1 Sep 2026 15:09:00 +0000
+Date: Wed, 2 Sep 2026 06:07:24 +0000
 Subject: [PATCH 2/5] mmc: sdhci-of-dwcmshc: use the RK3528 HS400 DLL taps
 
 The revision==1 HS400 path hardcodes the RK3588 DLL taps (10/8/4).  The
@@ -109,6 +109,3 @@ index 5ec5906..60a4235 100644
  	{
  		.compatible = "rockchip,rk3588-dwcmshc",
  		.data = &sdhci_dwcmshc_rk3588_pdata,
--- 
-2.47.3
-

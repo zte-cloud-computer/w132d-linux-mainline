@@ -1,6 +1,6 @@
-From cdac979208b0d15099c431135d80450ff8d13bdc Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: wenziwanka <tech@wenziwanka.com>
-Date: Tue, 1 Sep 2026 15:09:01 +0000
+Date: Wed, 2 Sep 2026 06:07:25 +0000
 Subject: [PATCH 4/5] ASoC: rockchip: add the RK3528 audio codec and the ES7202
  PDM ADC
 
@@ -2398,6 +2398,3 @@ index 585e89f..7c2b3e0 100644
  	{},
  };
  MODULE_DEVICE_TABLE(of, rockchip_sai_match);
--- 
-2.47.3
-
