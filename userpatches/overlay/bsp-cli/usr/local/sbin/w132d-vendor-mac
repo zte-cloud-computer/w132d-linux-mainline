@@ -1,78 +1,57 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""从 Rockchip vendor storage 读出厂 MAC，设到有线网卡上。
+"""有线网卡 MAC 的兜底：U-Boot 没往 DT 里写 local-mac-address 时，按 SoC OTP 派生一个固定地址。
 
-## 为什么需要
+## 正常路径不经过这里
 
-厂商 U-Boot 本该把 vendor storage 里的 MAC 修进 DTB（ethernet0 别名），但在本板的
-主线 DTB 上没有生效（2026-09-02 首刷实测：网卡拿到随机地址，systemd 再按 machine-id
-派生成一个"本机稳定"的本地管理地址）。结果是每台机器、每次重刷都是不同的 MAC，
-DHCP 租约跟着变，按 MAC 找设备的办法失效。老构建链是自己读 vendor storage 的。
+主线 U-Boot 的 misc_init_r 按 OTP cpuid 派生一个固定地址（rockchip_setup_macaddr），起内核时
+按 ethernet0 别名写进 DT（local-mac-address）。内核从 DT 拿到地址，网卡开机就是对的。
+出厂 MAC 不抢救（2026-09-05 定案：整盘刷写把 vendor storage 一并清零）。这个服务只在 DT 里**没有** MAC 时才动手 ——
+比如 U-Boot 被换成不做这件事的版本 —— 避免退化成"每次开机随机地址"。
 
-## 格式（Rockchip rk_vendor_storage / U-Boot vendor.c）
-
-eMMC 扇区 7168 起（EMMC_VENDOR_PART_START = 1024*7），4 份副本各 128 扇区（64 KiB）。
-这一段在我们永不写入的 64–24575 之内，只读。每份：
-
-    u32 tag = 0x524B5644 ("RKVD")     u32 version
-    u16 next_index  u16 item_num  u16 free_offset  u16 free_size
-    struct { u16 id; u16 offset; u16 size; u16 flag; } item[126]   -> 数据区从 1024 起
-    u8  data[...]                       u32 hash   u32 version2
-
-取 version == version2 且 version 最大的那份。条目 id：1=SN 2=WiFi MAC 3=LAN MAC 4=BT MAC。
+派生：sha256("w132d-mac:" + OTP nvmem 内容，退而求其次 eMMC CID) 取 6 字节，置本地管理位、
+清组播位。每台机器固定、不同机器不同；与 U-Boot 派生出的值不相等（算法不同），但同样稳定。
 
 用法：
-    w132d-vendor-mac                 只打印（SN 与三个 MAC）
-    w132d-vendor-mac --apply         设到 rk_gmac-dwmac 驱动的第一块网卡上
-    w132d-vendor-mac --dump FILE     从文件解析（离线测试）
-读不到/格式不对时打印警告并退出 0：这是锦上添花，不能把开机卡住。
+    w132d-vendor-mac            只报告（DT 里有没有、派生值是多少）
+    w132d-vendor-mac --apply    DT 里没有时设到 rk_gmac-dwmac 驱动的第一块网卡上
+读不到时打印警告并退出 0：这是锦上添花，不能把开机卡住。
 """
+import glob
+import hashlib
 import os
-import struct
 import subprocess
 import sys
 
-DEV = "/dev/mmcblk0"
-PART_START_SECTOR = 1024 * 7
-PART_SECTORS = 128
-PART_COPIES = 4
-TAG = 0x524B5644
-ITEM_NUM = 126
-DATA_OFF = 16 + ITEM_NUM * 8
-ITEM_IDS = {1: "SN", 2: "WIFI_MAC", 3: "LAN_MAC", 4: "BT_MAC"}
+
+def dt_mac():
+    """DT 里 gmac 节点的 local-mac-address / mac-address（U-Boot 注入的）"""
+    for node in glob.glob("/proc/device-tree/soc/ethernet@*") + glob.glob("/proc/device-tree/ethernet@*"):
+        for prop in ("local-mac-address", "mac-address"):
+            p = os.path.join(node, prop)
+            try:
+                with open(p, "rb") as f:
+                    b = f.read()
+            except OSError:
+                continue
+            if len(b) == 6 and any(b):
+                return b
+    return None
 
 
-def parse(blob):
-    """返回 {id: bytes}，或 None（无效副本）"""
-    if len(blob) < PART_SECTORS * 512:
-        return None
-    tag, version, _next, item_num, _foff, _fsize = struct.unpack_from("<IIHHHH", blob, 0)
-    version2 = struct.unpack_from("<I", blob, PART_SECTORS * 512 - 4)[0]
-    if tag != TAG or version != version2 or item_num > ITEM_NUM:
-        return None
-    items = {}
-    for i in range(item_num):
-        iid, off, size, _flag = struct.unpack_from("<HHHH", blob, 16 + i * 8)
-        start = DATA_OFF + off
-        if start + size > len(blob):
+def derived_mac():
+    for src, tag in (("/sys/bus/nvmem/devices/rockchip-otp0/nvmem", "otp"),
+                     ("/sys/block/mmcblk0/device/cid", "emmc-cid")):
+        try:
+            with open(src, "rb") as f:
+                blob = f.read().strip()
+        except OSError:
             continue
-        items[iid] = blob[start:start + size]
-    return version, items
-
-
-def read_best(src):
-    best = None
-    with open(src, "rb") as f:
-        for n in range(PART_COPIES):
-            f.seek((PART_START_SECTOR + n * PART_SECTORS) * 512)
-            r = parse(f.read(PART_SECTORS * 512))
-            if r and (best is None or r[0] > best[0]):
-                best = r
-    return best
-
-
-def mac_ok(b):
-    return len(b) == 6 and any(b) and not (b[0] & 1)
+        if not blob or not any(blob):
+            continue
+        h = hashlib.sha256(b"w132d-mac:" + blob).digest()
+        return bytes([(h[0] | 0x02) & 0xFE]) + h[1:6], tag
+    return None, None
 
 
 def fmt(b):
@@ -90,36 +69,20 @@ def gmac_ifaces():
 
 def main():
     apply_ = "--apply" in sys.argv
-    src = DEV
-    if "--dump" in sys.argv:
-        src = sys.argv[sys.argv.index("--dump") + 1]
-    try:
-        best = read_best(src)
-    except OSError as e:
-        print(f"w132d-vendor-mac: 读不了 {src}: {e}", file=sys.stderr)
-        return 0
-    if not best:
-        print("w132d-vendor-mac: vendor storage 里没有有效副本（tag/version 对不上）", file=sys.stderr)
-        return 0
-    version, items = best
-    print(f"vendor storage version {version}, {len(items)} items")
-    for iid, name in ITEM_IDS.items():
-        if iid in items:
-            v = items[iid]
-            shown = fmt(v) if name.endswith("MAC") else v.rstrip(b"\0").decode("ascii", "replace")
-            print(f"  {name:9s} {shown}")
-    if not apply_:
-        return 0
-    mac = items.get(3)
-    if not mac or not mac_ok(mac):
-        print("w132d-vendor-mac: 没有可用的 LAN MAC，网卡保持现状", file=sys.stderr)
-        return 0
     ifs = gmac_ifaces()
-    if not ifs:
-        print("w132d-vendor-mac: 没找到 rk_gmac-dwmac 的网卡", file=sys.stderr)
+    dev = ifs[0] if ifs else None
+    cur = open(f"/sys/class/net/{dev}/address").read().strip() if dev else "?"
+    m = dt_mac()
+    if m:
+        print(f"  DT 里有 MAC {fmt(m)}（U-Boot 注入），{dev or '网卡'} 当前 {cur}，不动")
         return 0
-    dev = ifs[0]
-    cur = open(f"/sys/class/net/{dev}/address").read().strip()
+    mac, tag = derived_mac()
+    if not mac:
+        print("w132d-vendor-mac: DT 里没有 MAC，也派生不出来，网卡保持现状", file=sys.stderr)
+        return 0
+    print(f"  DT 里没有 MAC；派生自 {tag}：{fmt(mac)}")
+    if not apply_ or not dev:
+        return 0
     if cur == fmt(mac):
         print(f"  {dev} 已是 {cur}")
         return 0

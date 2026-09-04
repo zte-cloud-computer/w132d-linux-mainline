@@ -11,6 +11,9 @@
 #                    退出码在这个模式下没有意义。
 #     kernel         构建内核，产出 linux-image/dtb/headers/libc-dev 四个 deb
 #     build          完整镜像（需要 --privileged：要 losetup/mount）
+#     uboot          只编 U-Boot（板级默认 BOOTCONFIG=none 什么都不编；加
+#                    ENABLE_EXTENSIONS=w132d-uboot 才走主线 U-Boot 实验）
+#   命令之后的参数原样传给 compile.sh（例如 ENABLE_EXTENSIONS=w132d-uboot）
 #   默认 kernel-patch
 #
 # ## 这一步在验什么
@@ -98,6 +101,7 @@ set +e
   BOARD=w132d BRANCH=edge RELEASE=trixie \
   BUILD_MINIMAL=yes BUILD_DESKTOP=no KERNEL_CONFIGURE=no \
   SHOW_LOG=yes USE_TMPFS=no ARMBIAN_RUNNING_IN_CONTAINER=yes CONTAINER_COMPAT=yes \
+  "${@:2}" \
   2>&1 \
   | grep -vE "Tried to start delayed item|update-alternatives:|^\s*$" \
   | tee "$B/armbian-$CMD.log"
@@ -112,15 +116,18 @@ if [ "$RC" -ne 0 ]; then
   exit 1
 fi
 
-# 补丁阶段的判据：一个 .rej 都不能有
-if grep -qiE "rejects|\.rej\b" "$B/armbian-$CMD.log"; then
-  echo "  ❌ 日志里出现 .rej —— 补丁没干净应用"
-  grep -iE "rejects|\.rej\b" "$B/armbian-$CMD.log" | head -10 | sed 's/^/     /'
+# 补丁阶段的判据：**我们的**补丁一个 hunk 都不能失败。
+# 不能拿 "rej" 这个子串当判据：Armbian 的补丁摘要表会把每个补丁的 Subject 打出来，
+# 我们有个补丁标题里就有 "rejects"（Bluetooth link policy 那个），实测把一次成功的
+# 构建误判成失败。Armbian 自己的补丁栈本来就有 5 个 needs_rebase，也不该算我们的。
+if grep -E "Hunk #[0-9]+ FAILED|saving rejects to|-> [0-9]+/[0-9]+: w132d-.*\(problems\)" "$B/armbian-$CMD.log" | grep -qi "w132d-"; then
+  echo "  ❌ 我们的补丁有 hunk 没打上"
+  grep -E "Hunk #[0-9]+ FAILED|saving rejects to|w132d-.*problems" "$B/armbian-$CMD.log" | head -10 | sed 's/^/     /'
   exit 1
 fi
-echo "  ✅ 补丁阶段无 .rej"
+echo "  ✅ w132d-* 补丁全部干净应用（Armbian 自己的 needs_rebase 不算）"
 
-if [ "$CMD" = "kernel" ]; then
+if [ "$CMD" = "kernel" ] || [ "$CMD" = "uboot" ]; then
   echo "  --- 产出的 deb ---"
   find "$ARMBIAN/output" -name 'linux-*.deb' -printf '     %f  %s B\n' 2>/dev/null \
     || find "$ARMBIAN/output" -name 'linux-*.deb' -exec ls -la {} \; 2>/dev/null

@@ -1,0 +1,84 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wenziwanka <tech@wenziwanka.com>
+Date: Fri, 4 Sep 2026 11:00:00 +0000
+Subject: [PATCH] uwe5622: do not self-register a platform device when DT already describes it
+
+With OTT_UWE both unisocwifi and tty-sdio register their own platform
+device at module init in addition to matching a device-tree node. On a
+board that has the "sprd,unisoc-wifi" and "sprd,mtty" nodes every probe
+therefore runs twice: the second sprdwl_probe() trips bus_chn_init()
+("bus_chn_init err, hif_type 0"), fails with a WARN and its error path
+tears down the channels the first instance is using, so scans abort;
+the second mtty device collides in sysfs ("cannot create duplicate
+filename /devices/platform/mtty").
+
+Skip the self-registration when a matching DT node exists; boards
+without the nodes are unchanged.
+
+Seen on a ZTE W132D (RK3528) with the DT nodes from its board file.
+
+Signed-off-by: wenziwanka <tech@wenziwanka.com>
+---
+
+--- a/drivers/net/wireless/uwe5622/unisocwifi/wl_core.c
++++ b/drivers/net/wireless/uwe5622/unisocwifi/wl_core.c
+@@ -757,6 +757,18 @@
+ 
+ 	ret = platform_driver_register(&sprdwl_driver);
+ 	if (!ret) {
++		struct device_node *np;
++
++		/*
++		 * A "sprd,unisoc-wifi" node in DT already produced a platform device via
++		 * of_platform_populate(); adding a second one makes probe run
++		 * twice. Only self-register on boards without the DT node.
++		 */
++		np = of_find_compatible_node(NULL, NULL, "sprd,unisoc-wifi");
++		if (np) {
++			of_node_put(np);
++			return ret;
++		}
+ 		unisoc_pdev = platform_device_alloc("unisoc_wifi", -1);
+ 		if (platform_device_add(unisoc_pdev) != 0)
+ 			wl_err("register platform device unisoc wifi failed\n");
+@@ -768,7 +780,8 @@
+ static void __exit unisoc_wlan_exit(void)
+ {
+     platform_driver_unregister(&sprdwl_driver);
+-    platform_device_del(unisoc_pdev);
++    if (unisoc_pdev)
++    	platform_device_del(unisoc_pdev);
+ }
+ 
+ module_init(unisoc_wlan_init);
+--- a/drivers/net/wireless/uwe5622/tty-sdio/tty.c
++++ b/drivers/net/wireless/uwe5622/tty-sdio/tty.c
+@@ -875,6 +875,18 @@
+ 	int ret;
+ 	ret = platform_driver_register(&mtty_driver);
+ 	if (!ret) {
++		struct device_node *np;
++
++		/*
++		 * A "sprd,mtty" node in DT already produced a platform device via
++		 * of_platform_populate(); adding a second one makes probe run
++		 * twice. Only self-register on boards without the DT node.
++		 */
++		np = of_find_compatible_node(NULL, NULL, "sprd,mtty");
++		if (np) {
++			of_node_put(np);
++			return ret;
++		}
+ 		mtty_pdev = platform_device_alloc("mtty", -1);
+ 		if (platform_device_add(mtty_pdev) != 0)
+ 			pr_err("register platform device unisoc mtty failed\n");
+@@ -886,7 +898,8 @@
+ static void __exit mtty_pdev_exit(void)
+ {
+ 	platform_driver_unregister(&mtty_driver);
+-	platform_device_del(mtty_pdev);
++	if (mtty_pdev)
++		platform_device_del(mtty_pdev);
+ }
+ 
+ module_init(mtty_pdev_init);

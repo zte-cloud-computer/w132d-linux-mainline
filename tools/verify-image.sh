@@ -12,7 +12,7 @@
 # 都判掉，免得为了发现一个拼错的路径去刷一次机：
 #
 #   * 分区几何必须逐扇区对上（p2@24576、p3@1073152）—— 错了设备找不到 bootfs
-#   * p2 必须带 LegacyBIOSBootable —— 厂商 U-Boot 走 distro boot 靠它找 boot.scr，
+#   * p2 必须带 LegacyBIOSBootable —— 分区表身份的一部分（厂商 U-Boot 时代靠它找 boot.scr），
 #     **缺了不启动**，而 Armbian 默认不设任何分区属性
 #   * GPT 身份必须是钉住的那组 —— 让镜像可复现、与救砖文档对得上
 #   * rootfs 定制文件必须真的到位、服务必须真的使能 —— 钩子写错了不会报错，
@@ -56,8 +56,19 @@ grep -qi "9460D758-5782-409D-ACD6-FE1596D204B3" <<<"$(sgdisk -p "$IMG" 2>/dev/nu
 if grep -q "LegacyBIOSBootable" <<<"$LAYOUT"; then
   ok "bootfs 带 LegacyBIOSBootable"
 else
-  bad "bootfs 缺 LegacyBIOSBootable —— 厂商 U-Boot 扫不到 boot.scr，设备起不来"
+  bad "bootfs 缺 LegacyBIOSBootable"
 fi
+
+echo
+echo "── 2b. 引导链（主线 U-Boot，Armbian 构建时写进镜像）──"
+magic() { dd if="$IMG" bs=512 skip="$1" count=1 status=none | head -c 4 | od -An -tx1 | tr -d ' \n'; }
+[ "$(magic 64)" = "524b4e53" ] && ok "扇区 64 是 idbloader（RKNS：rkbin DDR + 主线 SPL）" \
+                                || bad "扇区 64 不是 idbloader（$(magic 64)）—— write_uboot_platform 没跑？"
+[ "$(magic 16384)" = "d00dfeed" ] && ok "扇区 16384 是 u-boot.itb（FIT）" || bad "扇区 16384 不是 FIT（$(magic 16384)）"
+nz=$(dd if="$IMG" bs=512 skip=7168 count=3072 status=none | tr -d '\0' | wc -c)
+[ "$nz" = 0 ] && ok "7168–10239（vendor storage / RKSS 位置）全零" || bad "7168–10239 有 $nz 个非零字节 —— 镜像里不该有任何机器的 vendor storage"
+nz=$(dd if="$IMG" bs=512 skip=404 count=6764 status=none | tr -d '\0' | wc -c)
+[ "$nz" = 0 ] && ok "idbloader 之后到 7168 全零（idbloader 没长到 vendor storage）" || bad "扇区 404–7167 有 $nz 个非零字节"
 
 echo
 echo "── 3. bootfs 内容 ──"
@@ -83,11 +94,19 @@ if mount -o ro "${LOOP}p1" /mnt/vp2 2>/dev/null; then
   [ -f /mnt/vp2/boot.scr ] || [ -f /mnt/vp2/extlinux/extlinux.conf ] \
     && ok "有引导脚本（boot.scr 或 extlinux.conf）" \
     || bad "bootfs 上没有任何引导脚本"
-  # 引导脚本模板把 console=ttyS2,1500000 写死了，本板的调试串口是 UART0；
-  # 板级钩子经 extraboardargs 追加 console=ttyS0，内核以最后一个 console= 为准
-  grep -q '^extraboardargs=.*console=ttyS0,115200' /mnt/vp2/armbianEnv.txt \
-    && ok "armbianEnv.txt 追加了 console=ttyS0,115200" \
-    || bad "armbianEnv.txt 没有 console=ttyS0 —— 串口控制台会落在不存在的 ttyS2 上"
+  # 走 extlinux（厂商 U-Boot 上验证过的路径）：路径与参数全写死，没有 U-Boot 脚本逻辑
+  EX=/mnt/vp2/extlinux/extlinux.conf
+  if [ -f "$EX" ]; then
+    ok "extlinux/extlinux.conf 在"
+    grep -q '^  kernel /Image$' "$EX"   && ok "extlinux: kernel /Image"   || bad "extlinux 缺 kernel /Image"
+    grep -q '^  initrd /uInitrd$' "$EX" && ok "extlinux: initrd /uInitrd" || bad "extlinux 缺 initrd /uInitrd"
+    grep -q '^  fdt /dtb/rockchip/rk3528-w132d.dtb$' "$EX" && ok "extlinux: fdt 指向本板 DTB" || bad "extlinux 的 fdt 不是本板 DTB"
+    grep -q '^  append root=UUID=' "$EX" && ok "extlinux: root=UUID=…" || bad "extlinux 缺 root=UUID"
+    grep -q 'console=ttyS0,115200' "$EX" && ok "extlinux: console=ttyS0,115200" || bad "extlinux 缺 console=ttyS0"
+    [ -f /mnt/vp2/boot.scr ] && bad "boot.scr 还在 —— 厂商 U-Boot 会先找 extlinux，但两者并存容易糊涂" || true
+  else
+    bad "缺 extlinux/extlinux.conf —— 板级配置的 SRC_EXTLINUX 没生效"
+  fi
   ls /mnt/vp2/dtb*/rockchip/rk3528-w132d.dtb >/dev/null 2>&1 \
     || ls /mnt/vp2/rockchip/rk3528-w132d.dtb >/dev/null 2>&1 \
     && ok "板级 DTB 在 bootfs 上" || bad "bootfs 上找不到 rk3528-w132d.dtb"
@@ -103,7 +122,10 @@ if mount -o ro "${LOOP}p2" /mnt/vp3 2>/dev/null; then
   while IFS= read -r rel; do
     if [ -e "/mnt/vp3/$rel" ]; then n=$((n+1)); else
       [ "$miss" -lt 5 ] && echo "    缺: /$rel"; miss=$((miss+1)); fi
-  done < <(cd "$W/userpatches/overlay/bsp-cli" && find . -type f | sed 's|^\./||')
+  done < <(cd "$W/userpatches/overlay/bsp-cli" && find . -type f -not -name .DS_Store -not -path '*/__pycache__/*' | sed 's|^\./||')
+  # 宿主 macOS 的垃圾不该进镜像
+  n=$(find /mnt/vp3/etc /mnt/vp3/usr/local /mnt/vp3/lib/firmware \( -name .DS_Store -o -name __pycache__ \) 2>/dev/null | wc -l)
+  [ "$n" = 0 ] && ok "镜像里没有 .DS_Store / __pycache__" || bad "镜像里混进了 $n 个 .DS_Store/__pycache__"
   [ "$miss" = 0 ] && ok "overlay $n 个文件全部到位" \
                   || bad "overlay 缺 $miss 个（到位 $n 个）"
 
@@ -132,6 +154,16 @@ if mount -o ro "${LOOP}p2" /mnt/vp3 2>/dev/null; then
         && ok "$(basename "$u") 依赖的 $dep 在" || bad "$(basename "$u") 依赖的 $dep 不存在"
     done < <(grep -ohE '^(Requires|After|Before|Wants|PartOf)=.*' "$u" | grep -oE 'w132d-[a-z0-9-]+\.service' | sort -u)
   done
+  grep -q "^Package: linux-u-boot-w132d-edge$" /mnt/vp3/var/lib/dpkg/status && ok "包 linux-u-boot-w132d-edge 已装（apt 可升级 U-Boot）" || bad "rootfs 里没装 linux-u-boot-w132d-edge"
+  itb=/mnt/vp3/usr/lib/linux-u-boot-edge-w132d/u-boot.itb
+  if [ -f "$itb" ]; then
+    n=$(stat -c %s "$itb")
+    dd if="$IMG" bs=512 skip=16384 count=$(( (n + 511) / 512 )) status=none | head -c "$n" | cmp -s - "$itb" \
+      && ok "镜像 16384 处的 u-boot.itb 与包里那份逐字节一致" || bad "镜像里的 u-boot.itb 与包里的不一致"
+    grep -qa "saradc@ffae0000" "$itb" && ok "U-Boot DT 的 saradc 节点叫 saradc@ffae0000（针孔可用）" || bad "U-Boot DT 里没有 saradc@ffae0000 —— 针孔无效"
+  else
+    bad "rootfs 里没有 u-boot.itb"
+  fi
   # 脚本的运行时依赖包（板级配置 PACKAGE_LIST_BOARD 装的）
   for p in bluez ir-keytable python3-dbus python3-gi rfkill; do
     grep -q "^Package: $p\$" /mnt/vp3/var/lib/dpkg/status && ok "包 $p 已装" || bad "包 $p 没装"
@@ -171,21 +203,31 @@ if mount -o ro "${LOOP}p2" /mnt/vp3 2>/dev/null; then
   ls /mnt/vp3/etc/systemd/system/getty.target.wants/serial-getty@ttyS2.service >/dev/null 2>&1 \
     && bad "serial-getty@ttyS2 仍然使能 —— 那个串口不存在，开机会白等 90 秒" || true
 
-  # WCN 固件：DTS 指向 Armbian 包自带的 wcnmodem-38222.bin（含 Marlin3E 段），
-  # 三天线 RF 配置由 overlay 装、根目录有软链（驱动到 /lib/firmware 根目录找）；
-  # 不该再有任何 dpkg-divert
+  # WCN 固件：bsp 包从 CoreELEC 钉住的提交装的 W23.03.2，DTS 指向它；sha256 必须就是那份。
+  # 三天线 RF 配置由 overlay 装、根目录有软链（驱动到 /lib/firmware 根目录找）。
+  # 唯一允许的 divert：本机 customize-image 把包内 W23 改道到 .w23、主文件换成私有的
+  # 出厂 W25（这种镜像不是公开构建）；其它任何 uwe5622 的 divert 都是没删干净的旧东西。
   fw=/mnt/vp3/lib/firmware/uwe5622
-  grep -qa "MARLIN3E_" "$fw/wcnmodem-38222.bin" 2>/dev/null \
-    && ok "wcnmodem-38222.bin 在且含 Marlin3E 段（$(grep -ao 'MARLIN3E_[^[:cntrl:]]*' "$fw/wcnmodem-38222.bin" | head -1 | cut -c1-24)）" \
-    || bad "缺 wcnmodem-38222.bin 或里面没有 Marlin3E 段 —— WiFi/蓝牙起不来"
+  WCN_SHA=d84724b2e442a79d3999c630e5a13a418ef3f1b0a5ecafcf1ce031b3ede758cb
+  wcn_ver() { grep -ao 'MARLIN3E_[^[:cntrl:]]*' "$1" 2>/dev/null | head -1 | cut -c1-24; }
+  if grep -q "wcnmodem-marlin3e.bin.w23" /mnt/vp3/var/lib/dpkg/diversions 2>/dev/null; then
+    [ "$(sha256sum "$fw/wcnmodem-marlin3e.bin.w23" 2>/dev/null | cut -d' ' -f1)" = "$WCN_SHA" ] \
+      && grep -qa "MARLIN3E_" "$fw/wcnmodem-marlin3e.bin" \
+      && ok "本机覆盖：wcnmodem-marlin3e.bin = $(wcn_ver "$fw/wcnmodem-marlin3e.bin")，包内 W23 改道在 .w23（此镜像含私有固件，不是公开构建）" \
+      || bad "固件改道了，但 .w23 不是钉住的 W23 或主文件不是 Marlin3E 固件"
+  else
+    [ "$(sha256sum "$fw/wcnmodem-marlin3e.bin" 2>/dev/null | cut -d' ' -f1)" = "$WCN_SHA" ] \
+      && ok "wcnmodem-marlin3e.bin 在且 sha256 是钉住的那份（$(wcn_ver "$fw/wcnmodem-marlin3e.bin")）" \
+      || bad "缺 wcnmodem-marlin3e.bin 或 sha256 不对 —— WiFi/蓝牙起不来"
+    grep -q "uwe5622" /mnt/vp3/var/lib/dpkg/diversions 2>/dev/null \
+      && bad "还有 uwe5622 的 dpkg-divert —— 私有固件那套没删干净" \
+      || ok "没有固件 divert（公开构建，固件就是包里那份）"
+  fi
   [ -f "$fw/wifi_56630001_3ant.ini" ] && ok "三天线 RF 配置 uwe5622/wifi_56630001_3ant.ini 在" \
                                        || bad "缺 uwe5622/wifi_56630001_3ant.ini"
   [ -f /mnt/vp3/lib/firmware/wifi_56630001_3ant.ini ] \
     && ok "/lib/firmware/wifi_56630001_3ant.ini 可达（驱动在根目录找）" \
     || bad "/lib/firmware/wifi_56630001_3ant.ini 不可达 —— 驱动找不到 RF 配置"
-  grep -q "uwe5622" /mnt/vp3/var/lib/dpkg/diversions 2>/dev/null \
-    && bad "还有 uwe5622 的 dpkg-divert —— 私有固件那套没删干净" \
-    || ok "没有固件 divert（用的是 Armbian 包自己的文件）"
   umount /mnt/vp3
 else
   bad "挂不上 rootfs"

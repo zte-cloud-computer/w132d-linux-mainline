@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# ZTE Cloud Computer W132D（Rockchip RK3528）——主线内核 + 保留厂商引导链。
+# ZTE Cloud Computer W132D（Rockchip RK3528）——主线内核 + 主线 U-Boot（rkbin DDR/BL31 blob）。
 #
 # 这个文件的目标形态就是最终提给 armbian/build 的 `config/boards/w132d.csc`，
 # 所以除了必要的注释以外，尽量只用 Armbian 官方已有的机制，不自造概念：
@@ -7,7 +7,8 @@
 #   * KERNEL_TARGET 用官方的 edge（rk35xx.conf 里 source 了 rockchip64_common.inc，
 #     edge 分支给出 LINUXFAMILY=rockchip64 / KERNEL_MAJOR_MINOR=7.2 /
 #     补丁目录 rockchip64-7.2），不自建 family、不自建分支
-#   * BOOTCONFIG=none 用官方机制跳过 u-boot（先例：aml-s9xx-box.tvb 等 8 块板）
+#   * 引导链与 radxa-e24c 同法：主线 U-Boot generic-rk3528 + rkbin blob（钩子在
+#     userpatches/extensions/w132d-uboot.sh，毕业时并进这个文件）
 #   * 分区几何用官方的 OFFSET / BOOTSIZE，不自造分区代码
 #
 # 放在 userpatches/ 下而不是 fork armbian/build：板级配置、内核补丁目录在官方代码
@@ -41,15 +42,28 @@ PACKAGE_LIST_BOARD="bluez rfkill ir-keytable python3-dbus python3-gi"
 # 等 90 秒超时才放弃）。板级配置先设好，那个钩子看到已设就不动（radxa-e24c 同法）。
 SERIALCON="ttyS0"
 
-# ## 不编、不发 u-boot
+# ## 引导：extlinux.conf，不用 boot.scr
 #
-# 设备出厂的 idbloader 与 U-Boot 就能引导本项目的 Linux（2026-08-28 实测），
-# 而 sector 64–16383 里是逐机数据（DDR/SPL、vendor storage 的 SN/MAC/HDCP/IMEI）
-# 和 RKSS —— 不可再生，碰了就变砖或丢身份。所以镜像里不放引导链，刷写也不写那段。
+# 主线 U-Boot 的 bootstd 直接读 extlinux/extlinux.conf（厂商 U-Boot 的 distro boot 也是），
+# 里面全是写死的路径和参数，没有脚本逻辑；Armbian 默认的 boot.scr 依赖一堆环境变量，
+# 在厂商 U-Boot 上两次刷写都没起来，所以一直用 extlinux。
 #
-# 附带的好处：HDMI 旁那个针孔（实测是 SARADC ch1 下载键，不是硬复位）由厂商
-# miniloader 读，按住上电进 Loader 模式 —— 这段我们永不覆盖，行为与原厂一致。
-BOOTCONFIG="none"
+# SRC_EXTLINUX 下 armbianEnv.txt 会被删掉，内核参数只有这一处：root= 由 Armbian 加。
+# 控制台 ttyS0/115200（DTS 的 stdout-path）。loglevel 先开到 7：盒子没串口，崩溃现场
+# 全靠 console-ramoops，它记的是打到 console 的东西，等级低了硬挂时零现场。
+SRC_EXTLINUX="yes"
+SRC_CMDLINE="rootwait rootfstype=ext4 console=ttyS0,115200 console=tty1 consoleblank=0 loglevel=7"
+
+# ## 引导链：主线 U-Boot v2026.07 + rkbin DDR v1.13 / BL31 v1.21
+#
+# 2026-09-04 分两步实机验证：先只换 P1（厂商 SPL 能加载主线 FIT），再换 idbloader；
+# 全主线链引导 14.3 s，设备上不再有任何厂商引导二进制。HDMI 旁的针孔是 SARADC ch1
+# 下载键，由 U-Boot proper 读：命中写 BOOT_BROM_DOWNLOAD 复位，BootROM 进 MaskROM，
+# rkdeveloptool db 一个 rkbin loader 后即可读写 eMMC（实测）。
+# 具体钩子（源、分支、blob、defconfig 改动、分两段写入）在 w132d-uboot 扩展里。
+BOOTCONFIG="generic-rk3528_defconfig"
+BOOT_SCENARIO="spl-blobs"
+enable_extension "w132d-uboot"
 
 # ## 分区布局：逐扇区复现现有镜像
 #
@@ -97,8 +111,8 @@ function post_create_partitions__w132d_gpt_identity() {
 	[[ -f "${img}" ]] || { display_alert "W132D" "找不到 ${img}" "err"; return 1; }
 
 	display_alert "W132D" "固定 GPT 身份并给 bootfs 打 LegacyBIOSBootable" "info"
-	# BOOTCONFIG=none 下 Armbian 只建两个分区（bootfs、rootfs），没有厂商 uboot 那个，
-	# 所以这里的 1/2 对应设备上的 p2/p3。补 p1 的事见下面的 w132d_declare_uboot_part。
+	# Armbian 的镜像只有两个分区（bootfs、rootfs），u-boot.itb 在 16384 的空档里不占分区；
+	# 所以这里的 1/2 对应设备上的 p2/p3。设备形状的三分区 GPT 由 make-release.sh 生成。
 	run_host_command_logged sgdisk \
 		--disk-guid="${W132D_GPT_LABEL_ID}" \
 		--partition-guid=1:"${W132D_UUID_P2}" \
@@ -119,8 +133,10 @@ function post_create_partitions__w132d_gpt_identity() {
 function post_family_tweaks_bsp__w132d_rootfs_overlay() {
 	declare src="${USERPATCHES_PATH}/overlay/bsp-cli"
 	[[ -d "${src}" ]] || { display_alert "W132D" "没有 overlay 目录，跳过" "wrn"; return 0; }
-	display_alert "W132D" "铺 $(find "${src}" -type f | wc -l) 个设备定制文件" "info"
-	run_host_command_logged cp -a "${src}/." "${destination}/"
+	# 用 rsync 而不是 cp -a：宿主是 macOS，overlay 目录里随时会冒出 .DS_Store；本机跑过
+	# 自测的脚本旁边会留 __pycache__ —— 这些都不该进包（实测 __pycache__ 真进去过一次）。
+	display_alert "W132D" "铺 $(find "${src}" -type f -not -name .DS_Store -not -path '*/__pycache__/*' | wc -l) 个设备定制文件" "info"
+	run_host_command_logged rsync -a --exclude=.DS_Store --exclude=__pycache__ "${src}/" "${destination}/"
 }
 
 # ## 归别的包所有的配置文件不能进 bsp 包
@@ -140,48 +156,64 @@ function post_family_tweaks_bsp__w132d_rootfs_overlay() {
 function post_family_tweaks__w132d_rootfs_edits() {
 	declare src="${USERPATCHES_PATH}/overlay/rootfs-edits"
 	[[ -d "${src}" ]] || return 0
-	display_alert "W132D" "写入 $(find "${src}" -type f | wc -l) 个归属其他包的配置" "info"
-	run_host_command_logged cp -a "${src}/." "${SDCARD}/"
+	display_alert "W132D" "写入 $(find "${src}" -type f -not -name .DS_Store | wc -l) 个归属其他包的配置" "info"
+	run_host_command_logged rsync -a --exclude=.DS_Store --exclude=__pycache__ "${src}/" "${SDCARD}/"
 }
 
-# 但 boot-rockchip64.cmd 模板里的 console=ttyS2,1500000 是**写死的**，不看 SERIALCON。
-# 为了不整份复制引导脚本，用 armbianEnv.txt 的 extraboardargs 再追加一个 console=
-# —— 内核把最后一个 console= 当 /dev/console，ttyS2 那个因为没有设备被忽略。
-function post_family_tweaks__w132d_serial_console() {
-	display_alert "W132D" "内核控制台 console=ttyS0,115200（追加到 armbianEnv.txt）" "info"
-	run_host_command_logged echo "extraboardargs=console=ttyS0,115200" ">>" "${SDCARD}/boot/armbianEnv.txt"
+# ## WCN 固件：从 CoreELEC 的公开仓库按钉住的提交取，构建时校 sha256
+#
+# 板上是 UWE5623 / Marlin3E（芯片 id 0x56630001）。2026-09-04 用同一脚本、各干净重启
+# 一次做的对照（关联同一台 5 GHz AP，两个方向各传 100 MB，--interface wlan0 绑接口，
+# 用 wlan0/eth0 的字节计数证明流量确实走无线）：
+#   * armbian-firmware 的 uwe5622/wcnmodem-38222.bin（WCNM 合并镜像，3EAB 段是
+#     MARLIN3E_20A_W21.03.3）—— 扫描 100/100，但**一关联就 CP2 断言**
+#     （cmd_tx_rom.c:3212 → marlin_cp2_reset，蓝牙跟着下电），拿不到 IP
+#   * armbian-firmware 的 uwe5622/wcnmodem.bin —— SC2355 / Marlin3 Lite 的，装错零件
+#   * 出厂 W25.45.3 —— 第一次扫描就崩；作者版 W24.48.5 —— 能用，但是私有文件
+#   * CoreELEC/uwe5631-aml 的 BSP/fw/wcnmodem.bin，MARLIN3E_20A_W23.03.2 ——
+#     关联 OK（VHT80 MCS9 NSS2）、下行 17–19 MB/s、上行 14 MB/s、0 断言、蓝牙/遥控器
+#     不受影响。公开仓库、按提交可定位、可校验。**用这份。**
+#
+# 仓库里不放二进制：bsp 包构建时从钉住的提交下载到 Armbian 的 cache/ 里，sha256 不对
+# 就构建失败。钉提交而不是分支：CoreELEC master 后来又换成了更旧的 W22.47.2。
+# 装到 /lib/firmware/uwe5622/wcnmodem-marlin3e.bin，DTS 的 unisoc,btwf-file-name 指它；
+# armbian-firmware 自己那两份留在原地不碰、不改道 —— 两个包各管各的文件，没有归属冲突。
+declare -g W132D_WCN_FW_COMMIT="82f0b4a1b842c3f41f49ec870b7ec8f5899a8895" # "wcnmodem.bin: update firmware from W22.47.2 to W23.03.2"
+declare -g W132D_WCN_FW_SHA256="d84724b2e442a79d3999c630e5a13a418ef3f1b0a5ecafcf1ce031b3ede758cb"
+declare -g W132D_WCN_FW_URL="https://raw.githubusercontent.com/CoreELEC/uwe5631-aml/${W132D_WCN_FW_COMMIT}/BSP/fw/wcnmodem.bin"
+declare -g W132D_WCN_FW_DEST="lib/firmware/uwe5622/wcnmodem-marlin3e.bin"
+
+function post_family_tweaks_bsp__w132d_wcn_firmware() {
+	declare cache="${SRC}/cache/w132d"
+	declare fw="${cache}/wcnmodem-marlin3e-${W132D_WCN_FW_COMMIT:0:12}.bin"
+	mkdir -p "${cache}"
+	if [[ ! -f "${fw}" ]] || ! echo "${W132D_WCN_FW_SHA256}  ${fw}" | sha256sum -c --status; then
+		display_alert "W132D" "下载 WCN 固件（CoreELEC/uwe5631-aml @ ${W132D_WCN_FW_COMMIT:0:12}）" "info"
+		run_host_command_logged curl -fsSL --retry 3 -o "${fw}.part" "${W132D_WCN_FW_URL}"
+		echo "${W132D_WCN_FW_SHA256}  ${fw}.part" | sha256sum -c --status \
+			|| exit_with_error "WCN 固件 sha256 不符（$(sha256sum "${fw}.part" | cut -c1-16)…）—— 下载坏了，或上游改写了历史"
+		mv "${fw}.part" "${fw}"
+	fi
+	grep -qa "MARLIN3E_" "${fw}" || exit_with_error "${fw} 里没有 Marlin3E 版本串"
+	mkdir -p "${destination}/$(dirname "${W132D_WCN_FW_DEST}")"
+	install -m 0644 "${fw}" "${destination}/${W132D_WCN_FW_DEST}"
+	display_alert "W132D" "WCN 固件：$(grep -ao 'MARLIN3E_[^[:cntrl:]]*' "${fw}" | head -1 | cut -c1-30)（CoreELEC，sha256 已校）+ 三天线 RF 配置" "info"
 }
 
-# ## WCN 固件：用 Armbian 包自带的，不带私有输入
-#
-# 板上是 UWE5623 / Marlin3E。armbian-firmware 的 uwe5622/ 目录里有两份：
-#   * wcnmodem.bin        —— SC2355 / Marlin3 Lite 的，**装错零件**，WiFi 起不来
-#   * wcnmodem-38222.bin  —— WCNM 合并镜像，含 3EAB（Marlin3E AB，本板芯片 id 0x56630001）
-#                            与 3LAB 两段，驱动按芯片 tag 选段。与 Allwinner Tina SDK 里的
-#                            逐字节相同。2026-09-02 本板实测：100 次背靠背扫描 100/100、
-#                            0 个 WCN 错误、BLE 遥控器重启自动重连、压力后不掉
-# 所以 DTS 里 unisoc,btwf-file-name 指向 38222 —— 一行 DT，固件来自 Armbian 自己的包，
-# 没有再分发问题，板级 PR 不受阻。这里只断言那份文件还在、还是 Marlin3E 的。
-#
-# 三天线 RF 配置 wifi_56630001_3ant.ini 是板级参数（收发链掩码、逐信道功率表、
-# ant_cfg 与 Allwinner 通用版不同），随 overlay 装。驱动到 /lib/firmware 根目录找它
-# （UNISOC_WIFI_CUS_CONFIG 没设），所以 overlay 里除了 uwe5622/ 下的文件还有根目录的
-# 软链 —— 与 armbian-firmware 摆 wifi_2355b001_1ant.ini 的方式一致。
+# bsp 包装进 rootfs 之后再确认一遍：文件在、就是钉住的那份、RF 配置也在
 function post_family_tweaks__w132d_wcn_firmware() {
-	declare fw="${SDCARD}/lib/firmware/uwe5622/wcnmodem-38222.bin"
-	[[ -f "${fw}" ]] || exit_with_error "armbian-firmware 不再带 uwe5622/wcnmodem-38222.bin —— 本板 WiFi/蓝牙固件没了，DTS 的 btwf-file-name 指着它"
-	grep -qa "MARLIN3E_" "${fw}" || exit_with_error "${fw} 里没有 Marlin3E 段 —— 文件变了？"
+	echo "${W132D_WCN_FW_SHA256}  ${SDCARD}/${W132D_WCN_FW_DEST}" | sha256sum -c --status \
+		|| exit_with_error "rootfs 里的 /${W132D_WCN_FW_DEST} 缺失或不是钉住的那份 —— DTS 的 btwf-file-name 指着它"
 	[[ -f "${SDCARD}/lib/firmware/wifi_56630001_3ant.ini" ]] \
 		|| exit_with_error "缺 /lib/firmware/wifi_56630001_3ant.ini（overlay 里的软链没铺进去？）"
-	display_alert "W132D" "WCN 固件：Armbian 包自带的 wcnmodem-38222.bin（$(grep -ao 'MARLIN3E_[^[:cntrl:]]*' "${fw}" | head -1 | cut -c1-30)）+ 三天线 RF 配置" "info"
 }
 
 # 服务使能：overlay 只是把 unit 文件放进去，不会自动 enable。
 # HDMI 相关的 unit 本版不带，所以不在列表里。
 function post_family_tweaks__w132d_enable_services() {
 	display_alert "W132D" "使能板级服务" "info"
-	# ⚠️ 实验性：出厂 BL31 每约 32 分钟打死整机的绕过（往 GRF 写握手 cookie），
-	# 尚未在未打补丁的 BL31 上实机验证。挂在 sysinit.target 下尽早跑。
+	# 出厂 BL31 每约 32 分钟打死整机的绕过（往 GRF 写握手 cookie），2026-09-04 在
+	# 原版 BL31 上实测 42 分钟无事。挂在 sysinit.target 下尽早跑。
 	chroot_sdcard systemctl enable w132d-bl31-cookie.service
 	# 出厂 MAC：厂商 U-Boot 没把 vendor storage 的 MAC 修进主线 DTB（首刷实测），
 	# 由这个服务在 networkd 之前从 eMMC 读出来设上，否则每次重刷 MAC/IP 都变

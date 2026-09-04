@@ -65,8 +65,9 @@ chk /cpus/cpu@0               cpu-supply                "cpu-supply"
 chk /regulator-vdd-logic      pwm-dutycycle-range       "vdd_logic"
 chk /soc/gpu@ff700000         mali-supply               "GPU 供电"
 chk /soc/video-codec@ff740000 compatible                "VDEC"
-# WCN 固件必须指向 Armbian 包自带的合并镜像：指回 wcnmodem.bin 就是 SC2355 的，WiFi/蓝牙起不来
-chkval /uwe-bsp unisoc,btwf-file-name /lib/firmware/uwe5622/wcnmodem-38222.bin "WCN 固件文件名"
+# WCN 固件必须指向 bsp 包装的 CoreELEC W23.03.2：指回 wcnmodem.bin 是 SC2355 的（起不来），
+# 指回 wcnmodem-38222.bin 是 W21.03.3（一关联就断言）
+chkval /uwe-bsp unisoc,btwf-file-name /lib/firmware/uwe5622/wcnmodem-marlin3e.bin "WCN 固件文件名"
 chk /ir-receiver              compatible                "红外接收"
 chk /leds                     compatible                "面板指示灯"
 chk /reserved-memory/ramoops@110000 reg                 "ramoops 崩溃留存"

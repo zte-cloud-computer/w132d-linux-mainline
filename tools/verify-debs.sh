@@ -56,6 +56,25 @@ else
   bad "缺 linux-image-edge-rockchip64 deb"
 fi
 
+echo "── linux-u-boot ──"
+UB=$(one linux-u-boot-w132d-edge)
+if [ -n "$UB" ]; then
+  dpkg-deb -c "$UB" > "$T/ub.list"
+  for f in usr/lib/linux-u-boot-edge-w132d/idbloader.img usr/lib/linux-u-boot-edge-w132d/u-boot.itb; do
+    grep -q " \./$f\$" "$T/ub.list" && ok "u-boot 含 $f" || bad "u-boot 缺 $f"
+  done
+  dpkg-deb --fsys-tarfile "$UB" | tar -xOf - ./usr/lib/linux-u-boot-edge-w132d/u-boot.itb > "$T/u-boot.itb" 2>/dev/null
+  head -c 4 "$T/u-boot.itb" | od -An -tx1 | grep -q "d0 0d fe ed" && ok "u-boot.itb 是 FIT" || bad "u-boot.itb 不是 FIT"
+  # 针孔下载键：节点必须叫 saradc@…（主线只认这个名字前缀），代码也得编进去
+  grep -qa "saradc@ffae0000" "$T/u-boot.itb" && ok "U-Boot DT 里 saradc 节点叫 saradc@ffae0000（针孔可用）" || bad "U-Boot DT 里没有 saradc@ffae0000 —— 针孔无效"
+  grep -qa "download key pressed" "$T/u-boot.itb" && ok "U-Boot 编进了下载键检查（ADC 打开）" || bad "U-Boot 没编下载键检查（CONFIG_ADC 没开？）"
+  dpkg-deb --fsys-tarfile "$UB" | tar -xOf - ./usr/lib/linux-u-boot-edge-w132d/idbloader.img > "$T/idbloader.img" 2>/dev/null
+  sz=$(stat -c %s "$T/idbloader.img" 2>/dev/null || echo 0)
+  [ "$sz" -gt 0 ] && [ "$sz" -lt $((7104*512)) ] && ok "idbloader.img $sz B（写到扇区 64，不会碰到 7168 的 vendor storage）" || bad "idbloader.img 大小异常：$sz"
+else
+  bad "缺 linux-u-boot-w132d-edge deb"
+fi
+
 echo "── armbian-bsp-cli ──"
 BSP=$(one armbian-bsp-cli-w132d-edge)
 if [ -n "$BSP" ]; then
@@ -63,10 +82,15 @@ if [ -n "$BSP" ]; then
   for f in etc/systemd/system/w132d-bl31-cookie.service etc/systemd/system/w132d-bluetooth.service \
            etc/apt/preferences.d/w132d-kernel etc/rc_keymaps/w132d.toml usr/local/bin/w132d-bt-smp-ensure \
            lib/firmware/uwe5622/wifi_56630001_3ant.ini lib/firmware/wifi_56630001_3ant.ini \
+           lib/firmware/uwe5622/wcnmodem-marlin3e.bin \
            etc/systemd/system/w132d-vendor-mac.service usr/local/sbin/w132d-vendor-mac; do
     # dpkg-deb -c 对软链打印 "path -> target"，所以不能要求行尾就是路径
     grep -qE " \./$f( -> |\$)" "$T/bsp.list" && ok "bsp 含 $f" || bad "bsp 缺 $f"
   done
+  # WCN 固件必须是钉住的那份（CoreELEC/uwe5631-aml @ 82f0b4a1，MARLIN3E_20A_W23.03.2）
+  WCN_SHA=d84724b2e442a79d3999c630e5a13a418ef3f1b0a5ecafcf1ce031b3ede758cb
+  got=$(dpkg-deb --fsys-tarfile "$BSP" | tar -xOf - ./lib/firmware/uwe5622/wcnmodem-marlin3e.bin 2>/dev/null | { sha256sum 2>/dev/null || shasum -a 256; } | cut -d' ' -f1)
+  [ "$got" = "$WCN_SHA" ] && ok "bsp 里的 wcnmodem-marlin3e.bin sha256 是钉住的那份" || bad "bsp 里的 wcnmodem-marlin3e.bin sha256 不对（$got）"
 else
   bad "缺 armbian-bsp-cli-w132d-edge deb"
 fi

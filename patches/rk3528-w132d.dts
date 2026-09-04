@@ -164,13 +164,14 @@
 		bt-wake-host-gpio-gpios = <&gpio3 RK_PC1 GPIO_ACTIVE_HIGH>;
 		bt-reg-on-gpios = <&gpio3 RK_PC2 GPIO_ACTIVE_HIGH>;
 		/*
-		 * Marlin3E firmware. wcnmodem-38222.bin (shipped by Armbian and by
-		 * Allwinner's SDK) is a WCNM pack; the driver picks the 3EAB image
-		 * for this chip (id 0x56630001). Verified on the board: 100/100
-		 * scans, Bluetooth stable. The bare wcnmodem.bin next to it is the
-		 * Marlin3 Lite (SC2355) image and does not fit this chip.
+		 * Marlin3E firmware: MARLIN3E_20A_W23.03.2 as published in CoreELEC's
+		 * uwe5631-aml repository (BSP/fw/wcnmodem.bin); the board package
+		 * installs it under this name. Armbian's wcnmodem-38222.bin (W21.03.3)
+		 * scans fine but its CP2 asserts as soon as it associates, and the
+		 * bare wcnmodem.bin next to it is the Marlin3 Lite (SC2355) image,
+		 * which does not fit this chip (id 0x56630001).
 		 */
-		unisoc,btwf-file-name = "/lib/firmware/uwe5622/wcnmodem-38222.bin";
+		unisoc,btwf-file-name = "/lib/firmware/uwe5622/wcnmodem-marlin3e.bin";
 		data-irq;
 		blksz-512;
 		keep-power-on;

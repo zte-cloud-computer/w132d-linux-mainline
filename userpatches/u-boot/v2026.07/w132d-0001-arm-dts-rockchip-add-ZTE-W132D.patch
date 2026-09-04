@@ -1,0 +1,99 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wenziwanka <tech@wenziwanka.com>
+Date: Fri, 4 Sep 2026 23:14:20 +0800
+Subject: [PATCH] arm: dts: rockchip: add ZTE Cloud Computer W132D (RK3528)
+
+Minimal U-Boot device tree for the W132D TV box: eMMC (HS200), UART0
+console and the SARADC download key, which is the Reset pinhole next to
+the HDMI port (channel 1). Linux boots its own DTB via extlinux.
+
+The saradc node is re-created as saradc@ffae0000: rockchip_dnl_key_pressed()
+matches ADC devices by the "saradc" name prefix, and the upstream
+rk3528.dtsi calls the node adc@ffae0000, which makes the key invisible.
+---
+ arch/arm/dts/rk3528-w132d.dts | 76 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 76 insertions(+)
+ create mode 100644 arch/arm/dts/rk3528-w132d.dts
+
+diff --git a/arch/arm/dts/rk3528-w132d.dts b/arch/arm/dts/rk3528-w132d.dts
+new file mode 100644
+index 0000000..c809cc1
+--- /dev/null
++++ b/arch/arm/dts/rk3528-w132d.dts
+@@ -0,0 +1,76 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * ZTE Cloud Computer W132D (Rockchip RK3528).
++ *
++ * U-Boot-only device tree: eMMC, UART0 console and the SARADC download key
++ * (the Reset pinhole next to HDMI is SARADC channel 1, ~10 when pressed,
++ * ~1019 idle). Linux gets its own DTB through extlinux.
++ */
++
++/dts-v1/;
++#include "rk3528.dtsi"
++
++/ {
++	model = "ZTE Cloud Computer W132D";
++	compatible = "zte,w132d", "rockchip,rk3528";
++
++	aliases {
++		mmc0 = &sdhci;
++		serial0 = &uart0;
++	};
++
++	chosen {
++		stdout-path = "serial0:1500000n8";
++	};
++
++	vdd_1v8_s3: regulator-vdd-1v8-s3 {
++		compatible = "regulator-fixed";
++		regulator-name = "vdd_1v8_s3";
++		regulator-always-on;
++		regulator-boot-on;
++		regulator-min-microvolt = <1800000>;
++		regulator-max-microvolt = <1800000>;
++	};
++};
++
++/*
++ * rockchip_dnl_key_pressed() (arch/arm/mach-rockchip/boot_mode.c) only looks
++ * at ADC devices whose name starts with "saradc", but the upstream rk3528.dtsi
++ * names the node adc@ffae0000, so the download key is never seen. Re-create
++ * the node under the expected name; the properties are the upstream ones.
++ */
++/delete-node/ &saradc;
++
++/ {
++	soc {
++		saradc: saradc@ffae0000 {
++			compatible = "rockchip,rk3528-saradc";
++			reg = <0x0 0xffae0000 0x0 0x10000>;
++			clocks = <&cru CLK_SARADC>, <&cru PCLK_SARADC>;
++			clock-names = "saradc", "apb_pclk";
++			interrupts = <GIC_SPI 140 IRQ_TYPE_LEVEL_HIGH>;
++			power-domains = <&power RK3528_PD_VPU>;
++			resets = <&cru SRST_P_SARADC>;
++			reset-names = "saradc-apb";
++			#io-channel-cells = <1>;
++			vref-supply = <&vdd_1v8_s3>;
++			status = "okay";
++		};
++	};
++};
++
++&sdhci {
++	bus-width = <8>;
++	cap-mmc-highspeed;
++	mmc-hs200-1_8v;
++	no-sd;
++	no-sdio;
++	non-removable;
++	status = "okay";
++};
++
++&uart0 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&uart0m0_xfer>;
++	status = "okay";
++};

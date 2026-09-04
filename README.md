@@ -19,7 +19,7 @@
 |---|---|
 | `userpatches/config/boards/w132d.csc` | 板级配置：family `rk35xx`、内核 `edge`、不编 u-boot、分区几何 |
 | `userpatches/kernel/archive/rockchip64-7.2/` | 内核补丁的 **Armbian 形态**（其补丁栈之上、`w132d-` 前缀），由 `make-patch-series.sh --on-armbian` 生成，勿手改 |
-| `patches/` | 内核补丁的**源头**：`0001`–`0004` 是完整 git 补丁（能直接 `git am` 到干净主线，即投 LKML 的形态）；`rk3528-w132d.dts` 是第 5 个补丁的源，配 `0005-*.msg` 提交信息 |
+| `patches/` | 内核补丁的**源头**：`NNNN-*.patch` 是完整 git 补丁（能直接 `git am` 到干净主线，即投 LKML 的形态）；`rk3528-w132d.dts` 是最后一个补丁的源，配编号最大的 `NNNN-*.msg` 提交信息 |
 | `userpatches/overlay/` · `userpatches/extensions/` | rootfs 定制文件（unit、keymap、脚本；运行时依赖包由板级配置的 `PACKAGE_LIST_BOARD` 装）· 在 chroot 里从源码编的原生工具（btattach、BL31 cookie） |
 | `tools/` | 构建与校验脚本 |
 | `cache/` | 拉来的内核源码。**不入库**，`tools/fetch-inputs.sh` 可重来 |
@@ -38,11 +38,11 @@ docker run --rm -v w132d-72:/build -v "$PWD":/w -v "$PWD/cache/src":/src:ro \
 docker run --rm -v w132d-armbian:/build -v "$PWD":/w \
   debian:13 bash /w/tools/armbian-kernel.sh kernel-patch
 
-# 完整镜像 → 离线校验 → 两段式发布物 → 刷写（需要 --privileged：losetup/mount）
+# 完整镜像 → 离线校验 → 整盘发布物 → 刷写（需要 --privileged：losetup/mount）
 docker run --rm --privileged -v /dev:/tmp/dev -v w132d-armbian:/build -v "$PWD":/w \
   debian:13 bash -c 'bash /w/tools/armbian-kernel.sh build \
     && bash /w/tools/verify-image.sh && bash /w/tools/make-release.sh'
-tools/flash.sh out/release                          # 设备按住 Reset 针孔上电，USB 直连
+W132D_SPL_LOADER=cache/rkbin/rk3528_loader_v1.13.107.bin tools/flash.sh out/release   # 按住针孔上电进 MaskROM，USB 直连
 ```
 
 ## 防漂与上游化
@@ -78,6 +78,7 @@ dtc 直接报 label not found。
 | `media: rkvdec: add RK3528 support` | 高——一条 of_match 指向已有 variant |
 | `mmc: sdhci-of-dwcmshc: RK3528 HS400 DLL taps` | 高——小且自洽 |
 | `thermal: rockchip: add RK3528 TSADC support` | 中——标准 SoC 使能，需配 DT binding 文档 |
+| `Bluetooth: hci_sync: 控制器拒绝默认 link policy 时不让初始化失败` | 高——通用修复，UWE5623 上报 Park 却拒绝它；不改则 hci0 永远起不来 |
 | `arm64: dts: rockchip: add the W132D` | 中——需在 binding 里登记 compatible |
 | `ASoC: rockchip: RK3528 codec + ES7202` | 低——2359 行两个新驱动，需正经 binding 与 review |
 
@@ -88,11 +89,11 @@ dtc 直接报 label not found。
 | 功能 | 状态 | 说明 |
 |---|---|---|
 | eMMC | 可用 | HS400 Enhanced Strobe，RK3528 DLL tap 6/6/3 |
-| USB 2.0 / 有线网络 | 可用 | **7.2 起 USB2 PHY 驱动与 DT 节点由主线自带**。出厂 MAC 由 `w132d-vendor-mac` 开机从 eMMC 的 vendor storage 读出设上（厂商 U-Boot 没把它修进主线 DTB） |
-| Wi-Fi / 蓝牙 / BLE 遥控 | 可用 | UWE5623 / Marlin3E。固件用 **Armbian 包自带的 `uwe5622/wcnmodem-38222.bin`**（WCNM 合并镜像，驱动按芯片 id 选 Marlin3E 段；本板实测 100/100 扫描、遥控器稳定），没有私有输入。旁边那个 `wcnmodem.bin` 是 SC2355 的，不能用；出厂的 W25.45.3 第一次扫描就崩。三天线 RF 配置随 overlay。驱动是 Armbian 的 `armbian/uwe5622` + 一行 vfree 补丁（见下），**新驱动本身未在本板实测** |
+| USB 2.0 / 有线网络 | 可用 | **7.2 起 USB2 PHY 驱动与 DT 节点由主线自带**。MAC 由主线 U-Boot 按 OTP cpuid 派生并注入 DT（固定，不等于出厂值） |
+| Wi-Fi / 蓝牙 / BLE 遥控 | 可用 | UWE5623 / Marlin3E。固件是 **CoreELEC 公开仓库 [uwe5631-aml](https://github.com/CoreELEC/uwe5631-aml) 里的 `MARLIN3E_20A_W23.03.2`**，bsp 包构建时按钉住的提交下载、校 sha256、装成 `uwe5622/wcnmodem-marlin3e.bin`（本板实测：关联 OK、下行 17–19 MB/s、上行 14 MB/s、0 断言、遥控器稳定），仓库里没有二进制、没有私有输入。Armbian 包自带的 `wcnmodem-38222.bin`（W21.03.3）扫描正常但一关联就 CP2 断言；旁边的 `wcnmodem.bin` 是 SC2355 的，不能用；出厂的 W25.45.3 第一次扫描就崩。三天线 RF 配置随 overlay。驱动是 Armbian 的 `armbian/uwe5622` + 一行 vfree 补丁（见下），**新驱动本身未在本板实测** |
 | 红外遥控 | 可用 | GPIO4_C6，rc-core + NEC |
 | 3.5 mm 音频 | 可用 | acodec 输出，ES7202/PDM 输入 |
-| Mali-450 GPU | 可用 | Lima，300–800 MHz，含热降频 |
+| Mali-450 GPU | 可用 | Lima，300–800 MHz，含热降频。Armbian 的 rk3528 pmdomain 补丁会把 GPU 电源域丢掉（`w132d-armbian-0004` 改回主线语义，待报 Armbian） |
 | H.264 / HEVC 解码 | 可用 | 主线 RKVDEC |
 | 温控 / DVFS / 看门狗 / pstore | 可用 | ramoops 的 console 通路由板级 config 钩子打开（Armbian 默认没开 `PSTORE_CONSOLE`，硬挂时会零现场） |
 | 面板双色指示灯 · 软件待机 | 可用 | 红外/BLE 电源键；Linux 与网络保持运行 |
@@ -100,14 +101,50 @@ dtc 直接报 label not found。
 
 暂不支持 suspend-to-RAM；4G 模组驱动不在项目范围内。
 
-串口控制台在 **UART0 / ttyS0，115200**（DTS 的 stdout-path）。Armbian 对非 rk3576 的
-SoC 默认 ttyS2，且引导脚本模板把 `console=ttyS2,1500000` 写死；板级配置设了
-`SERIALCON=ttyS0` 并经 `armbianEnv.txt` 的 `extraboardargs` 追加 `console=ttyS0,115200`。
+引导走 **extlinux.conf**（`SRC_EXTLINUX=yes`）：厂商 U-Boot 的 distro boot 先找它，迁移前
+的构建链就是这么起的；Armbian 默认的 boot.scr 依赖厂商 U-Boot 环境里的一堆变量与命令，
+在本板上没起来过。内核参数只有 `SRC_CMDLINE` 一处，串口控制台 **UART0 / ttyS0，115200**
+（Armbian 对非 rk3576 的 SoC 默认 ttyS2，板级配置设了 `SERIALCON=ttyS0` 给 getty）。
 
 > [!NOTE]
 > 这份镜像**还没有整体上过真机**：五个内核补丁、DTS 与 rootfs 定制都在迁移前的
 > 构建链上验证过，但换到 Armbian 的 7.2 内核、Armbian 的无线驱动与引导脚本之后，
 > 只做了 `tools/verify-image.sh` 的离线校验。首次刷写请把它当作待验证版本。
+
+## 引导链：主线 U-Boot + rkbin blob（2026-09-05 起默认）
+
+引导链是 U-Boot v2026.07 的 generic-rk3528 + 本板 U-Boot DT（`userpatches/u-boot/v2026.07/`），
+rkbin 的 DDR v1.13 / BL31 v1.21 原样使用，与 Armbian 的 radxa-e24c 同法。钩子在
+`userpatches/extensions/w132d-uboot.sh`（板级配置 `enable_extension`）。**镜像自带完整引导链，
+设备上不再有任何厂商二进制。**
+
+| 扇区 | 内容 |
+|---|---|
+| 0–63 | GPT（三分区、固定 UUID） |
+| 64– | idbloader：rkbin DDR + 主线 SPL（174 KB） |
+| 16384– | u-boot.itb：BL31 + U-Boot proper |
+| 24576– | p2 bootfs（extlinux）、p3 rootfs |
+
+- **针孔**：HDMI 旁的 Reset 针孔是 SARADC ch1 下载键，U-Boot proper 读到后写 BOOT_BROM_DOWNLOAD
+  复位，BootROM 进 **MaskROM**（`rkdeveloptool ld` 显示 Maskrom）。主线只认名字以 `saradc` 开头的
+  ADC 设备而上游节点叫 `adc@ffae0000`，所以 DT 补丁把节点按 `saradc@ffae0000` 重建（上游应改成
+  按 compatible 匹配，待投）。
+- **MAC**：U-Boot 的 `misc_init_r` 按 OTP cpuid 派生一个固定地址（主线 Rockchip 板的标准做法），
+  起内核时按 `ethernet0` 别名注入 DT。每台机器固定、不同机器不同，但**不等于机身标签上的出厂值**
+  （本机 `d6:d7:e9:9a:33:5b`）——路由器里的绑定要改一次。出厂 MAC 存在 Rockchip 私有格式的
+  vendor storage 里（扇区 7168，主线两边都没有驱动），整盘刷写一并清零，不抢救。
+  Linux 侧的 `w132d-vendor-mac` 只是兜底：DT 里没有 MAC 时才按 OTP 派生。
+- **⚠️ U-Boot 里别开 `CONFIG_NET`，也别把 env 放进 eMMC**：2026-09-05 实测两者都让 Linux 起不来
+  （U-Boot proper 还活着、针孔能进 MaskROM，但内核从没挂过根）。env 那次的机制查清了：
+  `env_relocate()` 只在存储的 env 无效时才载入编进二进制的默认环境，读到一份只有 `ethaddr` 的
+  合法 env 就没有 `bootcmd` 了（`CONFIG_ENV_APPEND` 也救不了）。真要预置 env 必须
+  `u-boot-initial-env` + `mkenvimage` 写完整一份，且每次刷 U-Boot 都得重写——不值得。
+- **BL31 的 32 分钟 uartdbg 问题**由 `w132d-bl31-cookie.service` 绕过，rkbin 任何版本都适用。
+- 验证记录（2026-09-04）：先只换 P1（厂商 SPL 能加载主线 FIT），再换 idbloader，全主线链引导 14.3 s，
+  0 失败单元；针孔 → MaskROM → `db` → 读写 eMMC → `rd` 闭环。厂商引导链备份在 `cache/bl31/`。
+
+⚠️ 绝不能把 binman 的 `u-boot-rockchip.bin` 从扇区 64 一路 dd（Armbian 对 e24c 就是这样写的）：
+中间 0xff 填充到 16384，会把还在的 vendor storage 抹掉。扩展里的 `write_uboot_platform` 分两段写。
 
 ## CI 构建与设备更新
 
@@ -137,33 +174,21 @@ dpkg -i linux-dtb-edge-rockchip64_*.deb linux-image-edge-rockchip64_*.deb armbia
 
 下一步是把 Release 里的包做成签名的 apt 源，设备直接 `apt upgrade`。
 
-## 引导链：保留设备自己的
+## 刷写：整盘镜像
 
-镜像不含引导链，刷写**只写 GPT（扇区 0–63）和扇区 24576 起**，完全不碰 64–24575。
-那一段是设备自己的 idbloader、vendor storage（SN/MAC/HDCP/IMEI）、RKSS 和 U-Boot ——
-用它自己的就能启动，所以不需要备份 L0，逐机数据也不会被覆盖。板级配置里对应
-`BOOTCONFIG="none"`（先例：`aml-s9xx-box.tvb` 等 8 块板）。
+发布物是一张设备形状的整盘镜像 `out/release/w132d.img`（GPT + 引导链 + bootfs + rootfs，
+7168–10239 留零）。`tools/flash.sh` 从扇区 0 起整盘写入，不保留设备上任何厂商内容、不读不写
+任何逐机数据。写完必须回读抽样比对（GPT、idbloader、u-boot.itb 逐字节，p2/p3 抽 18 点含 ext4
+超级块）——rkdeveloptool 的 100% 不算数。
 
-这也意味着 HDMI 旁那个针孔行为与原厂一致：实测它是 **SARADC 通道 1 的下载键**（按下
-读数 10，静息 1019），不是硬复位；读它的是我们永不覆盖的厂商 miniloader。
-
-> [!CAUTION]
-> 出厂 BL31 有一个每约 32 分钟打死整机的缺陷：Rockchip 的安全侧串口调试器
-> （uartdbg）第 30 次定时 tick 起检查 GRF `0xff370220` 里有没有握手 cookie
-> `0x2b4d1f7a`（厂商内核的 fiq_debugger 负责写，主线内核没有），没有就往 console
-> 喷训练帧并改写 UART 时钟分频。rkbin 的 v1.21 同样没修。镜像里带两条路：
->
-> 1. **实验性、零补丁**：`w132d-bl31-cookie.service` 开机早期写那个 cookie
->    （`userpatches/extensions/src/w132d-bl31-cookie.c`）。判据来自反汇编，**尚未在
->    未打补丁的 BL31 上实机验证**——本机 BL31 已打过补丁，测不出结果，要用原版
->    BL31 挂 40 分钟才算数。
-> 2. **已验证**：给设备自己那份 BL31 打 4 字节补丁（atf-1 偏移 `0x188d4`，
->    `89 fe ff 54` → `f4 ff ff 17`，并同步 FIT 里的 sha256）。
-
-**只对 Armbian 的补丁**：`userpatches/kernel/archive/rockchip64-7.2/w132d-armbian-*.patch`
-改的是 Armbian 自己加进内核的树外驱动（主线没有那些文件，进不了 `patches/`），手工维护，
-目标是投给对应的 Armbian 仓库后删掉。目前一个：`armbian/uwe5622` 释放固件缓冲时用了
-被偏移过的指针（WCNM 合并镜像下每次上电漏 1.7 MB 并打 WARN），改成释放分配起点。
+> [!NOTE]
+> 出厂 BL31 有一个每约 32 分钟打死整机的缺陷：Rockchip 的安全侧串口调试器（uartdbg）第 30 次
+> 定时 tick 起检查 GRF `0xff370220` 里有没有握手 cookie `0x2b4d1f7a`（厂商内核的 fiq_debugger
+> 负责写，主线内核没有），没有就往 console 喷训练帧并改写 UART 时钟分频。rkbin 的 v1.21 同样没修。
+> 镜像里的 `w132d-bl31-cookie.service` 开机早期写这个 cookie
+> （`userpatches/extensions/src/w132d-bl31-cookie.c`）。**2026-09-04 在原版（未打补丁）BL31 上实测：
+> 42 分钟无挂死无复位**，两个历史爆点（1919 s / 1979 s）都过了。所以**不需要碰 BL31**，
+> 也不需要 rkbin 的任何 blob；早先"给 atf-1 打 4 字节补丁"那条路已退役。
 
 ## 已知的漂移点
 
@@ -174,5 +199,5 @@ dpkg -i linux-dtb-edge-rockchip64_*.deb linux-image-edge-rockchip64_*.deb armbia
   `driver_uwe5622()` 只对 `5.15 ≤ 内核 < 7.3` 加入驱动。Armbian 把 edge 提到 7.3 的那天，
   Wi-Fi/蓝牙模块会**无声消失**——`verify-image.sh` 不查模块，要看 `kernel` 构建产物里
   有没有 `sprdwl_ng.ko`。
-* **引导脚本模板**把 `console=ttyS2,1500000` 写死，我们靠 `extraboardargs` 覆盖；
-  模板改了这行，`verify-image.sh` 会报。
+* **extlinux 的生成**在 `lib/functions/rootfs/distro-agnostic.sh` 与 `image/partitioning.sh`
+  两处（`kernel/initrd/fdt` 与 `append root=`），`verify-image.sh` 逐行核对。

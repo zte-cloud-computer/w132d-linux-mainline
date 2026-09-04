@@ -1,27 +1,31 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# 把两段式发布物刷进 W132D。
+# 把整盘镜像 w132d.img 刷进 W132D。
 #
 # 用法：
-#   tools/flash.sh [发布目录]        默认 out/release
-#   加 --dry-run 只做检查、不写任何东西
+#   tools/flash.sh [发布目录或镜像文件]        默认 out/release
+#   --dry-run 只做检查、不写任何东西；--verify-only 只把 eMMC 回读与镜像比对
+#   W132D_SPL_LOADER=<path> 指向 rkbin 的 rk3528 loader（必需，见下）
 #
-# 需要设备进入 Loader 或 MaskROM：用顶针按住 HDMI 口旁的 Reset 针孔，
-# 保持按住插入电源，用 USB-A 直连电脑（别经 hub）。
+# 需要设备进入 MaskROM：用顶针按住 HDMI 口旁的 Reset 针孔，保持按住插入电源，
+# 用 USB-A 直连电脑（别经 hub）。针孔是 SARADC ch1 下载键，由 U-Boot proper 读到后
+# 写 BOOT_BROM_DOWNLOAD 复位，BootROM 进 MaskROM（2026-09-04 实测）。
+# 还在跑厂商 U-Boot 的设备按针孔进的是厂商 Loader 模式，本脚本用 `rd 3` 把它复位进 MaskROM。
 #
-# ## 只写两段，中间那段永不触碰
+# ## 整盘覆盖，不保留任何逐机数据
 #
-#   扇区 0–63        GPT（保护性 MBR + 主 GPT + 保留区）        ← 写
-#   扇区 64–16383    idbloader（DDR 训练 + SPL）、vendor storage ← **永不写**
-#                    （SN / MAC / HDCP Key / IMEI）、RKSS
-#   扇区 16384–24575 p1，厂商 U-Boot FIT                        ← **永不写**
-#   扇区 24576 起    bootfs + rootfs                            ← 写
+# 引导链全是主线的（rkbin DDR/BL31 blob + 主线 SPL/U-Boot），镜像自带，所以从扇区 0 整盘写。
+# 出厂 vendor storage（扇区 7168 起，Rockchip 私有格式，主线两边都没有驱动）一并清零 ——
+# 里面唯一有用的出厂 MAC 不抢救：U-Boot 按 OTP cpuid 派生一个固定地址注入 DT（主线 Rockchip
+# 板的标准做法），每台机器固定、不同机器不同。2026-09-05 试过把出厂 MAC 迁进 U-Boot env，
+# 能做但要维护一整套 env 生成（只写一条会让设备停在 U-Boot 提示符），不值得，作罢。
 #
-# 中间那段是**设备自己的**：DDR blob 与内存批次绑定，别人的刷进来起不来；
-# vendor storage 里是逐机身份，覆盖了就找不回。用它自己的就能启动本项目的
-# Linux（2026-08-28 实测），所以既不需要事先备份 L0，也不会丢身份。
+# ## ⚠️ 厂商 miniloader 写大文件会静默截断（2026-09-04 实测，两次刷写都栽在这）
 #
-# 本脚本因此**不提供任何写入 64–24575 的路径**，连选项都没有。
+# 厂商 Loader 模式用它 `wl` 2.4 GB，rkdeveloptool 一路报到 100%、返回成功，
+# **但 eMMC 上只有前 16–24 MB 是对的**，后面全是 0xCC。所以：
+#   1. 写入一律走 rkbin 的 loader（usbplug）：MaskROM 下 `db` 下载，再写。
+#   2. 写完**必须回读抽样比对**（含 p3 的 ext4 超级块），"100%" 不算数。
 #
 # ## 三个设了闸的坑
 #
@@ -34,33 +38,65 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-DIR="${1:-$HERE/out/release}"
-[ "${1:-}" = "--dry-run" ] && { DIR="$HERE/out/release"; }
-DRY=0
-for a in "$@"; do [ "$a" = "--dry-run" ] && DRY=1; done
+DRY=0; VERIFY_ONLY=0; TARGET=""
+for a in "$@"; do
+  case "$a" in
+    --dry-run) DRY=1 ;;
+    --verify-only) VERIFY_ONLY=1 ;;
+    *) TARGET="$a" ;;
+  esac
+done
+TARGET="${TARGET:-$HERE/out/release}"
+if [ -d "$TARGET" ]; then DIR="$TARGET"; IMG="$DIR/w132d.img"; else IMG="$TARGET"; DIR="$(dirname "$IMG")"; fi
 
-GPT="$DIR/w132d-gpt.bin"
-PAYLOAD="$DIR/w132d-p2p3.img"
-P2_START=24576
 GPT_SECTORS=64
+VS_START=7168                          # 出厂 vendor storage 位置：镜像里必须是零
+P1_START=16384; P2_START=24576; P3_START=1073152
 LOADER="${W132D_SPL_LOADER:-}"
 
 step(){ echo; echo "########## $* ##########"; }
 die(){ echo "❌ $*" >&2; exit 1; }
+fsize(){ stat -f%z "$1" 2>/dev/null || stat -c%s "$1"; }
+
+# 回读抽样：GPT 全部 64 扇区逐字节；idbloader 与 u-boot.itb 整段逐字节；p2/p3 按等距
+# 16 个点 + 末尾 + p3 的 ext4 超级块所在扇区，每点 8 扇区与镜像比对。厂商 miniloader
+# 截断时前 16 MB 是对的、后面全 0xCC，这样的采样一定抓得住。
+verify_written() {
+  local tmp; tmp=$(mktemp -d); local fail=0
+  local total=$(( $(fsize "$IMG") / 512 ))
+  chk() {  # chk <起始扇区> <扇区数> <说明>
+    dd if="$IMG" bs=512 skip="$1" count="$2" 2>/dev/null > "$tmp/f"
+    if rkdeveloptool rl "$1" "$2" "$tmp/d" >/dev/null 2>&1 && cmp -s "$tmp/d" "$tmp/f"; then
+      return 0
+    else
+      printf '    ❌ 扇区 %d 起 %d 扇区回读不一致（%s）\n' "$1" "$2" "$3"; fail=1; return 1
+    fi
+  }
+  chk 0 $GPT_SECTORS "GPT" && echo "    ✅ GPT 逐字节一致"
+  chk 64 340 "idbloader" && echo "    ✅ idbloader（64–403）逐字节一致"
+  chk $VS_START 64 "vendor storage 位置（应为零）" && echo "    ✅ 7168 起已清零"
+  chk $P1_START 1536 "u-boot.itb" && echo "    ✅ u-boot.itb（16384 起 1536 扇区）逐字节一致"
+  local pts=() i
+  for i in $(seq 0 15); do pts+=( $(( P2_START + (total - P2_START) * i / 16 )) ); done
+  pts+=( $(( total - 8 )) $(( P3_START + 2 )) )   # 末尾、p3 超级块（分区起点 + 1 KiB）
+  local ok=1
+  for off in "${pts[@]}"; do chk "$off" 8 "p2/p3 采样" || ok=0; done
+  [ "$ok" = 1 ] && echo "    ✅ p2/p3 ${#pts[@]} 个采样点全部一致（含 p3 超级块）"
+  rm -rf "$tmp"; return $fail
+}
 
 command -v rkdeveloptool >/dev/null \
   || die "缺 rkdeveloptool（https://github.com/rockchip-linux/rkdeveloptool）"
 
 step "1/5 核对发布物"
-[ -f "$GPT" ]     || die "缺 $GPT —— 先跑 tools/make-release.sh"
-[ -f "$PAYLOAD" ] || die "缺 $PAYLOAD"
-gpt_size=$(stat -f%z "$GPT" 2>/dev/null || stat -c%s "$GPT")
-# GPT 文件必须**恰好** 64 个扇区。多一个字节就会写进 64 号扇区，
-# 那是 idbloader 的地盘 —— 这条断言是本脚本最重要的一道闸。
-[ "$gpt_size" = "$((GPT_SECTORS * 512))" ] \
-  || die "GPT 文件是 $gpt_size B，必须恰好 $((GPT_SECTORS * 512)) B（64 扇区）；再多就会写到 idbloader 上"
-echo "  ✅ GPT $gpt_size B（扇区 0–63）"
-echo "  ✅ 净荷 $(stat -f%z "$PAYLOAD" 2>/dev/null || stat -c%s "$PAYLOAD") B（写到扇区 $P2_START 起）"
+[ -f "$IMG" ] || die "缺 $IMG —— 先跑 tools/make-release.sh"
+img_size=$(fsize "$IMG")
+[ $((img_size % 512)) = 0 ] || die "镜像大小 $img_size 不是 512 的倍数"
+[ "$img_size" -gt $((P3_START * 512)) ] || die "镜像只有 $img_size B，连 p3 起点都没到"
+echo "  ✅ 镜像 $img_size B（$((img_size / 512)) 扇区）"
+hole_nz=$(dd if="$IMG" bs=512 skip=$VS_START count=3072 2>/dev/null | tr -d '\0' | wc -c | tr -d ' ')
+[ "$hole_nz" = 0 ] || die "镜像 7168–10239 有 $hole_nz 个非零字节 —— 这段该是零，别用这份镜像"
+echo "  ✅ 镜像 7168–10239 全零（不带任何机器的 vendor storage）"
 if [ -f "$DIR/SHA256SUMS" ]; then
   if (cd "$DIR" && shasum -a 256 -c SHA256SUMS >/dev/null 2>&1 \
        || sha256sum -c SHA256SUMS >/dev/null 2>&1); then
@@ -88,29 +124,41 @@ fi
 echo "  模式：$MODE"
 
 step "3/5 准备写入通道"
-if [ "$MODE" = Maskrom ]; then
-  # MaskROM 下 eMMC 还没初始化，必须先把 loader 下到 SRAM 里跑起来
-  [ -n "$LOADER" ] || die "MaskROM 模式需要 SPL loader：设 W132D_SPL_LOADER=<path>
-     它由 rkbin 的 boot_merger 按 RKBOOT/RK3528MINIALL.ini 打出来
-     （DDR blob + usbplug + SPL），产物名形如 rk3528_loader_v1.13.107.bin"
-  [ -f "$LOADER" ] || die "loader 不存在：$LOADER"
-  echo "  下载 loader：$(basename "$LOADER")"
-  [ "$DRY" = 1 ] || rkdeveloptool db "$LOADER" || die "db 失败"
-  sleep 2
-  # db 之后应当变成 Loader
-  rkdeveloptool ld 2>&1 | sed 's/^/  /'
-else
-  # ⚠️ Loader 模式下发 db 会被拒（"The device does not support this operation!"），
-  # 所以这里什么都不做 —— 这正是「先看模式再决定」的意义。
-  echo "  已是 Loader 模式，跳过 db"
+if [ "$MODE" = Loader ]; then
+  # 还在跑厂商 U-Boot 的设备。厂商 miniloader 写大文件会静默截断（见抬头），复位进 MaskROM 换 loader。
+  echo "  当前是厂商 Loader，复位进 MaskROM 换用 rkbin loader（rd 3）"
+  if [ "$DRY" = 0 ]; then
+    rkdeveloptool rd 3 >/dev/null 2>&1 || true
+    for _ in $(seq 1 15); do sleep 1; rkdeveloptool ld 2>&1 | grep -qi Maskrom && break; done
+    rkdeveloptool ld 2>&1 | sed 's/^/  /'
+    rkdeveloptool ld 2>&1 | grep -qi Maskrom && MODE=Maskrom \
+      || die "rd 3 之后没进 MaskROM。请断电、按住针孔上电重试"
+  fi
+fi
+[ -n "$LOADER" ] || die "需要 rkbin loader：设 W132D_SPL_LOADER=<path>
+     它由 rkbin 的 boot_merger 按 RKBOOT/RK3528MINIALL.ini 打出来（DDR blob + usbplug + SPL），
+     tools/fetch-inputs.sh 会生成 cache/rkbin/rk3528_loader_v1.13.107.bin"
+[ -f "$LOADER" ] || die "loader 不存在：$LOADER"
+if [ "$VERIFY_ONLY" = 1 ] || [ "$DRY" = 0 ]; then
+  # MaskROM 下 eMMC 还没初始化，必须先把 loader 下到 SRAM 里跑起来；已经 db 过的话再 db 会被拒，无害
+  if [ "$MODE" = Maskrom ]; then
+    echo "  下载 loader：$(basename "$LOADER")"
+    rkdeveloptool db "$LOADER" >/dev/null 2>&1 || echo "  （db 被拒：多半已经下载过，继续）"
+    sleep 2
+    rkdeveloptool ld 2>&1 | sed 's/^/  /'
+  fi
+fi
+
+if [ "$VERIFY_ONLY" = 1 ]; then
+  step "只回读比对（不写）"
+  verify_written && echo "VERIFY_OK" || die "eMMC 上的内容与镜像不一致"
+  exit 0
 fi
 
 step "4/5 写入"
 cat <<EOF
-  即将写入：
-    扇区 0       <- $(basename "$GPT")（64 扇区）
-    扇区 $P2_START   <- $(basename "$PAYLOAD")
-  **不会**触碰扇区 64–24575（idbloader / vendor storage / 厂商 U-Boot）
+  即将**整盘覆盖**：扇区 0 <- 镜像全部 $((img_size / 512)) 扇区
+  出厂 vendor storage 一并清零；开机后 MAC 由 U-Boot 按 OTP cpuid 派生（固定，不等于出厂值）
 EOF
 if [ "$DRY" = 1 ]; then
   echo "  （--dry-run，不写）"
@@ -118,11 +166,10 @@ else
   printf '  确认写入？输入 yes 继续：'
   read -r answer
   [ "$answer" = "yes" ] || die "已取消"
-  echo "  写 GPT ..."
-  rkdeveloptool wl 0 "$GPT" || die "写 GPT 失败（若 ld 已变成 Maskrom，重新上电再来）"
-  echo "  写净荷 ...（2.7 GB，几分钟）"
-  rkdeveloptool wl "$P2_START" "$PAYLOAD" || die "写净荷失败"
-  echo "  ✅ 两段都写完了"
+  echo "  写整盘镜像（$img_size B，几分钟）..."
+  rkdeveloptool wl 0 "$IMG" || die "写镜像失败（若 ld 已变成 Maskrom，重新上电再来）"
+  echo "  ✅ 写完了 —— 但 100% 不算数，回读比对："
+  verify_written || die "回读比对失败：eMMC 上的内容与镜像不一致，设备不会启动。别重启，换 loader 重刷"
 fi
 
 step "5/5 收尾"
@@ -133,18 +180,9 @@ else
   echo "  已发出重启"
 fi
 cat <<'EOF'
-
 FLASH_OK
-
-⚠️ 关于出厂 BL31 每约 32 分钟打死整机的缺陷（安全侧串口调试器在宽限期后扫
-   波特率，往 console 喷训练帧并改写 UART 时钟分频），镜像里带了两条路：
-
-   1. **实验性**：w132d-bl31-cookie.service 开机早期往 GRF 0xff370220 写握手
-      cookie 0x2b4d1f7a，BL31 查到就直接返回。零补丁、对 rkbin 各版本都有效，
-      但尚未在未打补丁的 BL31 上实机验证。看结果：
-        systemctl status w132d-bl31-cookie   （应为 active、"cookie present"）
-        uptime > 40 min 且 console 没有 #/8/--/] 帧 → 成立
-   2. **已验证**：给设备自己那份 BL31 打 4 字节补丁 —— p1 内 atf-1 偏移 0x188d4，
-      `89 fe ff 54` -> `f4 ff ff 17`，并同步改 FIT 里 atf-1 的 sha256。
-      换 rkbin 新 blob 没用（v1.21 同样有这个问题）。
+ℹ️ 首次开机要几分钟：firstrun 扩容 rootfs、生成 SSH 密钥。第二次还慢就不是慢，是出问题了。
+ℹ️ 出厂 BL31 每约 32 分钟打死整机的缺陷由镜像里的 w132d-bl31-cookie.service 绕过
+   （开机早期往 GRF 0xff370220 写握手 cookie），rkbin 任何版本的 BL31 都适用。
+   看状态：systemctl status w132d-bl31-cookie（应为 active、"cookie present"）
 EOF

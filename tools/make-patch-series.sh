@@ -12,12 +12,12 @@
 #
 # ## 输入：patches/ 是唯一的源头
 #
-#   patches/0001–0004-*.patch   完整的 git 补丁（From / Subject / 正文 / Signed-off-by /
+#   patches/NNNN-*.patch        完整的 git 补丁（From / Subject / 正文 / Signed-off-by /
 #                               diff），可直接 `git am` 到干净主线 —— 这就是投 LKML 的形态
 #   patches/rk3528-w132d.dts    第 5 个补丁的源。板级 DTS 必须以补丁形式进 Armbian
 #                               的补丁目录（那里只应用 *.patch，丢个裸 .dts 进去是
 #                               **静默无效**的），所以由本脚本把它做成最后一个提交
-#   patches/0005-*.msg          第 5 个补丁的提交信息
+#   patches/NNNN-*.msg          最后一个补丁（板级 DTS）的提交信息，编号最大
 #
 # ## 为什么是 git 提交，不是散装 .patch
 #
@@ -106,8 +106,9 @@ apt-get -qq install -y --no-install-recommends \
   git ca-certificates patch xz-utils python3 curl >/dev/null 2>&1
 
 [ -f "$DTS" ] || die "缺板级 DTS：$DTS"
-DTS_MSG=$(ls "$PATCHES"/0005-*.msg 2>/dev/null | head -1)
-[ -n "$DTS_MSG" ] || die "缺 $PATCHES/0005-*.msg（板级 DTS 的提交信息）"
+# DTS 永远是最后一个提交：取编号最大的那个 .msg
+DTS_MSG=$(ls "$PATCHES"/[0-9][0-9][0-9][0-9]-*.msg 2>/dev/null | sort | tail -1)
+[ -n "$DTS_MSG" ] || die "缺 $PATCHES/NNNN-*.msg（板级 DTS 的提交信息）"
 
 step "1/4 准备内核树（linux-$KVER）"
 TB="$B/tarballs/linux-$KVER.tar.xz"

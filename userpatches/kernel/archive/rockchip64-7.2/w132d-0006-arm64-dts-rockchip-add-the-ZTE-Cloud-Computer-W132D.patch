@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: wenziwanka <tech@wenziwanka.com>
-Date: Wed, 2 Sep 2026 06:07:25 +0000
-Subject: [PATCH 5/5] arm64: dts: rockchip: add the ZTE Cloud Computer W132D
+Date: Fri, 4 Sep 2026 12:40:00 +0000
+Subject: [PATCH 6/6] arm64: dts: rockchip: add the ZTE Cloud Computer W132D
 
 The W132D is an RK3528-based set-top box with 1 GB of DDR4, 8 GB of eMMC,
 100 Mbit Ethernet, a UWE5622 SDIO Wi-Fi/Bluetooth combo, a 3.5 mm
@@ -22,8 +22,8 @@ Tested on the board itself.
 Signed-off-by: wenziwanka <tech@wenziwanka.com>
 ---
  arch/arm64/boot/dts/rockchip/Makefile         |   2 +
- arch/arm64/boot/dts/rockchip/rk3528-w132d.dts | 732 ++++++++++++++++++
- 2 files changed, 734 insertions(+)
+ arch/arm64/boot/dts/rockchip/rk3528-w132d.dts | 733 ++++++++++++++++++
+ 2 files changed, 735 insertions(+)
  create mode 100644 arch/arm64/boot/dts/rockchip/rk3528-w132d.dts
 
 diff --git a/arch/arm64/boot/dts/rockchip/Makefile b/arch/arm64/boot/dts/rockchip/Makefile
@@ -38,10 +38,10 @@ index 761d82b..ff9f9b5 100644
 +dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3528-w132d.dtb
 diff --git a/arch/arm64/boot/dts/rockchip/rk3528-w132d.dts b/arch/arm64/boot/dts/rockchip/rk3528-w132d.dts
 new file mode 100644
-index 0000000..4fbc9fd
+index 0000000..db52277
 --- /dev/null
 +++ b/arch/arm64/boot/dts/rockchip/rk3528-w132d.dts
-@@ -0,0 +1,732 @@
+@@ -0,0 +1,733 @@
 +// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 +/*
 + * 本文件由 patches-src/import-board-dts.py 从上游一次性导入。
@@ -208,13 +208,14 @@ index 0000000..4fbc9fd
 +		bt-wake-host-gpio-gpios = <&gpio3 RK_PC1 GPIO_ACTIVE_HIGH>;
 +		bt-reg-on-gpios = <&gpio3 RK_PC2 GPIO_ACTIVE_HIGH>;
 +		/*
-+		 * Marlin3E firmware. wcnmodem-38222.bin (shipped by Armbian and by
-+		 * Allwinner's SDK) is a WCNM pack; the driver picks the 3EAB image
-+		 * for this chip (id 0x56630001). Verified on the board: 100/100
-+		 * scans, Bluetooth stable. The bare wcnmodem.bin next to it is the
-+		 * Marlin3 Lite (SC2355) image and does not fit this chip.
++		 * Marlin3E firmware: MARLIN3E_20A_W23.03.2 as published in CoreELEC's
++		 * uwe5631-aml repository (BSP/fw/wcnmodem.bin); the board package
++		 * installs it under this name. Armbian's wcnmodem-38222.bin (W21.03.3)
++		 * scans fine but its CP2 asserts as soon as it associates, and the
++		 * bare wcnmodem.bin next to it is the Marlin3 Lite (SC2355) image,
++		 * which does not fit this chip (id 0x56630001).
 +		 */
-+		unisoc,btwf-file-name = "/lib/firmware/uwe5622/wcnmodem-38222.bin";
++		unisoc,btwf-file-name = "/lib/firmware/uwe5622/wcnmodem-marlin3e.bin";
 +		data-irq;
 +		blksz-512;
 +		keep-power-on;

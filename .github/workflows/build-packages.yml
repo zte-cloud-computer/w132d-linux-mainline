@@ -81,6 +81,14 @@ jobs:
             REVISION=${{ steps.ver.outputs.revision }} \
             KERNEL_CONFIGURE=no SHARE_LOG=no
 
+      - name: U-Boot（linux-u-boot-w132d-edge：rkbin DDR/BL31 blob + 主线 U-Boot 2026.07）
+        working-directory: armbian-build
+        run: |
+          ./compile.sh uboot \
+            BOARD=w132d BRANCH=edge \
+            REVISION=${{ steps.ver.outputs.revision }} \
+            KERNEL_CONFIGURE=no SHARE_LOG=no
+
       - name: bsp（armbian-bsp-cli-w132d-edge：unit、脚本、keymap、apt pin）
         working-directory: armbian-build
         run: |
@@ -91,7 +99,7 @@ jobs:
 
       - name: 收集并校验
         # 不只看有没有产出：DTB 必须在、板级模块必须在、pstore console 必须开、
-        # bsp 里必须有 cookie 服务与 apt pin —— 和本机 verify-image 一个思路。
+        # bsp 里必须有 cookie 服务与 apt pin、U-Boot 里必须有针孔键 —— 和本机 verify-image 一个思路。
         # verify-dtb 要 fdtget（device-tree-compiler），runner 上默认没有
         run: |
           sudo apt-get -qq update && sudo apt-get -qq install -y device-tree-compiler

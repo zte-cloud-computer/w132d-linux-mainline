@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wenziwanka <tech@wenziwanka.com>
+Date: Fri, 4 Sep 2026 13:30:00 +0000
+Subject: [PATCH] pmdomain/rockchip: defer the provider instead of dropping a domain whose clocks are not ready
+
+rk3528-pmdomain-rockchip-fixes-for-working-usb-rk3528 (2/2) skips a child
+domain that returns -EPROBE_DEFER so that the other domains can register.
+The skipped domain is never added afterwards. On RK3528 the CRU is a
+platform driver and probes after the power-domain provider, so PD_GPU,
+the first child, is always the one skipped: the GPU then waits for a
+power domain that never appears and lima fails with
+
+  lima ff700000.gpu: deferred probe timeout, ignoring dependency
+  lima ff700000.gpu: probe with driver lima failed with error -110
+
+Restore the mainline behaviour for this case: a not-yet-available
+dependency defers the whole provider, which is retried once the CRU is
+up, and all domains register. The pwr_mask==0 fix (1/2) is kept.
+
+Tested on a ZTE W132D (RK3528): all power domains present, lima probes,
+USB and GPIO unaffected.
+
+Signed-off-by: wenziwanka <tech@wenziwanka.com>
+---
+
+--- a/drivers/pmdomain/rockchip/pm-domains.c
++++ b/drivers/pmdomain/rockchip/pm-domains.c
+@@ -1077,13 +1077,19 @@
+ 	for_each_available_child_of_node_scoped(np, node) {
+ 		error = rockchip_pm_add_one_domain(pmu, node);
+ 		if (error) {
+-			if (error == -EPROBE_DEFER) {
+-				dev_dbg(dev, "skipped node %pOFn, dependencies not yet available\n",
++			/*
++			 * A domain whose clocks are not there yet (on RK3528 the
++			 * CRU is a platform driver and probes after us) must make
++			 * the whole provider defer, not be dropped: a dropped
++			 * domain is never retried, and its consumers (the GPU on
++			 * RK3528) then sit in deferred probe until the timeout.
++			 */
++			if (error == -EPROBE_DEFER)
++				dev_dbg(dev, "node %pOFn not ready, deferring provider\n",
+ 					node);
+-				continue;
+-			}
+-			dev_err(dev, "failed to handle node %pOFn: %d\n",
+-				node, error);
++			else
++				dev_err(dev, "failed to handle node %pOFn: %d\n",
++					node, error);
+ 			goto err_out;
+ 		}
+ 
