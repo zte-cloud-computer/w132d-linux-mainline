@@ -187,15 +187,8 @@ cat <<'EOF'
 
 FLASH_OK
 
-⚠️ 关于出厂 BL31 每约 32 分钟打死整机的缺陷（安全侧串口调试器在宽限期后扫
-   波特率，往 console 喷训练帧并改写 UART 时钟分频），镜像里带了两条路：
-
-   1. **实验性**：w132d-bl31-cookie.service 开机早期往 GRF 0xff370220 写握手
-      cookie 0x2b4d1f7a，BL31 查到就直接返回。零补丁、对 rkbin 各版本都有效，
-      但尚未在未打补丁的 BL31 上实机验证。看结果：
-        systemctl status w132d-bl31-cookie   （应为 active、"cookie present"）
-        uptime > 40 min 且 console 没有 #/8/--/] 帧 → 成立
-   2. **已验证**：给设备自己那份 BL31 打 4 字节补丁 —— p1 内 atf-1 偏移 0x188d4，
-      `89 fe ff 54` -> `f4 ff ff 17`，并同步改 FIT 里 atf-1 的 sha256。
-      换 rkbin 新 blob 没用（v1.21 同样有这个问题）。
+ℹ️ 出厂 BL31 每约 32 分钟打死整机的缺陷由镜像里的 w132d-bl31-cookie.service 绕过
+   （开机早期往 GRF 0xff370220 写握手 cookie 0x2b4d1f7a），2026-09-04 在原版 BL31 上
+   实测 42 分钟无挂死无复位。设备的 BL31 保持原厂即可，不需要打补丁。
+   看状态：systemctl status w132d-bl31-cookie（应为 active、"cookie present"）
 EOF

@@ -63,10 +63,15 @@ if [ -n "$BSP" ]; then
   for f in etc/systemd/system/w132d-bl31-cookie.service etc/systemd/system/w132d-bluetooth.service \
            etc/apt/preferences.d/w132d-kernel etc/rc_keymaps/w132d.toml usr/local/bin/w132d-bt-smp-ensure \
            lib/firmware/uwe5622/wifi_56630001_3ant.ini lib/firmware/wifi_56630001_3ant.ini \
+           lib/firmware/uwe5622/wcnmodem-marlin3e.bin \
            etc/systemd/system/w132d-vendor-mac.service usr/local/sbin/w132d-vendor-mac; do
     # dpkg-deb -c 对软链打印 "path -> target"，所以不能要求行尾就是路径
     grep -qE " \./$f( -> |\$)" "$T/bsp.list" && ok "bsp 含 $f" || bad "bsp 缺 $f"
   done
+  # WCN 固件必须是钉住的那份（CoreELEC/uwe5631-aml @ 82f0b4a1，MARLIN3E_20A_W23.03.2）
+  WCN_SHA=d84724b2e442a79d3999c630e5a13a418ef3f1b0a5ecafcf1ce031b3ede758cb
+  got=$(dpkg-deb --fsys-tarfile "$BSP" | tar -xOf - ./lib/firmware/uwe5622/wcnmodem-marlin3e.bin 2>/dev/null | { sha256sum 2>/dev/null || shasum -a 256; } | cut -d' ' -f1)
+  [ "$got" = "$WCN_SHA" ] && ok "bsp 里的 wcnmodem-marlin3e.bin sha256 是钉住的那份" || bad "bsp 里的 wcnmodem-marlin3e.bin sha256 不对（$got）"
 else
   bad "缺 armbian-bsp-cli-w132d-edge deb"
 fi

@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wenziwanka <tech@wenziwanka.com>
+Date: Fri, 4 Sep 2026 12:30:00 +0000
+Subject: [PATCH] tty-sdio: do not register the Bluetooth rfkill soft-blocked
+
+rfkill_bluetooth_init() registers its switch with
+rfkill_init_sw_state(true), i.e. soft-blocked, and nothing in the driver
+ever unblocks it. On a board where the tty owner powers the WCN Bluetooth
+subsystem when it opens /dev/ttyBT0, that block is stale from the start:
+the hci device inherits it, bluetoothd sees a blocked adapter and refuses
+to power it, and `btmgmt power on` fails. The same change has been
+carried by the uwe5631 BT driver port for this reason.
+
+Register the switch unblocked; userspace can still block it.
+
+Signed-off-by: wenziwanka <tech@wenziwanka.com>
+---
+
+--- a/drivers/net/wireless/uwe5622/tty-sdio/rfkill.c
++++ b/drivers/net/wireless/uwe5622/tty-sdio/rfkill.c
+@@ -62,7 +62,12 @@
+ 		goto err_rfkill_alloc;
+ 	}
+ 	/* userspace cannot take exclusive control */
+-	rfkill_init_sw_state(bt_rfk, true);
++	/*
++	 * The tty owner (btattach) powers the WCN Bluetooth subsystem when it
++	 * opens the port. Starting soft-blocked only leaves BlueZ looking at a
++	 * stale block and refusing to power the adapter; nothing ever clears it.
++	 */
++	rfkill_init_sw_state(bt_rfk, false);
+ 	rc = rfkill_register(bt_rfk);
+ 	if (rc)
+ 		goto err_rfkill_reg;

@@ -22,3 +22,7 @@ __pycache__/
 
 # rkdeveloptool 会在当前工作目录写自己的 log/（内容是它找不到 config.ini 的抱怨）
 /log/
+
+# 旧构建链的发布物（用户手放在根目录，含厂商 .so 等私有内容），只读不入库
+/w132d-armbian-*.zip
+/userpatches/overlay/local/

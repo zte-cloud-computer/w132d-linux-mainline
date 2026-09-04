@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wenziwanka <tech@wenziwanka.com>
+Date: Fri, 4 Sep 2026 12:40:00 +0000
+Subject: [PATCH 5/6] Bluetooth: hci_sync: do not fail init when the controller
+ rejects the default link policy
+
+hci_setup_link_policy_sync() builds the default link policy from the
+controller's LMP features and fails hci_dev_open() if the controller
+rejects it. The Unisoc UWE5623 (Marlin3E) advertises Park state but
+answers Write Default Link Policy Settings including HCI_LP_PARK with
+Invalid HCI Command Parameters (0x12), so the adapter never comes up:
+
+  Bluetooth: hci0: Opcode 0x080f failed: -22
+
+A default link policy is a convenience, not a requirement. When the
+controller rejects it with Invalid Parameters, retry without Park and,
+should that be rejected too, keep whatever default the controller has
+instead of failing the whole initialization.
+
+Signed-off-by: wenziwanka <tech@wenziwanka.com>
+---
+ net/bluetooth/hci_sync.c | 27 +++++++++++++++++++++++++--
+ 1 file changed, 25 insertions(+), 2 deletions(-)
+
+diff --git a/net/bluetooth/hci_sync.c b/net/bluetooth/hci_sync.c
+index 8ccc3b2..96276db 100644
+--- a/net/bluetooth/hci_sync.c
++++ b/net/bluetooth/hci_sync.c
+@@ -4326,6 +4326,7 @@ static int hci_setup_link_policy_sync(struct hci_dev *hdev)
+ {
+ 	struct hci_cp_write_def_link_policy cp;
+ 	u16 link_policy = 0;
++	int err;
+ 
+ 	if (!(hdev->commands[5] & 0x10))
+ 		return 0;
+@@ -4343,8 +4344,30 @@ static int hci_setup_link_policy_sync(struct hci_dev *hdev)
+ 
+ 	cp.policy = cpu_to_le16(link_policy);
+ 
+-	return __hci_cmd_sync_status(hdev, HCI_OP_WRITE_DEF_LINK_POLICY,
+-				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
++	err = __hci_cmd_sync_status(hdev, HCI_OP_WRITE_DEF_LINK_POLICY,
++				    sizeof(cp), &cp, HCI_CMD_TIMEOUT);
++	if (err != -EINVAL)
++		return err;
++
++	/* Some controllers advertise Park state in their LMP features but
++	 * answer Write Default Link Policy Settings with Invalid HCI Command
++	 * Parameters when it is included (seen on the Unisoc UWE5623). A
++	 * default link policy is not worth failing the whole init for:
++	 * retry without Park, and if even that is rejected carry on with
++	 * whatever default the controller has.
++	 */
++	if (link_policy & HCI_LP_PARK) {
++		bt_dev_warn(hdev, "Controller rejected Park in default link policy, retrying without it");
++		cp.policy = cpu_to_le16(link_policy & ~HCI_LP_PARK);
++		err = __hci_cmd_sync_status(hdev, HCI_OP_WRITE_DEF_LINK_POLICY,
++					    sizeof(cp), &cp, HCI_CMD_TIMEOUT);
++		if (err != -EINVAL)
++			return err;
++	}
++
++	bt_dev_warn(hdev, "Controller rejected default link policy 0x%4.4x, ignoring",
++		    link_policy);
++	return 0;
+ }
+ 
+ static int hci_read_page_scan_activity_sync(struct hci_dev *hdev)

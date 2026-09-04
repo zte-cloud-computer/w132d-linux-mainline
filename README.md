@@ -19,7 +19,7 @@
 |---|---|
 | `userpatches/config/boards/w132d.csc` | 板级配置：family `rk35xx`、内核 `edge`、不编 u-boot、分区几何 |
 | `userpatches/kernel/archive/rockchip64-7.2/` | 内核补丁的 **Armbian 形态**（其补丁栈之上、`w132d-` 前缀），由 `make-patch-series.sh --on-armbian` 生成，勿手改 |
-| `patches/` | 内核补丁的**源头**：`0001`–`0004` 是完整 git 补丁（能直接 `git am` 到干净主线，即投 LKML 的形态）；`rk3528-w132d.dts` 是第 5 个补丁的源，配 `0005-*.msg` 提交信息 |
+| `patches/` | 内核补丁的**源头**：`NNNN-*.patch` 是完整 git 补丁（能直接 `git am` 到干净主线，即投 LKML 的形态）；`rk3528-w132d.dts` 是最后一个补丁的源，配编号最大的 `NNNN-*.msg` 提交信息 |
 | `userpatches/overlay/` · `userpatches/extensions/` | rootfs 定制文件（unit、keymap、脚本；运行时依赖包由板级配置的 `PACKAGE_LIST_BOARD` 装）· 在 chroot 里从源码编的原生工具（btattach、BL31 cookie） |
 | `tools/` | 构建与校验脚本 |
 | `cache/` | 拉来的内核源码。**不入库**，`tools/fetch-inputs.sh` 可重来 |
@@ -78,6 +78,7 @@ dtc 直接报 label not found。
 | `media: rkvdec: add RK3528 support` | 高——一条 of_match 指向已有 variant |
 | `mmc: sdhci-of-dwcmshc: RK3528 HS400 DLL taps` | 高——小且自洽 |
 | `thermal: rockchip: add RK3528 TSADC support` | 中——标准 SoC 使能，需配 DT binding 文档 |
+| `Bluetooth: hci_sync: 控制器拒绝默认 link policy 时不让初始化失败` | 高——通用修复，UWE5623 上报 Park 却拒绝它；不改则 hci0 永远起不来 |
 | `arm64: dts: rockchip: add the W132D` | 中——需在 binding 里登记 compatible |
 | `ASoC: rockchip: RK3528 codec + ES7202` | 低——2359 行两个新驱动，需正经 binding 与 review |
 
@@ -89,10 +90,10 @@ dtc 直接报 label not found。
 |---|---|---|
 | eMMC | 可用 | HS400 Enhanced Strobe，RK3528 DLL tap 6/6/3 |
 | USB 2.0 / 有线网络 | 可用 | **7.2 起 USB2 PHY 驱动与 DT 节点由主线自带**。出厂 MAC 由 `w132d-vendor-mac` 开机从 eMMC 的 vendor storage 读出设上（厂商 U-Boot 没把它修进主线 DTB） |
-| Wi-Fi / 蓝牙 / BLE 遥控 | 可用 | UWE5623 / Marlin3E。固件用 **Armbian 包自带的 `uwe5622/wcnmodem-38222.bin`**（WCNM 合并镜像，驱动按芯片 id 选 Marlin3E 段；本板实测 100/100 扫描、遥控器稳定），没有私有输入。旁边那个 `wcnmodem.bin` 是 SC2355 的，不能用；出厂的 W25.45.3 第一次扫描就崩。三天线 RF 配置随 overlay。驱动是 Armbian 的 `armbian/uwe5622` + 一行 vfree 补丁（见下），**新驱动本身未在本板实测** |
+| Wi-Fi / 蓝牙 / BLE 遥控 | 可用 | UWE5623 / Marlin3E。固件是 **CoreELEC 公开仓库 [uwe5631-aml](https://github.com/CoreELEC/uwe5631-aml) 里的 `MARLIN3E_20A_W23.03.2`**，bsp 包构建时按钉住的提交下载、校 sha256、装成 `uwe5622/wcnmodem-marlin3e.bin`（本板实测：关联 OK、下行 17–19 MB/s、上行 14 MB/s、0 断言、遥控器稳定），仓库里没有二进制、没有私有输入。Armbian 包自带的 `wcnmodem-38222.bin`（W21.03.3）扫描正常但一关联就 CP2 断言；旁边的 `wcnmodem.bin` 是 SC2355 的，不能用；出厂的 W25.45.3 第一次扫描就崩。三天线 RF 配置随 overlay。驱动是 Armbian 的 `armbian/uwe5622` + 一行 vfree 补丁（见下），**新驱动本身未在本板实测** |
 | 红外遥控 | 可用 | GPIO4_C6，rc-core + NEC |
 | 3.5 mm 音频 | 可用 | acodec 输出，ES7202/PDM 输入 |
-| Mali-450 GPU | 可用 | Lima，300–800 MHz，含热降频 |
+| Mali-450 GPU | 可用 | Lima，300–800 MHz，含热降频。Armbian 的 rk3528 pmdomain 补丁会把 GPU 电源域丢掉（`w132d-armbian-0004` 改回主线语义，待报 Armbian） |
 | H.264 / HEVC 解码 | 可用 | 主线 RKVDEC |
 | 温控 / DVFS / 看门狗 / pstore | 可用 | ramoops 的 console 通路由板级 config 钩子打开（Armbian 默认没开 `PSTORE_CONSOLE`，硬挂时会零现场） |
 | 面板双色指示灯 · 软件待机 | 可用 | 红外/BLE 电源键；Linux 与网络保持运行 |
@@ -148,23 +149,14 @@ dpkg -i linux-dtb-edge-rockchip64_*.deb linux-image-edge-rockchip64_*.deb armbia
 这也意味着 HDMI 旁那个针孔行为与原厂一致：实测它是 **SARADC 通道 1 的下载键**（按下
 读数 10，静息 1019），不是硬复位；读它的是我们永不覆盖的厂商 miniloader。
 
-> [!CAUTION]
-> 出厂 BL31 有一个每约 32 分钟打死整机的缺陷：Rockchip 的安全侧串口调试器
-> （uartdbg）第 30 次定时 tick 起检查 GRF `0xff370220` 里有没有握手 cookie
-> `0x2b4d1f7a`（厂商内核的 fiq_debugger 负责写，主线内核没有），没有就往 console
-> 喷训练帧并改写 UART 时钟分频。rkbin 的 v1.21 同样没修。镜像里带两条路：
->
-> 1. **实验性、零补丁**：`w132d-bl31-cookie.service` 开机早期写那个 cookie
->    （`userpatches/extensions/src/w132d-bl31-cookie.c`）。判据来自反汇编，**尚未在
->    未打补丁的 BL31 上实机验证**——本机 BL31 已打过补丁，测不出结果，要用原版
->    BL31 挂 40 分钟才算数。
-> 2. **已验证**：给设备自己那份 BL31 打 4 字节补丁（atf-1 偏移 `0x188d4`，
->    `89 fe ff 54` → `f4 ff ff 17`，并同步 FIT 里的 sha256）。
-
-**只对 Armbian 的补丁**：`userpatches/kernel/archive/rockchip64-7.2/w132d-armbian-*.patch`
-改的是 Armbian 自己加进内核的树外驱动（主线没有那些文件，进不了 `patches/`），手工维护，
-目标是投给对应的 Armbian 仓库后删掉。目前一个：`armbian/uwe5622` 释放固件缓冲时用了
-被偏移过的指针（WCNM 合并镜像下每次上电漏 1.7 MB 并打 WARN），改成释放分配起点。
+> [!NOTE]
+> 出厂 BL31 有一个每约 32 分钟打死整机的缺陷：Rockchip 的安全侧串口调试器（uartdbg）第 30 次
+> 定时 tick 起检查 GRF `0xff370220` 里有没有握手 cookie `0x2b4d1f7a`（厂商内核的 fiq_debugger
+> 负责写，主线内核没有），没有就往 console 喷训练帧并改写 UART 时钟分频。rkbin 的 v1.21 同样没修。
+> 镜像里的 `w132d-bl31-cookie.service` 开机早期写这个 cookie
+> （`userpatches/extensions/src/w132d-bl31-cookie.c`）。**2026-09-04 在原版（未打补丁）BL31 上实测：
+> 42 分钟无挂死无复位**，两个历史爆点（1919 s / 1979 s）都过了。所以**不需要碰 BL31**，
+> 也不需要 rkbin 的任何 blob；早先"给 atf-1 打 4 字节补丁"那条路已退役。
 
 ## 已知的漂移点
 

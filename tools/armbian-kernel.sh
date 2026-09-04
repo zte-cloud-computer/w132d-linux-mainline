@@ -112,13 +112,16 @@ if [ "$RC" -ne 0 ]; then
   exit 1
 fi
 
-# 补丁阶段的判据：一个 .rej 都不能有
-if grep -qiE "rejects|\.rej\b" "$B/armbian-$CMD.log"; then
-  echo "  ❌ 日志里出现 .rej —— 补丁没干净应用"
-  grep -iE "rejects|\.rej\b" "$B/armbian-$CMD.log" | head -10 | sed 's/^/     /'
+# 补丁阶段的判据：**我们的**补丁一个 hunk 都不能失败。
+# 不能拿 "rej" 这个子串当判据：Armbian 的补丁摘要表会把每个补丁的 Subject 打出来，
+# 我们有个补丁标题里就有 "rejects"（Bluetooth link policy 那个），实测把一次成功的
+# 构建误判成失败。Armbian 自己的补丁栈本来就有 5 个 needs_rebase，也不该算我们的。
+if grep -E "Hunk #[0-9]+ FAILED|saving rejects to|-> [0-9]+/[0-9]+: w132d-.*\(problems\)" "$B/armbian-$CMD.log" | grep -qi "w132d-"; then
+  echo "  ❌ 我们的补丁有 hunk 没打上"
+  grep -E "Hunk #[0-9]+ FAILED|saving rejects to|w132d-.*problems" "$B/armbian-$CMD.log" | head -10 | sed 's/^/     /'
   exit 1
 fi
-echo "  ✅ 补丁阶段无 .rej"
+echo "  ✅ w132d-* 补丁全部干净应用（Armbian 自己的 needs_rebase 不算）"
 
 if [ "$CMD" = "kernel" ]; then
   echo "  --- 产出的 deb ---"

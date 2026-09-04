@@ -1,16 +1,15 @@
 # SPDX-License-Identifier: MIT
 #
-# ⚠️ 实验性绕过，尚未在未打补丁的 BL31 上实机验证。
+# ✅ 2026-09-04 在原版 BL31 上实机验证：42 分钟无挂死无复位。
 #
 # 出厂 BL31 的安全串口调试器每分钟数一次，第 30 次起检查 GRF 0xff370220 里有没有
 # 握手 cookie 0x2b4d1f7a；没有就往 UART0 喷训练帧并改 UART 时钟分频，整机约每
 # 32 分钟挂死一次。厂商内核的 fiq_debugger 会写这个 cookie，主线内核没有，
 # 所以由这个 unit 在开机早期写一次。原理与退出码见 w132d-bl31-cookie.c。
 #
-# 想关掉：systemctl disable w132d-bl31-cookie.service
-# 已验证的替代方案：给设备自己那份 BL31 打 4 字节补丁（README「引导链」一节）。
+# 想关掉：systemctl disable w132d-bl31-cookie.service（关了 32 分钟后必挂）。
 [Unit]
-Description=W132D: hand the factory BL31 UART debugger its handshake cookie (experimental)
+Description=W132D: hand the factory BL31 UART debugger its handshake cookie
 DefaultDependencies=no
 ConditionPathExists=/dev/mem
 Before=sysinit.target

@@ -111,7 +111,10 @@ if mount -o ro "${LOOP}p2" /mnt/vp3 2>/dev/null; then
   while IFS= read -r rel; do
     if [ -e "/mnt/vp3/$rel" ]; then n=$((n+1)); else
       [ "$miss" -lt 5 ] && echo "    缺: /$rel"; miss=$((miss+1)); fi
-  done < <(cd "$W/userpatches/overlay/bsp-cli" && find . -type f | sed 's|^\./||')
+  done < <(cd "$W/userpatches/overlay/bsp-cli" && find . -type f -not -name .DS_Store -not -path '*/__pycache__/*' | sed 's|^\./||')
+  # 宿主 macOS 的垃圾不该进镜像
+  n=$(find /mnt/vp3/etc /mnt/vp3/usr/local /mnt/vp3/lib/firmware \( -name .DS_Store -o -name __pycache__ \) 2>/dev/null | wc -l)
+  [ "$n" = 0 ] && ok "镜像里没有 .DS_Store / __pycache__" || bad "镜像里混进了 $n 个 .DS_Store/__pycache__"
   [ "$miss" = 0 ] && ok "overlay $n 个文件全部到位" \
                   || bad "overlay 缺 $miss 个（到位 $n 个）"
 
@@ -179,21 +182,31 @@ if mount -o ro "${LOOP}p2" /mnt/vp3 2>/dev/null; then
   ls /mnt/vp3/etc/systemd/system/getty.target.wants/serial-getty@ttyS2.service >/dev/null 2>&1 \
     && bad "serial-getty@ttyS2 仍然使能 —— 那个串口不存在，开机会白等 90 秒" || true
 
-  # WCN 固件：DTS 指向 Armbian 包自带的 wcnmodem-38222.bin（含 Marlin3E 段），
-  # 三天线 RF 配置由 overlay 装、根目录有软链（驱动到 /lib/firmware 根目录找）；
-  # 不该再有任何 dpkg-divert
+  # WCN 固件：bsp 包从 CoreELEC 钉住的提交装的 W23.03.2，DTS 指向它；sha256 必须就是那份。
+  # 三天线 RF 配置由 overlay 装、根目录有软链（驱动到 /lib/firmware 根目录找）。
+  # 唯一允许的 divert：本机 customize-image 把包内 W23 改道到 .w23、主文件换成私有的
+  # 出厂 W25（这种镜像不是公开构建）；其它任何 uwe5622 的 divert 都是没删干净的旧东西。
   fw=/mnt/vp3/lib/firmware/uwe5622
-  grep -qa "MARLIN3E_" "$fw/wcnmodem-38222.bin" 2>/dev/null \
-    && ok "wcnmodem-38222.bin 在且含 Marlin3E 段（$(grep -ao 'MARLIN3E_[^[:cntrl:]]*' "$fw/wcnmodem-38222.bin" | head -1 | cut -c1-24)）" \
-    || bad "缺 wcnmodem-38222.bin 或里面没有 Marlin3E 段 —— WiFi/蓝牙起不来"
+  WCN_SHA=d84724b2e442a79d3999c630e5a13a418ef3f1b0a5ecafcf1ce031b3ede758cb
+  wcn_ver() { grep -ao 'MARLIN3E_[^[:cntrl:]]*' "$1" 2>/dev/null | head -1 | cut -c1-24; }
+  if grep -q "wcnmodem-marlin3e.bin.w23" /mnt/vp3/var/lib/dpkg/diversions 2>/dev/null; then
+    [ "$(sha256sum "$fw/wcnmodem-marlin3e.bin.w23" 2>/dev/null | cut -d' ' -f1)" = "$WCN_SHA" ] \
+      && grep -qa "MARLIN3E_" "$fw/wcnmodem-marlin3e.bin" \
+      && ok "本机覆盖：wcnmodem-marlin3e.bin = $(wcn_ver "$fw/wcnmodem-marlin3e.bin")，包内 W23 改道在 .w23（此镜像含私有固件，不是公开构建）" \
+      || bad "固件改道了，但 .w23 不是钉住的 W23 或主文件不是 Marlin3E 固件"
+  else
+    [ "$(sha256sum "$fw/wcnmodem-marlin3e.bin" 2>/dev/null | cut -d' ' -f1)" = "$WCN_SHA" ] \
+      && ok "wcnmodem-marlin3e.bin 在且 sha256 是钉住的那份（$(wcn_ver "$fw/wcnmodem-marlin3e.bin")）" \
+      || bad "缺 wcnmodem-marlin3e.bin 或 sha256 不对 —— WiFi/蓝牙起不来"
+    grep -q "uwe5622" /mnt/vp3/var/lib/dpkg/diversions 2>/dev/null \
+      && bad "还有 uwe5622 的 dpkg-divert —— 私有固件那套没删干净" \
+      || ok "没有固件 divert（公开构建，固件就是包里那份）"
+  fi
   [ -f "$fw/wifi_56630001_3ant.ini" ] && ok "三天线 RF 配置 uwe5622/wifi_56630001_3ant.ini 在" \
                                        || bad "缺 uwe5622/wifi_56630001_3ant.ini"
   [ -f /mnt/vp3/lib/firmware/wifi_56630001_3ant.ini ] \
     && ok "/lib/firmware/wifi_56630001_3ant.ini 可达（驱动在根目录找）" \
     || bad "/lib/firmware/wifi_56630001_3ant.ini 不可达 —— 驱动找不到 RF 配置"
-  grep -q "uwe5622" /mnt/vp3/var/lib/dpkg/diversions 2>/dev/null \
-    && bad "还有 uwe5622 的 dpkg-divert —— 私有固件那套没删干净" \
-    || ok "没有固件 divert（用的是 Armbian 包自己的文件）"
   umount /mnt/vp3
 else
   bad "挂不上 rootfs"
