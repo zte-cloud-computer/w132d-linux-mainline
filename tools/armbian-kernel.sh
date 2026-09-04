@@ -96,6 +96,13 @@ cd "$ARMBIAN"
 # 里解出旧包 —— 实测加了新 unit 后"Failed to enable unit: does not exist"。
 find "$ARMBIAN/output" -name 'armbian-bsp-cli-w132d*' -type f -delete 2>/dev/null || true
 rm -rf "$ARMBIAN/cache/memoize" 2>/dev/null || true
+# W132D_PUBLIC=yes：本机有 userpatches/customize-image.sh（私有内容）时也能出公开镜像 ——
+# 构建期间把它挪开，结束后放回。make-release.sh 也看这个变量决定包名要不要加 -private。
+CI_SH="$W/userpatches/customize-image.sh"
+if [ "${W132D_PUBLIC:-}" = yes ] && [ -f "$CI_SH" ]; then
+  mv "$CI_SH" "$CI_SH.off"; trap 'mv -f "$CI_SH.off" "$CI_SH" 2>/dev/null' EXIT
+  echo "  W132D_PUBLIC=yes：已暂时挪开 customize-image.sh，出的是公开镜像"
+fi
 set +e
 ./compile.sh "$CMD" \
   BOARD=w132d BRANCH=edge RELEASE=trixie \

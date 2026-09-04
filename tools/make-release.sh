@@ -54,7 +54,7 @@ done
 [ -n "$IMG" ] && [ -f "$IMG" ] || die "找不到镜像：${IMG:-<空>}"
 mkdir -p "$OUT"
 
-step "1/4 核对源镜像的分区几何"
+step "1/5 核对源镜像的分区几何"
 LAYOUT=$(sfdisk -d "$IMG")
 boot_start=$(sed -n 's|.*start= *\([0-9]*\).*name="bootfs".*|\1|p' <<<"$LAYOUT" | tr -d ' ')
 root_start=$(sed -n 's|.*start= *\([0-9]*\).*name="rootfs".*|\1|p' <<<"$LAYOUT" | tr -d ' ')
@@ -67,7 +67,7 @@ boot_size=$(grep 'name="bootfs"' <<<"$LAYOUT" | sed -n 's|.*size= *\([0-9]*\).*|
 [ -n "$boot_size" ] || die "解析不出 bootfs 的大小 —— sfdisk 输出格式变了？"
 echo "  ✅ bootfs @24576（$boot_size 扇区）、rootfs @1073152"
 
-step "2/4 生成设备形状的 GPT"
+step "2/5 生成设备形状的 GPT"
 # 三个分区，与设备现状一致；rootfs 一直铺到 eMMC 末尾（留 34 扇区给备份 GPT）
 GPTIMG="$OUT/w132d-gpt.bin"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
@@ -89,7 +89,7 @@ dd if="$TMP/disk.img" of="$GPTIMG" bs=512 count=64 status=none
 echo "  ✅ $GPTIMG（$(stat -c %s "$GPTIMG") B，扇区 0–63）"
 sfdisk -d "$TMP/disk.img" | grep -E "^label-id|name=" | sed 's|^|     |'
 
-step "3/4 拼整盘镜像"
+step "3/5 拼整盘镜像"
 FULL="$OUT/w132d.img"
 P1_START=16384; HOLE_START=7168; HOLE_SECTORS=3072
 rm -f "$FULL"
@@ -102,7 +102,7 @@ dd if=/dev/zero of="$FULL" bs=512 seek=$HOLE_START count=$HOLE_SECTORS conv=notr
 dd if="$IMG" of="$FULL" bs=1M skip=$((P2_START / 2048)) seek=$((P2_START / 2048)) conv=notrunc status=none
 echo "  ✅ $FULL（$(stat -c %s "$FULL") B）"
 
-step "4/4 自检"
+step "4/5 自检"
 FAIL=0
 n=$(sfdisk -d "$TMP/disk.img" | grep -c 'name=')
 [ "$n" = 3 ] && echo "  ✅ GPT 三个分区" || { echo "  ❌ GPT 只有 $n 个分区"; FAIL=1; }
@@ -120,9 +120,27 @@ else
   echo "  ⚠️  24576 处没认出 FAT 特征（不一定是错，但值得核对）"
 fi
 
-(cd "$OUT" && rm -f w132d-gpt.bin w132d-p2p3.img && rm -f u-boot-initial-env && sha256sum "$(basename "$FULL")" > SHA256SUMS)
-sed "s/^/  /" "$OUT/SHA256SUMS"
-echo
+rm -f "$OUT"/w132d-gpt.bin "$OUT"/w132d-p2p3.img "$OUT"/u-boot-initial-env
 [ "$FAIL" = 0 ] || die "自检未通过，不要用这份发布物"
+# 发布包：镜像 + 校验和 + flash/ 整目录（刷写脚本 mac/linux + windows、README）+ loader，打成 zip
+step "5/5 打发布包"
+FLASH="$W/flash"; LOADER="$W/cache/rkbin/rk3528_loader_v1.13.107.bin"
+for f in "$FLASH/README.md" "$FLASH/flash.ps1" "$FLASH/flash.sh" "$LOADER"; do [ -f "$f" ] || die "缺 $f"; done
+cp "$FLASH/flash.sh" "$FLASH/flash.ps1" "$FLASH/README.md" "$LOADER" "$OUT/"
+chmod +x "$OUT/flash.sh"
+(cd "$OUT" && sha256sum w132d.img flash.sh flash.ps1 README.md "$(basename "$LOADER")" > SHA256SUMS)
+# 私有构建（userpatches/customize-image.sh 存在：本机 SSH 公钥、讯飞语音解码器、以后的 QMI/厂商驱动等）
+# 打出来的包和公开包长得一样，发错就是事故 —— 文件名加 -private 后缀，从名字上分开。
+SUFFIX=""
+if [ -f "$W/userpatches/customize-image.sh" ] && [ "${W132D_PUBLIC:-}" != yes ]; then
+  SUFFIX="-private"
+  echo "  ⚠️  存在 userpatches/customize-image.sh：这是**私有构建**，包名加 -private，不要公开发布"
+fi
+ZIP="$OUT/w132d-armbian-$(date +%Y%m%d)$SUFFIX.zip"
+rm -f "$ZIP"   # 只覆盖同名的；公开包和私有包可以并存
+command -v zip >/dev/null || { apt-get -qq update >/dev/null 2>&1; apt-get -qq install -y zip >/dev/null 2>&1; }
+(cd "$OUT" && zip -q -1 "$(basename "$ZIP")" w132d.img SHA256SUMS flash.sh flash.ps1 README.md "$(basename "$LOADER")") || die "zip 失败"
+echo "  ✅ $ZIP（$(stat -c %s "$ZIP") B）"
+echo
 echo "RELEASE_OK $OUT"
-echo "  刷写：tools/flash.sh $OUT   （设备按住针孔上电进 MaskROM，USB 直连）"
+echo "  刷写：flash/flash.sh $OUT   （设备按住针孔上电进 MaskROM，USB 直连）"
