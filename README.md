@@ -38,11 +38,11 @@ docker run --rm -v w132d-72:/build -v "$PWD":/w -v "$PWD/cache/src":/src:ro \
 docker run --rm -v w132d-armbian:/build -v "$PWD":/w \
   debian:13 bash /w/tools/armbian-kernel.sh kernel-patch
 
-# 完整镜像 → 离线校验 → 两段式发布物 → 刷写（需要 --privileged：losetup/mount）
+# 完整镜像 → 离线校验 → 整盘发布物 → 刷写（需要 --privileged：losetup/mount）
 docker run --rm --privileged -v /dev:/tmp/dev -v w132d-armbian:/build -v "$PWD":/w \
   debian:13 bash -c 'bash /w/tools/armbian-kernel.sh build \
     && bash /w/tools/verify-image.sh && bash /w/tools/make-release.sh'
-tools/flash.sh out/release                          # 设备按住 Reset 针孔上电，USB 直连
+W132D_SPL_LOADER=cache/rkbin/rk3528_loader_v1.13.107.bin tools/flash.sh out/release   # 按住针孔上电进 MaskROM，USB 直连
 ```
 
 ## 防漂与上游化
@@ -89,7 +89,7 @@ dtc 直接报 label not found。
 | 功能 | 状态 | 说明 |
 |---|---|---|
 | eMMC | 可用 | HS400 Enhanced Strobe，RK3528 DLL tap 6/6/3 |
-| USB 2.0 / 有线网络 | 可用 | **7.2 起 USB2 PHY 驱动与 DT 节点由主线自带**。出厂 MAC 由 `w132d-vendor-mac` 开机从 eMMC 的 vendor storage 读出设上（厂商 U-Boot 没把它修进主线 DTB） |
+| USB 2.0 / 有线网络 | 可用 | **7.2 起 USB2 PHY 驱动与 DT 节点由主线自带**。MAC 由主线 U-Boot 按 OTP cpuid 派生并注入 DT（固定，不等于出厂值） |
 | Wi-Fi / 蓝牙 / BLE 遥控 | 可用 | UWE5623 / Marlin3E。固件是 **CoreELEC 公开仓库 [uwe5631-aml](https://github.com/CoreELEC/uwe5631-aml) 里的 `MARLIN3E_20A_W23.03.2`**，bsp 包构建时按钉住的提交下载、校 sha256、装成 `uwe5622/wcnmodem-marlin3e.bin`（本板实测：关联 OK、下行 17–19 MB/s、上行 14 MB/s、0 断言、遥控器稳定），仓库里没有二进制、没有私有输入。Armbian 包自带的 `wcnmodem-38222.bin`（W21.03.3）扫描正常但一关联就 CP2 断言；旁边的 `wcnmodem.bin` 是 SC2355 的，不能用；出厂的 W25.45.3 第一次扫描就崩。三天线 RF 配置随 overlay。驱动是 Armbian 的 `armbian/uwe5622` + 一行 vfree 补丁（见下），**新驱动本身未在本板实测** |
 | 红外遥控 | 可用 | GPIO4_C6，rc-core + NEC |
 | 3.5 mm 音频 | 可用 | acodec 输出，ES7202/PDM 输入 |
@@ -110,6 +110,41 @@ dtc 直接报 label not found。
 > 这份镜像**还没有整体上过真机**：五个内核补丁、DTS 与 rootfs 定制都在迁移前的
 > 构建链上验证过，但换到 Armbian 的 7.2 内核、Armbian 的无线驱动与引导脚本之后，
 > 只做了 `tools/verify-image.sh` 的离线校验。首次刷写请把它当作待验证版本。
+
+## 引导链：主线 U-Boot + rkbin blob（2026-09-05 起默认）
+
+引导链是 U-Boot v2026.07 的 generic-rk3528 + 本板 U-Boot DT（`userpatches/u-boot/v2026.07/`），
+rkbin 的 DDR v1.13 / BL31 v1.21 原样使用，与 Armbian 的 radxa-e24c 同法。钩子在
+`userpatches/extensions/w132d-uboot.sh`（板级配置 `enable_extension`）。**镜像自带完整引导链，
+设备上不再有任何厂商二进制。**
+
+| 扇区 | 内容 |
+|---|---|
+| 0–63 | GPT（三分区、固定 UUID） |
+| 64– | idbloader：rkbin DDR + 主线 SPL（174 KB） |
+| 16384– | u-boot.itb：BL31 + U-Boot proper |
+| 24576– | p2 bootfs（extlinux）、p3 rootfs |
+
+- **针孔**：HDMI 旁的 Reset 针孔是 SARADC ch1 下载键，U-Boot proper 读到后写 BOOT_BROM_DOWNLOAD
+  复位，BootROM 进 **MaskROM**（`rkdeveloptool ld` 显示 Maskrom）。主线只认名字以 `saradc` 开头的
+  ADC 设备而上游节点叫 `adc@ffae0000`，所以 DT 补丁把节点按 `saradc@ffae0000` 重建（上游应改成
+  按 compatible 匹配，待投）。
+- **MAC**：U-Boot 的 `misc_init_r` 按 OTP cpuid 派生一个固定地址（主线 Rockchip 板的标准做法），
+  起内核时按 `ethernet0` 别名注入 DT。每台机器固定、不同机器不同，但**不等于机身标签上的出厂值**
+  （本机 `d6:d7:e9:9a:33:5b`）——路由器里的绑定要改一次。出厂 MAC 存在 Rockchip 私有格式的
+  vendor storage 里（扇区 7168，主线两边都没有驱动），整盘刷写一并清零，不抢救。
+  Linux 侧的 `w132d-vendor-mac` 只是兜底：DT 里没有 MAC 时才按 OTP 派生。
+- **⚠️ U-Boot 里别开 `CONFIG_NET`，也别把 env 放进 eMMC**：2026-09-05 实测两者都让 Linux 起不来
+  （U-Boot proper 还活着、针孔能进 MaskROM，但内核从没挂过根）。env 那次的机制查清了：
+  `env_relocate()` 只在存储的 env 无效时才载入编进二进制的默认环境，读到一份只有 `ethaddr` 的
+  合法 env 就没有 `bootcmd` 了（`CONFIG_ENV_APPEND` 也救不了）。真要预置 env 必须
+  `u-boot-initial-env` + `mkenvimage` 写完整一份，且每次刷 U-Boot 都得重写——不值得。
+- **BL31 的 32 分钟 uartdbg 问题**由 `w132d-bl31-cookie.service` 绕过，rkbin 任何版本都适用。
+- 验证记录（2026-09-04）：先只换 P1（厂商 SPL 能加载主线 FIT），再换 idbloader，全主线链引导 14.3 s，
+  0 失败单元；针孔 → MaskROM → `db` → 读写 eMMC → `rd` 闭环。厂商引导链备份在 `cache/bl31/`。
+
+⚠️ 绝不能把 binman 的 `u-boot-rockchip.bin` 从扇区 64 一路 dd（Armbian 对 e24c 就是这样写的）：
+中间 0xff 填充到 16384，会把还在的 vendor storage 抹掉。扩展里的 `write_uboot_platform` 分两段写。
 
 ## CI 构建与设备更新
 
@@ -139,15 +174,12 @@ dpkg -i linux-dtb-edge-rockchip64_*.deb linux-image-edge-rockchip64_*.deb armbia
 
 下一步是把 Release 里的包做成签名的 apt 源，设备直接 `apt upgrade`。
 
-## 引导链：保留设备自己的
+## 刷写：整盘镜像
 
-镜像不含引导链，刷写**只写 GPT（扇区 0–63）和扇区 24576 起**，完全不碰 64–24575。
-那一段是设备自己的 idbloader、vendor storage（SN/MAC/HDCP/IMEI）、RKSS 和 U-Boot ——
-用它自己的就能启动，所以不需要备份 L0，逐机数据也不会被覆盖。板级配置里对应
-`BOOTCONFIG="none"`（先例：`aml-s9xx-box.tvb` 等 8 块板）。
-
-这也意味着 HDMI 旁那个针孔行为与原厂一致：实测它是 **SARADC 通道 1 的下载键**（按下
-读数 10，静息 1019），不是硬复位；读它的是我们永不覆盖的厂商 miniloader。
+发布物是一张设备形状的整盘镜像 `out/release/w132d.img`（GPT + 引导链 + bootfs + rootfs，
+7168–10239 留零）。`tools/flash.sh` 从扇区 0 起整盘写入，不保留设备上任何厂商内容、不读不写
+任何逐机数据。写完必须回读抽样比对（GPT、idbloader、u-boot.itb 逐字节，p2/p3 抽 18 点含 ext4
+超级块）——rkdeveloptool 的 100% 不算数。
 
 > [!NOTE]
 > 出厂 BL31 有一个每约 32 分钟打死整机的缺陷：Rockchip 的安全侧串口调试器（uartdbg）第 30 次

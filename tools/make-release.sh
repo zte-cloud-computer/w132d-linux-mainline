@@ -1,32 +1,25 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# 把 Armbian 出的镜像切成两段式发布物：设备形状的 GPT + 扇区 24576 起的净荷。
+# 把 Armbian 出的镜像做成一张**设备形状的整盘镜像** w132d.img。
 #
-# 用法（容器里，需要 losetup 权限）：
+# 用法（容器里）：
 #   bash /w/tools/make-release.sh [镜像] [输出目录]
 #   默认取 armbian-build/output/images/ 下最新的，输出到 /w/out/release/
 #
-# ## 为什么不直接刷整个镜像
+# ## 布局（扇区）
 #
-# 设备 eMMC 的扇区 64–24575 里是**它自己的**东西，碰了就变砖或丢身份：
+#   0–63          设备形状的 GPT：三个分区、固定 UUID、bootfs 带 LegacyBIOSBootable，
+#                 last-lba 按目标 eMMC 算（Armbian 镜像自带的 GPT 只有两个分区且按 2.6 GB 算，不用）
+#   64–7167       idbloader：rkbin DDR blob + 主线 SPL（Armbian 构建时 write_uboot_platform 写进镜像）
+#   7168–10239    零。设备出厂时这里是 Rockchip 私有格式的 vendor storage（SN/MAC/HDCP/IMEI）
+#                 与 RKSS，主线两边都没有驱动，整盘覆盖清掉；MAC 由 U-Boot 按 OTP cpuid 派生。
+#                 镜像里这段必须是零
+#   10240–16383   零
+#   16384–24575   p1：u-boot.itb（BL31 + U-Boot proper）
+#   24576–        p2 bootfs、p3 rootfs，与 Armbian 镜像逐字节相同
 #
-#   64–16383      idbloader（DDR 训练 + SPL）与 vendor storage
-#                 （SN / MAC / HDCP Key / IMEI）、RKSS 安全存储
-#                 —— DDR blob 与内存批次绑定，别人的刷进来起不来
-#   16384–24575   p1，厂商 U-Boot FIT
-#
-# 所以刷写只写两段：GPT（扇区 0–63）和扇区 24576 起。这段中间的空白**原样保留**，
-# 用设备自己的就能启动（2026-08-28 实测）。附带三个好处：不需要事先备份 L0、
-# 逐机数据不会被覆盖、发布物里没有任何厂商引导二进制。
-#
-# ## GPT 为什么要自己生成
-#
-# Armbian 的镜像在 BOOTCONFIG=none 下只有两个分区（bootfs、rootfs），没有厂商
-# uboot 那个 —— 因为它压根没编 u-boot，自然不会给它建条目。而设备上是三个。
-#
-# 我们**不用镜像自带的 GPT**：镜像只是净荷的容器，GPT 由这里按设备形状重建，
-# 三个分区、固定 UUID、bootfs 带 LegacyBIOSBootable（厂商 U-Boot 走 distro boot
-# 靠它找 boot.scr，缺了不启动）。
+# 2026-09-04 之前发布物是"GPT + 24576 起的净荷"两段式，保留设备的厂商引导链；引导链换成
+# 主线 U-Boot 之后镜像自带引导链，发布物就是一整张盘。
 #
 # ## last-lba 必须按目标 eMMC 算
 #
@@ -34,7 +27,6 @@
 # 直接抄镜像的 GPT 会让 rootfs 只能用到 2.6 GB 处。这里按 --emmc-sectors 生成，
 # 默认取实测值。
 set -euo pipefail
-
 W="${W132D_ROOT:-/w}"
 IMG="${1:-}"
 OUT="${2:-$W/out/release}"
@@ -97,35 +89,40 @@ dd if="$TMP/disk.img" of="$GPTIMG" bs=512 count=64 status=none
 echo "  ✅ $GPTIMG（$(stat -c %s "$GPTIMG") B，扇区 0–63）"
 sfdisk -d "$TMP/disk.img" | grep -E "^label-id|name=" | sed 's|^|     |'
 
-step "3/4 切出扇区 24576 起的净荷"
-PAYLOAD="$OUT/w132d-p2p3.img"
-dd if="$IMG" of="$PAYLOAD" bs=512 skip=$P2_START status=none
-echo "  ✅ $PAYLOAD（$(stat -c %s "$PAYLOAD") B）"
+step "3/4 拼整盘镜像"
+FULL="$OUT/w132d.img"
+P1_START=16384; HOLE_START=7168; HOLE_SECTORS=3072
+rm -f "$FULL"
+dd if="$GPTIMG" of="$FULL" bs=512 status=none
+# 64–24575：Armbian 镜像里的引导链（idbloader@64、u-boot.itb@16384），其余本来就是零
+dd if="$IMG" of="$FULL" bs=512 skip=64 seek=64 count=$((P2_START - 64)) conv=notrunc status=none
+# 空洞强制清零：镜像里绝不能带任何一台机器的 vendor storage / RKSS
+dd if=/dev/zero of="$FULL" bs=512 seek=$HOLE_START count=$HOLE_SECTORS conv=notrunc status=none
+# 24576 起：p2 + p3 原样
+dd if="$IMG" of="$FULL" bs=1M skip=$((P2_START / 2048)) seek=$((P2_START / 2048)) conv=notrunc status=none
+echo "  ✅ $FULL（$(stat -c %s "$FULL") B）"
 
 step "4/4 自检"
 FAIL=0
-# GPT 里必须有三个分区、bootfs 带 LegacyBIOSBootable
 n=$(sfdisk -d "$TMP/disk.img" | grep -c 'name=')
 [ "$n" = 3 ] && echo "  ✅ GPT 三个分区" || { echo "  ❌ GPT 只有 $n 个分区"; FAIL=1; }
 sfdisk -d "$TMP/disk.img" | grep -q 'LegacyBIOSBootable' \
   && echo "  ✅ bootfs 带 LegacyBIOSBootable" \
-  || { echo "  ❌ bootfs 缺 LegacyBIOSBootable —— 设备起不来"; FAIL=1; }
-# 净荷第一个扇区应当是 FAT（bootfs 的引导扇区）
-if dd if="$PAYLOAD" bs=512 count=1 status=none | grep -qa "FAT\|mkfs"; then
-  echo "  ✅ 净荷起始是 bootfs 的 FAT 引导扇区"
+  || { echo "  ❌ bootfs 缺 LegacyBIOSBootable"; FAIL=1; }
+magic() { dd if="$FULL" bs=512 skip="$1" count=1 status=none | head -c 4 | od -An -tx1 | tr -d ' \n'; }
+[ "$(magic 64)" = "524b4e53" ] && echo "  ✅ 扇区 64 是 idbloader（RKNS）" || { echo "  ❌ 扇区 64 不是 idbloader（$(magic 64)）—— 镜像里没写引导链？"; FAIL=1; }
+[ "$(magic $P1_START)" = "d00dfeed" ] && echo "  ✅ 扇区 16384 是 u-boot.itb（FIT）" || { echo "  ❌ 扇区 16384 不是 FIT（$(magic $P1_START)）"; FAIL=1; }
+nz=$(dd if="$FULL" bs=512 skip=$HOLE_START count=$HOLE_SECTORS status=none | tr -d '\0' | wc -c)
+[ "$nz" = 0 ] && echo "  ✅ 7168–10239 全零（不带任何机器的 vendor storage / RKSS）" || { echo "  ❌ 空洞里有 $nz 个非零字节"; FAIL=1; }
+if dd if="$FULL" bs=512 skip=$P2_START count=1 status=none | grep -qa "FAT\|mkfs"; then
+  echo "  ✅ 24576 起是 bootfs 的 FAT 引导扇区"
 else
-  echo "  ⚠️  净荷首扇区没认出 FAT 特征（不一定是错，但值得核对）"
+  echo "  ⚠️  24576 处没认出 FAT 特征（不一定是错，但值得核对）"
 fi
-# 发布物里绝不能含厂商引导二进制：净荷从 24576 起，天然不含 64–24575
-echo "  ✅ 发布物不含扇区 64–24575（厂商 idbloader / vendor storage / p1）"
 
-# ⚠️ 不能为了对齐给 SHA256SUMS 的行加空格 —— `sha256sum -c` 认的是
-# "<hash>␣␣<相对路径>"，原来那句 sed 把绝对路径换成两个空格，结果每行变成
-# 四个空格，校验整行解析失败，刷写工具报「SHA256 对不上」，看着像发布物损坏。
-(cd "$OUT" && sha256sum "$(basename "$GPTIMG")" "$(basename "$PAYLOAD")" > SHA256SUMS)
+(cd "$OUT" && rm -f w132d-gpt.bin w132d-p2p3.img && rm -f u-boot-initial-env && sha256sum "$(basename "$FULL")" > SHA256SUMS)
 sed "s/^/  /" "$OUT/SHA256SUMS"
-
 echo
 [ "$FAIL" = 0 ] || die "自检未通过，不要用这份发布物"
 echo "RELEASE_OK $OUT"
-echo "  刷写：tools/flash.sh $OUT   （需要设备进 Loader/Maskrom）"
+echo "  刷写：tools/flash.sh $OUT   （设备按住针孔上电进 MaskROM，USB 直连）"

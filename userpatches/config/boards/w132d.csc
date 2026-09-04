@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# ZTE Cloud Computer W132D（Rockchip RK3528）——主线内核 + 保留厂商引导链。
+# ZTE Cloud Computer W132D（Rockchip RK3528）——主线内核 + 主线 U-Boot（rkbin DDR/BL31 blob）。
 #
 # 这个文件的目标形态就是最终提给 armbian/build 的 `config/boards/w132d.csc`，
 # 所以除了必要的注释以外，尽量只用 Armbian 官方已有的机制，不自造概念：
@@ -7,7 +7,8 @@
 #   * KERNEL_TARGET 用官方的 edge（rk35xx.conf 里 source 了 rockchip64_common.inc，
 #     edge 分支给出 LINUXFAMILY=rockchip64 / KERNEL_MAJOR_MINOR=7.2 /
 #     补丁目录 rockchip64-7.2），不自建 family、不自建分支
-#   * BOOTCONFIG=none 用官方机制跳过 u-boot（先例：aml-s9xx-box.tvb 等 8 块板）
+#   * 引导链与 radxa-e24c 同法：主线 U-Boot generic-rk3528 + rkbin blob（钩子在
+#     userpatches/extensions/w132d-uboot.sh，毕业时并进这个文件）
 #   * 分区几何用官方的 OFFSET / BOOTSIZE，不自造分区代码
 #
 # 放在 userpatches/ 下而不是 fork armbian/build：板级配置、内核补丁目录在官方代码
@@ -43,12 +44,9 @@ SERIALCON="ttyS0"
 
 # ## 引导：extlinux.conf，不用 boot.scr
 #
-# 厂商 U-Boot 走 distro boot，先找 extlinux/extlinux.conf 再找 boot.scr。迁移前的构建链
-# 就是 extlinux（`kernel /Image`），实机验证过；Armbian 默认的 boot.scr 依赖 U-Boot 环境里
-# 一堆变量（devtype/devnum/distro_bootpart/prefix/kernel_addr_r…）和 `test -e`、
-# `env import`、`fdt` 等命令在厂商 2017.09 U-Boot 上的行为——两次刷写都没起来，
-# 没有串口无从定位。extlinux 里全是写死的路径和参数，没有脚本逻辑，先用它。
-# 先例：aml-s9xx-box.tvb（同样 BOOTCONFIG=none + 厂商 U-Boot + FAT bootfs）。
+# 主线 U-Boot 的 bootstd 直接读 extlinux/extlinux.conf（厂商 U-Boot 的 distro boot 也是），
+# 里面全是写死的路径和参数，没有脚本逻辑；Armbian 默认的 boot.scr 依赖一堆环境变量，
+# 在厂商 U-Boot 上两次刷写都没起来，所以一直用 extlinux。
 #
 # SRC_EXTLINUX 下 armbianEnv.txt 会被删掉，内核参数只有这一处：root= 由 Armbian 加。
 # 控制台 ttyS0/115200（DTS 的 stdout-path）。loglevel 先开到 7：盒子没串口，崩溃现场
@@ -56,15 +54,16 @@ SERIALCON="ttyS0"
 SRC_EXTLINUX="yes"
 SRC_CMDLINE="rootwait rootfstype=ext4 console=ttyS0,115200 console=tty1 consoleblank=0 loglevel=7"
 
-# ## 不编、不发 u-boot
+# ## 引导链：主线 U-Boot v2026.07 + rkbin DDR v1.13 / BL31 v1.21
 #
-# 设备出厂的 idbloader 与 U-Boot 就能引导本项目的 Linux（2026-08-28 实测），
-# 而 sector 64–16383 里是逐机数据（DDR/SPL、vendor storage 的 SN/MAC/HDCP/IMEI）
-# 和 RKSS —— 不可再生，碰了就变砖或丢身份。所以镜像里不放引导链，刷写也不写那段。
-#
-# 附带的好处：HDMI 旁那个针孔（实测是 SARADC ch1 下载键，不是硬复位）由厂商
-# miniloader 读，按住上电进 Loader 模式 —— 这段我们永不覆盖，行为与原厂一致。
-BOOTCONFIG="none"
+# 2026-09-04 分两步实机验证：先只换 P1（厂商 SPL 能加载主线 FIT），再换 idbloader；
+# 全主线链引导 14.3 s，设备上不再有任何厂商引导二进制。HDMI 旁的针孔是 SARADC ch1
+# 下载键，由 U-Boot proper 读：命中写 BOOT_BROM_DOWNLOAD 复位，BootROM 进 MaskROM，
+# rkdeveloptool db 一个 rkbin loader 后即可读写 eMMC（实测）。
+# 具体钩子（源、分支、blob、defconfig 改动、分两段写入）在 w132d-uboot 扩展里。
+BOOTCONFIG="generic-rk3528_defconfig"
+BOOT_SCENARIO="spl-blobs"
+enable_extension "w132d-uboot"
 
 # ## 分区布局：逐扇区复现现有镜像
 #
@@ -112,8 +111,8 @@ function post_create_partitions__w132d_gpt_identity() {
 	[[ -f "${img}" ]] || { display_alert "W132D" "找不到 ${img}" "err"; return 1; }
 
 	display_alert "W132D" "固定 GPT 身份并给 bootfs 打 LegacyBIOSBootable" "info"
-	# BOOTCONFIG=none 下 Armbian 只建两个分区（bootfs、rootfs），没有厂商 uboot 那个，
-	# 所以这里的 1/2 对应设备上的 p2/p3。补 p1 的事见下面的 w132d_declare_uboot_part。
+	# Armbian 的镜像只有两个分区（bootfs、rootfs），u-boot.itb 在 16384 的空档里不占分区；
+	# 所以这里的 1/2 对应设备上的 p2/p3。设备形状的三分区 GPT 由 make-release.sh 生成。
 	run_host_command_logged sgdisk \
 		--disk-guid="${W132D_GPT_LABEL_ID}" \
 		--partition-guid=1:"${W132D_UUID_P2}" \

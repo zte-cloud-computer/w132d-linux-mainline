@@ -12,7 +12,7 @@
 # 都判掉，免得为了发现一个拼错的路径去刷一次机：
 #
 #   * 分区几何必须逐扇区对上（p2@24576、p3@1073152）—— 错了设备找不到 bootfs
-#   * p2 必须带 LegacyBIOSBootable —— 厂商 U-Boot 走 distro boot 靠它找 boot.scr，
+#   * p2 必须带 LegacyBIOSBootable —— 分区表身份的一部分（厂商 U-Boot 时代靠它找 boot.scr），
 #     **缺了不启动**，而 Armbian 默认不设任何分区属性
 #   * GPT 身份必须是钉住的那组 —— 让镜像可复现、与救砖文档对得上
 #   * rootfs 定制文件必须真的到位、服务必须真的使能 —— 钩子写错了不会报错，
@@ -56,8 +56,19 @@ grep -qi "9460D758-5782-409D-ACD6-FE1596D204B3" <<<"$(sgdisk -p "$IMG" 2>/dev/nu
 if grep -q "LegacyBIOSBootable" <<<"$LAYOUT"; then
   ok "bootfs 带 LegacyBIOSBootable"
 else
-  bad "bootfs 缺 LegacyBIOSBootable —— 厂商 U-Boot 扫不到 boot.scr，设备起不来"
+  bad "bootfs 缺 LegacyBIOSBootable"
 fi
+
+echo
+echo "── 2b. 引导链（主线 U-Boot，Armbian 构建时写进镜像）──"
+magic() { dd if="$IMG" bs=512 skip="$1" count=1 status=none | head -c 4 | od -An -tx1 | tr -d ' \n'; }
+[ "$(magic 64)" = "524b4e53" ] && ok "扇区 64 是 idbloader（RKNS：rkbin DDR + 主线 SPL）" \
+                                || bad "扇区 64 不是 idbloader（$(magic 64)）—— write_uboot_platform 没跑？"
+[ "$(magic 16384)" = "d00dfeed" ] && ok "扇区 16384 是 u-boot.itb（FIT）" || bad "扇区 16384 不是 FIT（$(magic 16384)）"
+nz=$(dd if="$IMG" bs=512 skip=7168 count=3072 status=none | tr -d '\0' | wc -c)
+[ "$nz" = 0 ] && ok "7168–10239（vendor storage / RKSS 位置）全零" || bad "7168–10239 有 $nz 个非零字节 —— 镜像里不该有任何机器的 vendor storage"
+nz=$(dd if="$IMG" bs=512 skip=404 count=6764 status=none | tr -d '\0' | wc -c)
+[ "$nz" = 0 ] && ok "idbloader 之后到 7168 全零（idbloader 没长到 vendor storage）" || bad "扇区 404–7167 有 $nz 个非零字节"
 
 echo
 echo "── 3. bootfs 内容 ──"
@@ -143,6 +154,16 @@ if mount -o ro "${LOOP}p2" /mnt/vp3 2>/dev/null; then
         && ok "$(basename "$u") 依赖的 $dep 在" || bad "$(basename "$u") 依赖的 $dep 不存在"
     done < <(grep -ohE '^(Requires|After|Before|Wants|PartOf)=.*' "$u" | grep -oE 'w132d-[a-z0-9-]+\.service' | sort -u)
   done
+  grep -q "^Package: linux-u-boot-w132d-edge$" /mnt/vp3/var/lib/dpkg/status && ok "包 linux-u-boot-w132d-edge 已装（apt 可升级 U-Boot）" || bad "rootfs 里没装 linux-u-boot-w132d-edge"
+  itb=/mnt/vp3/usr/lib/linux-u-boot-edge-w132d/u-boot.itb
+  if [ -f "$itb" ]; then
+    n=$(stat -c %s "$itb")
+    dd if="$IMG" bs=512 skip=16384 count=$(( (n + 511) / 512 )) status=none | head -c "$n" | cmp -s - "$itb" \
+      && ok "镜像 16384 处的 u-boot.itb 与包里那份逐字节一致" || bad "镜像里的 u-boot.itb 与包里的不一致"
+    grep -qa "saradc@ffae0000" "$itb" && ok "U-Boot DT 的 saradc 节点叫 saradc@ffae0000（针孔可用）" || bad "U-Boot DT 里没有 saradc@ffae0000 —— 针孔无效"
+  else
+    bad "rootfs 里没有 u-boot.itb"
+  fi
   # 脚本的运行时依赖包（板级配置 PACKAGE_LIST_BOARD 装的）
   for p in bluez ir-keytable python3-dbus python3-gi rfkill; do
     grep -q "^Package: $p\$" /mnt/vp3/var/lib/dpkg/status && ok "包 $p 已装" || bad "包 $p 没装"

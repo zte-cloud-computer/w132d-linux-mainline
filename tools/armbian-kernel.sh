@@ -11,6 +11,9 @@
 #                    退出码在这个模式下没有意义。
 #     kernel         构建内核，产出 linux-image/dtb/headers/libc-dev 四个 deb
 #     build          完整镜像（需要 --privileged：要 losetup/mount）
+#     uboot          只编 U-Boot（板级默认 BOOTCONFIG=none 什么都不编；加
+#                    ENABLE_EXTENSIONS=w132d-uboot 才走主线 U-Boot 实验）
+#   命令之后的参数原样传给 compile.sh（例如 ENABLE_EXTENSIONS=w132d-uboot）
 #   默认 kernel-patch
 #
 # ## 这一步在验什么
@@ -98,6 +101,7 @@ set +e
   BOARD=w132d BRANCH=edge RELEASE=trixie \
   BUILD_MINIMAL=yes BUILD_DESKTOP=no KERNEL_CONFIGURE=no \
   SHOW_LOG=yes USE_TMPFS=no ARMBIAN_RUNNING_IN_CONTAINER=yes CONTAINER_COMPAT=yes \
+  "${@:2}" \
   2>&1 \
   | grep -vE "Tried to start delayed item|update-alternatives:|^\s*$" \
   | tee "$B/armbian-$CMD.log"
@@ -123,7 +127,7 @@ if grep -E "Hunk #[0-9]+ FAILED|saving rejects to|-> [0-9]+/[0-9]+: w132d-.*\(pr
 fi
 echo "  ✅ w132d-* 补丁全部干净应用（Armbian 自己的 needs_rebase 不算）"
 
-if [ "$CMD" = "kernel" ]; then
+if [ "$CMD" = "kernel" ] || [ "$CMD" = "uboot" ]; then
   echo "  --- 产出的 deb ---"
   find "$ARMBIAN/output" -name 'linux-*.deb' -printf '     %f  %s B\n' 2>/dev/null \
     || find "$ARMBIAN/output" -name 'linux-*.deb' -exec ls -la {} \; 2>/dev/null
