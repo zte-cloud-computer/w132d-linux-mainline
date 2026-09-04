@@ -20,6 +20,10 @@ eMMC 扇区 7168 起（EMMC_VENDOR_PART_START = 1024*7），4 份副本各 128 �
     u8  data[...]                       u32 hash   u32 version2
 
 取 version == version2 且 version 最大的那份。条目 id：1=SN 2=WiFi MAC 3=LAN MAC 4=BT MAC。
+本机实测（version 57，14 个条目）：LAN_MAC 条目 12 字节，是同一个 MAC 写了两遍。
+
+⚠️ 2026-09-04 首次成功启动实测：厂商 U-Boot **确实会**把这个 MAC 修进 DTB（eth0 开机就是
+a0:c0:16:51:53:dd），这个服务只是兜底——U-Boot 修好了它就报"已是"，什么都不做。
 
 用法：
     w132d-vendor-mac                 只打印（SN 与三个 MAC）
@@ -72,7 +76,13 @@ def read_best(src):
 
 
 def mac_ok(b):
-    return len(b) == 6 and any(b) and not (b[0] & 1)
+    # 本机实测条目 3 长 12 字节：同一个 MAC 写了两遍（a0:c0:16:51:53:dd 重复），
+    # 取前 6 字节即可；6 或 12 都认，别的长度不认
+    return len(b) in (6, 12) and any(b[:6]) and not (b[0] & 1)
+
+
+def mac6(b):
+    return b[:6]
 
 
 def fmt(b):
@@ -106,7 +116,7 @@ def main():
     for iid, name in ITEM_IDS.items():
         if iid in items:
             v = items[iid]
-            shown = fmt(v) if name.endswith("MAC") else v.rstrip(b"\0").decode("ascii", "replace")
+            shown = fmt(v[:6]) if name.endswith("MAC") else v.rstrip(b"\0").decode("ascii", "replace")
             print(f"  {name:9s} {shown}")
     if not apply_:
         return 0
@@ -114,6 +124,7 @@ def main():
     if not mac or not mac_ok(mac):
         print("w132d-vendor-mac: 没有可用的 LAN MAC，网卡保持现状", file=sys.stderr)
         return 0
+    mac = mac6(mac)
     ifs = gmac_ifaces()
     if not ifs:
         print("w132d-vendor-mac: 没找到 rk_gmac-dwmac 的网卡", file=sys.stderr)

@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# 拉取构建输入到 cache/：内核源码与上游板级仓库。
+# 拉取构建输入到 cache/：内核源码，以及刷机用的 rkbin SPL loader。
 #
 # 用法: tools/fetch-inputs.sh
 #
@@ -29,7 +29,34 @@ else
   echo "✅ linux-$KVER.tar.xz（$(du -h "$TARBALL" | cut -f1)）"
 fi
 
+# ## 刷机用的 SPL loader（rkbin，按 RKBOOT/RK3528MINIALL.ini 用 boot_merger 打包）
+#
+# 按针孔进的 Loader 是设备自己 idbloader 里的**厂商 miniloader**，它写大文件会静默
+# 截断（2026-09-04 实测：报 100%，eMMC 上只有前 16–24 MB 对，后面全 0xCC）。刷写必须
+# 换成 rkbin 的 usbplug：flash.sh 用 `rd 3` 把设备从 Loader 复位进 MaskROM，`db` 这个
+# 文件，再写。它只在刷机那台电脑上用，不进镜像、不随发布物分发（rkbin 许可允许原样使用）。
+# boot_merger 是 x86_64 Linux 二进制，在 linux/amd64 容器里跑一下即可（Apple Silicon 走 Rosetta）。
+RKBIN_COMMIT="3e288fe814e059dd06833495f845cab04ac20a5c"
+RKBIN="$HERE/cache/rkbin"
+LOADER="$RKBIN/rk3528_loader_v1.13.107.bin"
+if [ -f "$LOADER" ]; then
+  echo "✅ SPL loader 已在位：$(basename "$LOADER")"
+else
+  mkdir -p "$RKBIN/bin/rk35" "$RKBIN/RKBOOT" "$RKBIN/tools"
+  for f in bin/rk35/rk3528_ddr_1056MHz_v1.14.bin bin/rk35/rk3528_usbplug_v1.04.bin \
+           bin/rk35/rk3528_spl_v1.07.bin RKBOOT/RK3528MINIALL.ini tools/boot_merger; do
+    echo "下载 rkbin/$f ..."
+    curl -fsSL -o "$RKBIN/$f" "https://raw.githubusercontent.com/rockchip-linux/rkbin/$RKBIN_COMMIT/$f"
+  done
+  chmod +x "$RKBIN/tools/boot_merger"
+  docker run --rm --platform linux/amd64 -v "$RKBIN":/rk -w /rk debian:13 \
+    ./tools/boot_merger RKBOOT/RK3528MINIALL.ini | tail -2
+  [ -f "$LOADER" ] || { echo "❌ boot_merger 没有产出 $(basename "$LOADER")"; exit 1; }
+  echo "✅ $(basename "$LOADER")（$(du -h "$LOADER" | cut -f1)）"
+fi
+
 echo
 echo "FETCH_OK  下一步："
 echo "  docker run --rm -v w132d-72:/build -v \"\$PWD\":/w -v \"\$PWD/cache/src\":/src:ro \\"
 echo "      debian:13 bash /w/tools/build-dtb.sh"
+echo "  刷机：W132D_SPL_LOADER=$LOADER tools/flash.sh out/release"

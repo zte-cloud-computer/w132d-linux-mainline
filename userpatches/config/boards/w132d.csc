@@ -41,6 +41,21 @@ PACKAGE_LIST_BOARD="bluez rfkill ir-keytable python3-dbus python3-gi"
 # 等 90 秒超时才放弃）。板级配置先设好，那个钩子看到已设就不动（radxa-e24c 同法）。
 SERIALCON="ttyS0"
 
+# ## 引导：extlinux.conf，不用 boot.scr
+#
+# 厂商 U-Boot 走 distro boot，先找 extlinux/extlinux.conf 再找 boot.scr。迁移前的构建链
+# 就是 extlinux（`kernel /Image`），实机验证过；Armbian 默认的 boot.scr 依赖 U-Boot 环境里
+# 一堆变量（devtype/devnum/distro_bootpart/prefix/kernel_addr_r…）和 `test -e`、
+# `env import`、`fdt` 等命令在厂商 2017.09 U-Boot 上的行为——两次刷写都没起来，
+# 没有串口无从定位。extlinux 里全是写死的路径和参数，没有脚本逻辑，先用它。
+# 先例：aml-s9xx-box.tvb（同样 BOOTCONFIG=none + 厂商 U-Boot + FAT bootfs）。
+#
+# SRC_EXTLINUX 下 armbianEnv.txt 会被删掉，内核参数只有这一处：root= 由 Armbian 加。
+# 控制台 ttyS0/115200（DTS 的 stdout-path）。loglevel 先开到 7：盒子没串口，崩溃现场
+# 全靠 console-ramoops，它记的是打到 console 的东西，等级低了硬挂时零现场。
+SRC_EXTLINUX="yes"
+SRC_CMDLINE="rootwait rootfstype=ext4 console=ttyS0,115200 console=tty1 consoleblank=0 loglevel=7"
+
 # ## 不编、不发 u-boot
 #
 # 设备出厂的 idbloader 与 U-Boot 就能引导本项目的 Linux（2026-08-28 实测），
@@ -142,14 +157,6 @@ function post_family_tweaks__w132d_rootfs_edits() {
 	[[ -d "${src}" ]] || return 0
 	display_alert "W132D" "写入 $(find "${src}" -type f | wc -l) 个归属其他包的配置" "info"
 	run_host_command_logged cp -a "${src}/." "${SDCARD}/"
-}
-
-# 但 boot-rockchip64.cmd 模板里的 console=ttyS2,1500000 是**写死的**，不看 SERIALCON。
-# 为了不整份复制引导脚本，用 armbianEnv.txt 的 extraboardargs 再追加一个 console=
-# —— 内核把最后一个 console= 当 /dev/console，ttyS2 那个因为没有设备被忽略。
-function post_family_tweaks__w132d_serial_console() {
-	display_alert "W132D" "内核控制台 console=ttyS0,115200（追加到 armbianEnv.txt）" "info"
-	run_host_command_logged echo "extraboardargs=console=ttyS0,115200" ">>" "${SDCARD}/boot/armbianEnv.txt"
 }
 
 # ## WCN 固件：用 Armbian 包自带的，不带私有输入

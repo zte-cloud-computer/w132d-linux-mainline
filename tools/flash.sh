@@ -4,7 +4,8 @@
 #
 # 用法：
 #   tools/flash.sh [发布目录]        默认 out/release
-#   加 --dry-run 只做检查、不写任何东西
+#   加 --dry-run 只做检查、不写任何东西；--verify-only 只把 eMMC 回读与发布物比对
+#   W132D_SPL_LOADER=<path> 指向 rkbin 的 rk3528 SPL loader（必需，见下）
 #
 # 需要设备进入 Loader 或 MaskROM：用顶针按住 HDMI 口旁的 Reset 针孔，
 # 保持按住插入电源，用 USB-A 直连电脑（别经 hub）。
@@ -23,6 +24,16 @@
 #
 # 本脚本因此**不提供任何写入 64–24575 的路径**，连选项都没有。
 #
+# ## ⚠️ 厂商 miniloader 写大文件会静默截断（2026-09-04 实测，两次刷写都栽在这）
+#
+# 按针孔进的 Loader 是设备自己 idbloader 里的厂商 miniloader。用它 `wl` 2.4 GB 的净荷，
+# rkdeveloptool 一路报到 100%、返回成功，**但 eMMC 上只有前 16–24 MB 是对的**，
+# 后面全是 0xCC 填充 —— Image/uInitrd 都在那之后，设备当然起不来。回读比对才发现。
+# 所以：
+#   1. 写入一律走 rkbin 的 SPL loader（usbplug）：`rd 3` 让设备从 Loader 复位进 MaskROM，
+#      `db` 下载 loader，再写。老构建链就是这么刷的（"db 下去后能驱动本机 eMMC"）。
+#   2. 写完**必须回读抽样比对**（含 p3 的 ext4 超级块），"100%" 不算数。
+#
 # ## 三个设了闸的坑
 #
 # 1. `db` 在 Loader 模式下会被拒绝，只有 MaskROM 才需要。所以必须**先看 `ld`
@@ -36,8 +47,9 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 DIR="${1:-$HERE/out/release}"
 [ "${1:-}" = "--dry-run" ] && { DIR="$HERE/out/release"; }
-DRY=0
-for a in "$@"; do [ "$a" = "--dry-run" ] && DRY=1; done
+DRY=0; VERIFY_ONLY=0
+for a in "$@"; do [ "$a" = "--dry-run" ] && DRY=1; [ "$a" = "--verify-only" ] && VERIFY_ONLY=1; done
+[ "$VERIFY_ONLY" = 1 ] && DIR="${DIR%--verify-only}"
 
 GPT="$DIR/w132d-gpt.bin"
 PAYLOAD="$DIR/w132d-p2p3.img"
@@ -47,6 +59,29 @@ LOADER="${W132D_SPL_LOADER:-}"
 
 step(){ echo; echo "########## $* ##########"; }
 die(){ echo "❌ $*" >&2; exit 1; }
+
+# 回读抽样：GPT 全部 64 扇区逐字节；净荷按等距 16 个点 + 末尾 + p3 的 ext4 超级块所在扇区，
+# 每点 8 扇区与文件比对。厂商 miniloader 截断时前 16 MB 是对的、后面全 0xCC，
+# 这样的采样一定抓得住；SPL loader 出问题时也一样。
+verify_written() {
+  local tmp; tmp=$(mktemp -d); local fail=0
+  rkdeveloptool rl 0 "$GPT_SECTORS" "$tmp/gpt" >/dev/null 2>&1 && cmp -s "$tmp/gpt" "$GPT" \
+    && echo "    ✅ GPT 逐字节一致" || { echo "    ❌ GPT 回读不一致"; fail=1; }
+  local total=$(( $(stat -f%z "$PAYLOAD" 2>/dev/null || stat -c%s "$PAYLOAD") / 512 ))
+  local pts=() i
+  for i in $(seq 0 15); do pts+=( $(( total * i / 16 )) ); done
+  pts+=( $(( total - 8 )) $(( 1073152 - P2_START + 2 )) )   # 末尾、p3 超级块（分区起点+1 KiB）
+  for off in "${pts[@]}"; do
+    dd if="$PAYLOAD" bs=512 skip="$off" count=8 2>/dev/null > "$tmp/f"
+    if rkdeveloptool rl $((P2_START + off)) 8 "$tmp/d" >/dev/null 2>&1 && cmp -s "$tmp/d" "$tmp/f"; then
+      :
+    else
+      printf '    ❌ 扇区 %d（净荷偏移 %d MB）回读不一致\n' $((P2_START + off)) $((off / 2048)); fail=1
+    fi
+  done
+  [ "$fail" = 0 ] && echo "    ✅ 净荷 ${#pts[@]} 个采样点全部一致（含 p3 超级块）"
+  rm -rf "$tmp"; return $fail
+}
 
 command -v rkdeveloptool >/dev/null \
   || die "缺 rkdeveloptool（https://github.com/rockchip-linux/rkdeveloptool）"
@@ -87,7 +122,26 @@ else
 fi
 echo "  模式：$MODE"
 
+if [ "$VERIFY_ONLY" = 1 ]; then
+  step "只回读比对（不写）"
+  verify_written && echo "VERIFY_OK" || die "eMMC 上的内容与发布物不一致"
+  exit 0
+fi
+
 step "3/5 准备写入通道"
+if [ "$MODE" = Loader ] && [ -n "$LOADER" ]; then
+  # 厂商 miniloader 写大文件会静默截断（见抬头）。有 SPL loader 就先复位进 MaskROM 换掉它。
+  echo "  当前是厂商 Loader，复位进 MaskROM 换用 SPL loader（rd 3）"
+  if [ "$DRY" = 0 ]; then
+    rkdeveloptool rd 3 >/dev/null 2>&1 || true
+    for _ in $(seq 1 15); do sleep 1; rkdeveloptool ld 2>&1 | grep -qi Maskrom && break; done
+    rkdeveloptool ld 2>&1 | sed 's/^/  /'
+    rkdeveloptool ld 2>&1 | grep -qi Maskrom && MODE=Maskrom \
+      || die "rd 3 之后没进 MaskROM。请断电、按住针孔上电重试；若仍是 Loader，说明这台的 miniloader 不认 rd 3"
+  fi
+elif [ "$MODE" = Loader ]; then
+  die "只有厂商 Loader 而没有 SPL loader：它写大文件会静默截断，不能用。设 W132D_SPL_LOADER=<rkbin 的 rk3528 loader>"
+fi
 if [ "$MODE" = Maskrom ]; then
   # MaskROM 下 eMMC 还没初始化，必须先把 loader 下到 SRAM 里跑起来
   [ -n "$LOADER" ] || die "MaskROM 模式需要 SPL loader：设 W132D_SPL_LOADER=<path>
@@ -99,10 +153,6 @@ if [ "$MODE" = Maskrom ]; then
   sleep 2
   # db 之后应当变成 Loader
   rkdeveloptool ld 2>&1 | sed 's/^/  /'
-else
-  # ⚠️ Loader 模式下发 db 会被拒（"The device does not support this operation!"），
-  # 所以这里什么都不做 —— 这正是「先看模式再决定」的意义。
-  echo "  已是 Loader 模式，跳过 db"
 fi
 
 step "4/5 写入"
@@ -120,9 +170,10 @@ else
   [ "$answer" = "yes" ] || die "已取消"
   echo "  写 GPT ..."
   rkdeveloptool wl 0 "$GPT" || die "写 GPT 失败（若 ld 已变成 Maskrom，重新上电再来）"
-  echo "  写净荷 ...（2.7 GB，几分钟）"
+  echo "  写净荷 ...（2.5 GB，几分钟）"
   rkdeveloptool wl "$P2_START" "$PAYLOAD" || die "写净荷失败"
-  echo "  ✅ 两段都写完了"
+  echo "  ✅ 两段都写完了 —— 但 100% 不算数，回读比对："
+  verify_written || die "回读比对失败：eMMC 上的内容与发布物不一致，设备不会启动。别重启，换 loader 重刷"
 fi
 
 step "5/5 收尾"

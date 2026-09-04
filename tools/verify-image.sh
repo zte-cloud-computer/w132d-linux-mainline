@@ -83,11 +83,19 @@ if mount -o ro "${LOOP}p1" /mnt/vp2 2>/dev/null; then
   [ -f /mnt/vp2/boot.scr ] || [ -f /mnt/vp2/extlinux/extlinux.conf ] \
     && ok "有引导脚本（boot.scr 或 extlinux.conf）" \
     || bad "bootfs 上没有任何引导脚本"
-  # 引导脚本模板把 console=ttyS2,1500000 写死了，本板的调试串口是 UART0；
-  # 板级钩子经 extraboardargs 追加 console=ttyS0，内核以最后一个 console= 为准
-  grep -q '^extraboardargs=.*console=ttyS0,115200' /mnt/vp2/armbianEnv.txt \
-    && ok "armbianEnv.txt 追加了 console=ttyS0,115200" \
-    || bad "armbianEnv.txt 没有 console=ttyS0 —— 串口控制台会落在不存在的 ttyS2 上"
+  # 走 extlinux（厂商 U-Boot 上验证过的路径）：路径与参数全写死，没有 U-Boot 脚本逻辑
+  EX=/mnt/vp2/extlinux/extlinux.conf
+  if [ -f "$EX" ]; then
+    ok "extlinux/extlinux.conf 在"
+    grep -q '^  kernel /Image$' "$EX"   && ok "extlinux: kernel /Image"   || bad "extlinux 缺 kernel /Image"
+    grep -q '^  initrd /uInitrd$' "$EX" && ok "extlinux: initrd /uInitrd" || bad "extlinux 缺 initrd /uInitrd"
+    grep -q '^  fdt /dtb/rockchip/rk3528-w132d.dtb$' "$EX" && ok "extlinux: fdt 指向本板 DTB" || bad "extlinux 的 fdt 不是本板 DTB"
+    grep -q '^  append root=UUID=' "$EX" && ok "extlinux: root=UUID=…" || bad "extlinux 缺 root=UUID"
+    grep -q 'console=ttyS0,115200' "$EX" && ok "extlinux: console=ttyS0,115200" || bad "extlinux 缺 console=ttyS0"
+    [ -f /mnt/vp2/boot.scr ] && bad "boot.scr 还在 —— 厂商 U-Boot 会先找 extlinux，但两者并存容易糊涂" || true
+  else
+    bad "缺 extlinux/extlinux.conf —— 板级配置的 SRC_EXTLINUX 没生效"
+  fi
   ls /mnt/vp2/dtb*/rockchip/rk3528-w132d.dtb >/dev/null 2>&1 \
     || ls /mnt/vp2/rockchip/rk3528-w132d.dtb >/dev/null 2>&1 \
     && ok "板级 DTB 在 bootfs 上" || bad "bootfs 上找不到 rk3528-w132d.dtb"

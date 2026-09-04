@@ -100,9 +100,10 @@ dtc 直接报 label not found。
 
 暂不支持 suspend-to-RAM；4G 模组驱动不在项目范围内。
 
-串口控制台在 **UART0 / ttyS0，115200**（DTS 的 stdout-path）。Armbian 对非 rk3576 的
-SoC 默认 ttyS2，且引导脚本模板把 `console=ttyS2,1500000` 写死；板级配置设了
-`SERIALCON=ttyS0` 并经 `armbianEnv.txt` 的 `extraboardargs` 追加 `console=ttyS0,115200`。
+引导走 **extlinux.conf**（`SRC_EXTLINUX=yes`）：厂商 U-Boot 的 distro boot 先找它，迁移前
+的构建链就是这么起的；Armbian 默认的 boot.scr 依赖厂商 U-Boot 环境里的一堆变量与命令，
+在本板上没起来过。内核参数只有 `SRC_CMDLINE` 一处，串口控制台 **UART0 / ttyS0，115200**
+（Armbian 对非 rk3576 的 SoC 默认 ttyS2，板级配置设了 `SERIALCON=ttyS0` 给 getty）。
 
 > [!NOTE]
 > 这份镜像**还没有整体上过真机**：五个内核补丁、DTS 与 rootfs 定制都在迁移前的
@@ -174,5 +175,5 @@ dpkg -i linux-dtb-edge-rockchip64_*.deb linux-image-edge-rockchip64_*.deb armbia
   `driver_uwe5622()` 只对 `5.15 ≤ 内核 < 7.3` 加入驱动。Armbian 把 edge 提到 7.3 的那天，
   Wi-Fi/蓝牙模块会**无声消失**——`verify-image.sh` 不查模块，要看 `kernel` 构建产物里
   有没有 `sprdwl_ng.ko`。
-* **引导脚本模板**把 `console=ttyS2,1500000` 写死，我们靠 `extraboardargs` 覆盖；
-  模板改了这行，`verify-image.sh` 会报。
+* **extlinux 的生成**在 `lib/functions/rootfs/distro-agnostic.sh` 与 `image/partitioning.sh`
+  两处（`kernel/initrd/fdt` 与 `append root=`），`verify-image.sh` 逐行核对。
