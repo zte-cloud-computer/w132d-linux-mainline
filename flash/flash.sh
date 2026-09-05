@@ -5,7 +5,7 @@
 # 用法：
 #   tools/flash.sh [发布目录或镜像文件]        默认 out/release
 #   --dry-run 只做检查、不写任何东西；--verify-only 只把 eMMC 回读与镜像比对
-#   W132D_SPL_LOADER=<path> 指向 rkbin 的 rk3528 loader（必需，见下）
+#   W132D_SPL_LOADER=<path> 指向 rkbin 的 rk3528 loader；不给就用发布目录或 cache/rkbin 里的
 #
 # 需要设备进入 MaskROM：用顶针按住 HDMI 口旁的 Reset 针孔，保持按住插入电源，
 # 用 USB-A 直连电脑（别经 hub）。针孔是 SARADC ch1 下载键，由 U-Boot proper 读到后
@@ -37,7 +37,8 @@
 #    读成成功。这里一律用 `if cmd; then` 直接判。
 set -uo pipefail
 
-HERE="$(cd "$(dirname "$0")/.." && pwd)"
+SELF="$(cd "$(dirname "$0")" && pwd)"
+HERE="$(cd "$SELF/.." && pwd)"
 DRY=0; VERIFY_ONLY=0; TARGET=""
 for a in "$@"; do
   case "$a" in
@@ -46,13 +47,18 @@ for a in "$@"; do
     *) TARGET="$a" ;;
   esac
 done
-TARGET="${TARGET:-$HERE/out/release}"
+# 默认目标：在发布包里（脚本旁边就是 w132d.img）就用脚本所在目录；在仓库里就是 out/release
+if [ -z "$TARGET" ]; then
+  if [ -f "$SELF/w132d.img" ]; then TARGET="$SELF"; else TARGET="$HERE/out/release"; fi
+fi
 if [ -d "$TARGET" ]; then DIR="$TARGET"; IMG="$DIR/w132d.img"; else IMG="$TARGET"; DIR="$(dirname "$IMG")"; fi
 
 GPT_SECTORS=64
 VS_START=7168                          # 出厂 vendor storage 位置：镜像里必须是零
 P1_START=16384; P2_START=24576; P3_START=1073152
+# loader：发布包里自带一份；仓库里跑就用 cache/rkbin 的（tools/fetch-inputs.sh 生成）
 LOADER="${W132D_SPL_LOADER:-}"
+[ -n "$LOADER" ] || for c in "$DIR/rk3528_loader_v1.13.107.bin" "$HERE/cache/rkbin/rk3528_loader_v1.13.107.bin"; do [ -f "$c" ] && { LOADER="$c"; break; }; done
 
 step(){ echo; echo "########## $* ##########"; }
 die(){ echo "❌ $*" >&2; exit 1; }
@@ -182,7 +188,6 @@ fi
 cat <<'EOF'
 FLASH_OK
 ℹ️ 首次开机要几分钟：firstrun 扩容 rootfs、生成 SSH 密钥。第二次还慢就不是慢，是出问题了。
-ℹ️ 出厂 BL31 每约 32 分钟打死整机的缺陷由镜像里的 w132d-bl31-cookie.service 绕过
-   （开机早期往 GRF 0xff370220 写握手 cookie），rkbin 任何版本的 BL31 都适用。
-   看状态：systemctl status w132d-bl31-cookie（应为 active、"cookie present"）
+ℹ️ BL31 每约 32 分钟打死整机的缺陷由镜像里的 U-Boot 在 preboot 阶段写握手 cookie 绕过，
+   rkbin 任何版本的 BL31 都适用，Linux 里没有对应的服务要看。
 EOF

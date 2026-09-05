@@ -16,9 +16,6 @@
 #                       校准数据，再分发授权不明。BD 地址从网卡 MAC 派生。
 #                       源码取自 zte-cloud-computer/w132d-linux-mainline（MIT）。
 #
-#   w132d-bl31-cookie   往 GRF 0xff370220 写出厂 BL31 安全串口调试器要的握手
-#                       cookie（实验性，见源码头部注释）。
-#
 # ## 工具链必须卸掉
 #
 # gcc + libc6-dev 连依赖近百 MB，minimal 镜像里没有别的东西需要它。
