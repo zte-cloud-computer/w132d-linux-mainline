@@ -36,7 +36,7 @@ Armbian 构建代码里两处漂移点，补丁干跑测不出来：
 
 ## 提 Armbian PR 前要改的形态
 
-- `extensions/w132d-uboot.sh`、`w132d-tools.sh` 的钩子并进 `config/boards/w132d.csc`
+- `extensions/w132d-uboot.sh` 的钩子并进 `config/boards/w132d.csc`
 - `overlay/bsp-cli/` 搬到 `config/optional/boards/w132d/_packages/bsp-cli/`
 - Wi-Fi 固件先投 `armbian/firmware`，板子指向包里的文件（他们不会接受构建时从第三方仓库下载）
 - `custom_kernel_config__w132d` 的改动进家族共用的 `linux-rockchip64-edge.config`

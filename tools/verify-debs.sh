@@ -79,8 +79,7 @@ echo "── armbian-bsp-cli ──"
 BSP=$(one armbian-bsp-cli-w132d-edge)
 if [ -n "$BSP" ]; then
   dpkg-deb -c "$BSP" > "$T/bsp.list"
-  for f in etc/systemd/system/w132d-bluetooth.service \
-           etc/apt/preferences.d/w132d-kernel etc/rc_keymaps/w132d.toml usr/local/bin/w132d-bt-smp-ensure \
+  for f in etc/apt/preferences.d/w132d-kernel etc/rc_keymaps/w132d.toml usr/local/bin/w132d-bt-smp-ensure \
            lib/firmware/uwe5622/wifi_56630001_3ant.ini lib/firmware/wifi_56630001_3ant.ini \
            lib/firmware/uwe5622/wcnmodem-marlin3e.bin; do
     # dpkg-deb -c 对软链打印 "path -> target"，所以不能要求行尾就是路径
