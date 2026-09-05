@@ -16,7 +16,7 @@ Armbian（Debian trixie，minimal）+ 主线内核 7.2 + 主线 U-Boot，整盘�
 |---|---|---|
 | eMMC | 可用 | HS400 Enhanced Strobe |
 | USB 2.0 / 千兆有线 | 可用 | MAC 由 U-Boot 按 SoC OTP 派生（固定，但不等于机身标签上的出厂值） |
-| Wi-Fi / 蓝牙 / BLE 语音遥控 | 可用 | UWE5623（Marlin3E）。固件取自 CoreELEC 公开仓库 [uwe5631-aml](https://github.com/CoreELEC/uwe5631-aml)，构建时按钉住的提交下载并校验 |
+| Wi-Fi / 蓝牙 / BLE 语音遥控 | 可用 | UWE5623（Marlin3E）。固件取自 CoreELEC 公开仓库 [uwe5631-aml](https://github.com/CoreELEC/uwe5631-aml)，构建时按钉住的提交下载并校验。蓝牙由驱动直接注册为 hci0（内核内完成厂商初始化），无需用户态 attach |
 | 红外遥控 | 可用 | rc-core，NEC |
 | 3.5 mm 音频 | 可用 | 输出 acodec，输入 ES7202/PDM |
 | Mali-450 GPU | 可用 | Lima，含热降频 |
@@ -58,16 +58,29 @@ CI（[build-packages.yml](.github/workflows/build-packages.yml)）构建 deb 包
 
 ## 仓库结构
 
-| 路径 | 内容 |
-|---|---|
-| `userpatches/config/boards/w132d.csc` | 板级配置（Armbian 板文件） |
-| `userpatches/extensions/` | 构建钩子：U-Boot 源/补丁/blob，chroot 内编译的原生工具 |
-| `userpatches/u-boot/`、`userpatches/kernel/` | U-Boot 与内核补丁（Armbian 形态；内核补丁由 `patches/` 生成） |
-| `patches/` | 内核补丁源头（可 `git am` 到主线）与板级 DTS |
-| `userpatches/overlay/bsp-cli/` | 进 bsp 包的设备定制：systemd unit、脚本、keymap、RF 配置、apt pin |
-| `flash/` | 刷写脚本与说明，整目录进发布包 |
-| `tools/` | 构建、校验、出包脚本 |
-| `docs/` | 引导链、上游化与维护备忘 |
+只列入库的路径；Armbian 运行时会在 `userpatches/` 下生成大量空目录，不在 git 里。
+
+```
+.
+├── patches/                            内核补丁源头（可 git am 到主线）与板级 DTS
+│   ├── 000N-*.patch
+│   ├── 000N-*.msg                      板级 DTS 补丁的提交信息（编号最大）
+│   └── rk3528-w132d.dts                板级 DTS，tools/make-patch-series.sh 拼成最后一个补丁
+├── userpatches/                        Armbian 构建框架的输入
+│   ├── config/boards/w132d.csc         板级配置（Armbian 板文件）
+│   ├── extensions/w132d-uboot.sh       构建钩子：U-Boot 源/补丁/blob/配置
+│   ├── kernel/archive/rockchip64-7.2/  内核补丁（Armbian 形态，由 patches/ 生成）
+│   ├── u-boot/v2026.07/                U-Boot 补丁
+│   └── overlay/
+│       ├── bsp-cli/                    进 bsp 包：systemd unit、脚本、keymap、RF 配置、apt pin
+│       └── rootfs-edits/               归属其他包、直接写进 rootfs 的整文件配置
+├── flash/                              刷写脚本与说明，整目录进发布包
+├── tools/                              构建、校验、出包脚本
+├── docs/                               引导链、上游化与维护备忘
+├── .github/workflows/                  CI：构建 deb 并发 Release
+├── cache/                              上游源码与 rkbin（不入库，tools/fetch-inputs.sh 生成）
+└── out/                                构建产物（不入库）
+```
 
 ## 上游状态
 
@@ -79,7 +92,7 @@ CI（[build-packages.yml](.github/workflows/build-packages.yml)）构建 deb 包
 | `Bluetooth: hci_sync: don't fail init when the controller rejects the default link policy` | Linux | 待投 |
 | `arm64: dts: rockchip: add ZTE W132D` | Linux | 待投 |
 | `ASoC: rockchip: RK3528 codec + ES7202` | Linux | 待整理 |
-| uwe5622 驱动三处修复 | armbian/uwe5622 | 待投 |
+| uwe5622 驱动：三处修复 + 直接注册 HCI 设备（免用户态 attach） | armbian/uwe5622 | 待投 |
 | pmdomain: rockchip: 整个 provider 延迟而不是丢掉延迟的域 | armbian/build | 待投 |
 | `rockchip_dnl_key_pressed()` 按 compatible 匹配 ADC | U-Boot | 待投 |
 | Marlin3E 三天线 RF 配置 | armbian/firmware | 待投 |

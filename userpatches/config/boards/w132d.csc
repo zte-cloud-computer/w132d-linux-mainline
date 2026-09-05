@@ -214,12 +214,10 @@ function post_family_tweaks__w132d_enable_services() {
 	display_alert "W132D" "使能板级服务" "info"
 	# BL31 uartdbg 32 分钟挂死的绕过（往 GRF 写握手 cookie）已改由 U-Boot 的 PREBOOT 做
 	#（见 extensions/w132d-uboot.sh），Linux 侧不再有对应服务。
-	# 没有 w132d-bt-calib：它与 w132d-btattach 重复（两者都下发
-	# 0xFCA0/0xFCA2/0xFCA1），而且它要读 /lib/firmware/uwe5622/bt_configure_*.ini
-	# ——那是厂商逐板校准数据，再分发授权不明，不进可公开的镜像。
-	# btattach 自己在代码里构造 pskey 与 RF 配置，不依赖那些文件。
+	# 蓝牙不需要任何用户态 attach：uwe5622 驱动（w132d-armbian-0005 补丁 + CONFIG_TTY_OVERY_SDIO_HCI）
+	# 直接注册 hci0，pskey/RF/enable 在内核里下发，bluetoothd 走 mgmt 上电即可。
 	chroot_sdcard systemctl enable \
-		w132d-wireless.service w132d-bluetooth.service \
+		w132d-wireless.service \
 		w132d-ble-remote.service w132d-ir-keymap.service w132d-led-status.service \
 		w132d-soft-standby.service
 	# 主线内核没有 ttyFIQ0（那是 Rockchip vendor 内核的 FIQ debugger 串口），
@@ -253,17 +251,16 @@ function post_family_tweaks__w132d_enable_services() {
 # 没变，改了这里也照样复用缓存的旧内核 deb（实测 pstore 那三行加了等于没加）。
 function custom_kernel_config__w132d() {
 	kernel_config_modifying_hashes+=("CONFIG_SND_SOC_RK3528=m" "CONFIG_SND_SOC_ES7202=m"
-		"CONFIG_PSTORE_RAM=y" "CONFIG_PSTORE_CONSOLE=y" "CONFIG_PSTORE_PMSG=y")
+		"CONFIG_PSTORE_RAM=y" "CONFIG_PSTORE_CONSOLE=y" "CONFIG_PSTORE_PMSG=y"
+		"CONFIG_TTY_OVERY_SDIO_HCI=y")
 	[[ -f .config ]] || return 0
-	display_alert "W132D" "打开 RK3528 acodec 与 ES7202（由 rk3528-audio 补丁引入）；pstore console 通路" "info"
+	display_alert "W132D" "打开 RK3528 acodec 与 ES7202（由 rk3528-audio 补丁引入）；pstore console 通路；uwe5622 蓝牙走 HCI 设备" "info"
 	run_kernel_make olddefconfig
 	scripts/config --module CONFIG_SND_SOC_RK3528
 	scripts/config --module CONFIG_SND_SOC_ES7202
 	scripts/config --enable CONFIG_PSTORE_RAM
 	scripts/config --enable CONFIG_PSTORE_CONSOLE
 	scripts/config --enable CONFIG_PSTORE_PMSG
+	# uwe5622 的蓝牙通道直接注册成 hci0（w132d-armbian-0005 补丁加的选项），不再经 /dev/ttyBT0 + 用户态 attach
+	scripts/config --enable CONFIG_TTY_OVERY_SDIO_HCI
 }
-
-# w132d-btattach 是 aarch64 可执行文件，编译产物不进仓库，
-# 由 extension 从 extensions/src/*.c 在 chroot 里编。overlay 里只有对应的 unit。
-enable_extension "w132d-tools"

@@ -129,7 +129,7 @@ if mount -o ro "${LOOP}p2" /mnt/vp3 2>/dev/null; then
   [ "$miss" = 0 ] && ok "overlay $n 个文件全部到位" \
                   || bad "overlay 缺 $miss 个（到位 $n 个）"
 
-  for u in w132d-wireless w132d-bluetooth w132d-ble-remote w132d-ir-keymap \
+  for u in w132d-wireless w132d-ble-remote w132d-ir-keymap \
            w132d-led-status w132d-soft-standby; do
     if ls /mnt/vp3/etc/systemd/system/multi-user.target.wants/"$u".service >/dev/null 2>&1; then
       ok "$u.service 已使能"
@@ -171,19 +171,9 @@ if mount -o ro "${LOOP}p2" /mnt/vp3 2>/dev/null; then
   ls -d /mnt/vp3/usr/lib/python3/dist-packages/dbus /mnt/vp3/usr/lib/python3/dist-packages/gi >/dev/null 2>&1 \
     && ok "python3 的 dbus / gi 模块在" || bad "python3 缺 dbus 或 gi 模块 —— BLE 桥接起不来"
 
-  # extension 编出来的原生工具：必须在、必须是 aarch64（e_machine 0xB7）
-  for t in w132d-btattach; do
-    f="/mnt/vp3/usr/local/sbin/$t"
-    if [ -x "$f" ]; then
-      m=$(od -An -tx1 -j18 -N2 "$f" | tr -d ' \n')
-      [ "$m" = "b700" ] && ok "$t 已编译（aarch64）" || bad "$t 不是 aarch64 ELF（e_machine=$m）"
-    else
-      bad "$t 不在镜像里"
-    fi
-  done
-  # 编完工具链必须卸掉，否则 minimal 镜像平白多近百 MB
-  [ -e /mnt/vp3/usr/bin/gcc ] && bad "gcc 还留在镜像里（extension 没卸干净工具链）" \
-                              || ok "编译工具链已卸掉"
+  # 镜像里不该再有任何原生工具或编译器（btattach/bl31-cookie 都已退役）
+  [ -e /mnt/vp3/usr/local/sbin/w132d-btattach ] && bad "w132d-btattach 还在（已退役，蓝牙由内核驱动注册 hci0）" || ok "没有用户态 attach 工具"
+  [ -e /mnt/vp3/usr/bin/gcc ] && bad "gcc 留在镜像里" || ok "镜像里没有编译器"
 
   # 内核包与 Armbian 官方同名：没有这条 pin，官方版本号追上来的那天 apt upgrade 把设备打死
   grep -q 'Pin: origin apt.armbian.com' /mnt/vp3/etc/apt/preferences.d/w132d-kernel 2>/dev/null \

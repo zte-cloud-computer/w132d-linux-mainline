@@ -2,7 +2,7 @@
 [Unit]
 Description=W132D UWE5622 WiFi/Bluetooth kernel transport
 After=local-fs.target systemd-modules-load.service
-Before=NetworkManager.service w132d-bluetooth.service
+Before=NetworkManager.service bluetooth.service
 
 [Service]
 Type=oneshot
@@ -12,7 +12,6 @@ ExecStart=/sbin/modprobe ecdh_generic
 ExecStart=/sbin/modprobe cmac
 ExecStart=/sbin/modprobe rfkill
 ExecStart=/sbin/modprobe bluetooth
-ExecStart=/sbin/modprobe hci_uart
 ExecStart=/sbin/modprobe cfg80211
 ExecStart=/sbin/modprobe uwe5622_bsp_sdio
 ExecStart=/sbin/modprobe sprdwl_ng
