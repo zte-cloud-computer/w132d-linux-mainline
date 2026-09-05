@@ -79,13 +79,8 @@
 	mmc-hs400-1_8v;
 	mmc-hs400-enhanced-strobe;
 	/*
-	 * The command queue is enabled from the DT property alone; the driver
-	 * reads it with device_property_read_bool(pdev, "supports-cqe").
-	 */
-	supports-cqe;
-	/*
 	 * Deliberately no fixed-emmc-driver-type: the vendor reference board uses
-	 * type 4, but the Samsung 07S000 part fitted here rejects it and the MMC
+	 * type 4, but the 07S000 part fitted here rejects it and the MMC
 	 * core falls back to type B anyway.
 	 */
 	no-sd;
