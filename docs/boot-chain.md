@@ -34,7 +34,7 @@ rkbin loader，且写完必须回读比对。
 主线 U-Boot 不读 Rockchip 私有的 vendor storage。`misc_init_r` 按 OTP cpuid 派生一个固定地址
 （`rockchip_setup_macaddr()`，主线 Rockchip 板的标准做法），起内核时按 `ethernet0` 别名注入 DT 的
 `local-mac-address`。每台机器固定、不同机器不同，但不等于机身标签上的出厂值——路由器里按 MAC 的绑定要改一次。
-Linux 侧 `w132d-vendor-mac` 只在 DT 里没有 MAC 时才按 OTP 派生兜底。
+Linux 侧不再有任何 MAC 相关的服务（曾有读 vendor storage 的 `w132d-vendor-mac`，引导链换主线后退役）。
 
 曾尝试把出厂 MAC 迁进 U-Boot env，见 [maintenance.md](maintenance.md) 的坑；最终决定不抢救。
 
@@ -44,9 +44,11 @@ Rockchip 的 BL31 带一个安全侧串口调试器（uartdbg）：定时器第 
 cookie `0x2b4d1f7a`（厂商内核的 fiq_debugger 负责写，主线内核没有），没有就往 console 喷训练帧并改写 UART
 时钟分频，整机挂死。rkbin 从 v1.18 到 v1.21 都带这段逻辑（v1.13 没有）。
 
-绕过：`w132d-bl31-cookie.service` 开机早期经 `/dev/mem` 往该寄存器写 cookie
-（`userpatches/extensions/src/w132d-bl31-cookie.c`），对任何版本的 BL31 都有效，实测 42 分钟无事。
-不需要碰 BL31 二进制。
+绕过：U-Boot 的 `CONFIG_PREBOOT="mw.l 0xff370220 0x2b4d1f7a"`（`userpatches/extensions/w132d-uboot.sh`）。
+BL31 的定时器每次复位从头计、U-Boot 每次复位都重跑 preboot，所以冷启动和重启都覆盖；这个 OS_REG 便签
+寄存器进 Linux 后不会被动。对任何版本的 BL31 都有效，不需要碰 BL31 二进制，Linux 侧没有任何服务。
+2026-09-04 先用 Linux 侧服务写同一个值实测 42 分钟无事，09-05 改由 U-Boot 写并核对寄存器值。
+（曾有 `w132d-bl31-cookie` 工具 + systemd 服务，已退役。）
 
 ## 验证记录（2026-09-04/05）
 

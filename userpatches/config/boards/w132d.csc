@@ -212,12 +212,8 @@ function post_family_tweaks__w132d_wcn_firmware() {
 # HDMI 相关的 unit 本版不带，所以不在列表里。
 function post_family_tweaks__w132d_enable_services() {
 	display_alert "W132D" "使能板级服务" "info"
-	# 出厂 BL31 每约 32 分钟打死整机的绕过（往 GRF 写握手 cookie），2026-09-04 在
-	# 原版 BL31 上实测 42 分钟无事。挂在 sysinit.target 下尽早跑。
-	chroot_sdcard systemctl enable w132d-bl31-cookie.service
-	# 出厂 MAC：厂商 U-Boot 没把 vendor storage 的 MAC 修进主线 DTB（首刷实测），
-	# 由这个服务在 networkd 之前从 eMMC 读出来设上，否则每次重刷 MAC/IP 都变
-	chroot_sdcard systemctl enable w132d-vendor-mac.service
+	# BL31 uartdbg 32 分钟挂死的绕过（往 GRF 写握手 cookie）已改由 U-Boot 的 PREBOOT 做
+	#（见 extensions/w132d-uboot.sh），Linux 侧不再有对应服务。
 	# 没有 w132d-bt-calib：它与 w132d-btattach 重复（两者都下发
 	# 0xFCA0/0xFCA2/0xFCA1），而且它要读 /lib/firmware/uwe5622/bt_configure_*.ini
 	# ——那是厂商逐板校准数据，再分发授权不明，不进可公开的镜像。
@@ -268,6 +264,6 @@ function custom_kernel_config__w132d() {
 	scripts/config --enable CONFIG_PSTORE_PMSG
 }
 
-# w132d-btattach / w132d-bl31-cookie 是 aarch64 可执行文件，编译产物不进仓库，
+# w132d-btattach 是 aarch64 可执行文件，编译产物不进仓库，
 # 由 extension 从 extensions/src/*.c 在 chroot 里编。overlay 里只有对应的 unit。
 enable_extension "w132d-tools"

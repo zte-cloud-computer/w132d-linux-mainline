@@ -8,7 +8,7 @@
 # 「毕业」成 armbian/build 的 PR 时，这里的钩子并进 config/boards/w132d.csc。
 #
 # rkbin 的 DDR / BL31 blob 按原样使用（其 LICENSE 允许分发未修改的 blob，Armbian 所有
-# RK 板子都这么做）。BL31 的 uartdbg 32 分钟问题由 w132d-bl31-cookie 服务绕过，对任何版本有效。
+# RK 板子都这么做）。BL31 的 uartdbg 32 分钟问题由本扩展的 PREBOOT 写 cookie 绕过，对任何版本有效。
 function extension_prepare_config__w132d_uboot() {
 	declare -g BOOTCONFIG="generic-rk3528_defconfig"
 	declare -g BOOT_SCENARIO="spl-blobs"
@@ -60,4 +60,14 @@ function post_config_uboot_target__w132d_uboot_configs() {
 	# env 无效时才载入编进二进制的默认环境，读到一份 CRC 正确的就直接用它，于是没有
 	# bootcmd/boot_targets/bootdelay（CONFIG_ENV_APPEND 也救不了，它只是 H_NOCLEAR）。真要预置 env
 	# 得用 u-boot-initial-env + mkenvimage 写完整的一份（OE 的做法），且每次刷 U-Boot 都得重写。
+	#
+	# BL31（rkbin 任何版本）的安全侧串口调试器 uartdbg：定时器第 30 次 tick 起检查 GRF 0xff370220
+	# 里有没有握手 cookie 0x2b4d1f7a（厂商内核的 fiq_debugger 负责写，主线内核没有），没有就往
+	# console 喷训练帧并改 UART 分频，整机挂死。BL31 的定时器每次复位从头计、U-Boot 每次复位都
+	# 重跑 preboot，所以在这里写一次就覆盖冷启动和重启；OS_REG 便签寄存器进 Linux 后不会被动。
+	# 2026-09-04 用 Linux 侧服务写同一个值实测 42 分钟无事，这里只是把写的位置前移到 U-Boot。
+	# 先例：radxa-e24c 用 PREBOOT 点 LED。
+	run_host_command_logged scripts/config --enable CONFIG_USE_PREBOOT
+	# run_host_command_logged 会把命令串重新求值，带空格的值要"双引号套单引号"（e24c 同款写法）
+	run_host_command_logged scripts/config --set-str CONFIG_PREBOOT "'mw.l 0xff370220 0x2b4d1f7a'"
 }

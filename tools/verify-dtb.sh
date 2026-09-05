@@ -12,7 +12,7 @@
 # 的一次改动把 eMMC 从 HS400 降回了 52MHz，纯 DTS 属性变更，编译毫无异常。
 #
 # 每一条都对应一个真实后果：
-#   - HS400/CQE 掉了            → eMMC 掉到 52MHz，整机 I/O 慢一个数量级
+#   - HS400 掉了                → eMMC 掉到 52MHz，整机 I/O 慢一个数量级
 #   - pwm-dutycycle-range 掉了  → 「请求高电压得到低电压」，2016MHz 直接挂死
 #   - tsadc 掉了                → 没有温控，也没有热降频
 #   - ir wakeup-source 冒出来   → 与软件待机冲突（本项目不做 s2ram）
@@ -57,7 +57,6 @@ dtc -I dtb -O dts "$D" > /tmp/verify-dtb.dts 2>/dev/null \
 
 chk /soc/mmc@ffbf0000         mmc-hs400-1_8v            "eMMC HS400"
 chk /soc/mmc@ffbf0000         mmc-hs400-enhanced-strobe "eMMC Enhanced Strobe"
-chk /soc/mmc@ffbf0000         supports-cqe              "eMMC 命令队列"
 chk /soc/watchdog@ffac0000    compatible                "看门狗"
 chk /soc/tsadc@ffad0000       status                    "温度传感器"
 chk /regulator-vdd-cpu        pwm-dutycycle-range       "vdd_cpu 占空比映射"

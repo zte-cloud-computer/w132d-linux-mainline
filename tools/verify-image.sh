@@ -172,7 +172,7 @@ if mount -o ro "${LOOP}p2" /mnt/vp3 2>/dev/null; then
     && ok "python3 的 dbus / gi 模块在" || bad "python3 缺 dbus 或 gi 模块 —— BLE 桥接起不来"
 
   # extension 编出来的原生工具：必须在、必须是 aarch64（e_machine 0xB7）
-  for t in w132d-btattach w132d-bl31-cookie; do
+  for t in w132d-btattach; do
     f="/mnt/vp3/usr/local/sbin/$t"
     if [ -x "$f" ]; then
       m=$(od -An -tx1 -j18 -N2 "$f" | tr -d ' \n')
@@ -188,14 +188,6 @@ if mount -o ro "${LOOP}p2" /mnt/vp3 2>/dev/null; then
   # 内核包与 Armbian 官方同名：没有这条 pin，官方版本号追上来的那天 apt upgrade 把设备打死
   grep -q 'Pin: origin apt.armbian.com' /mnt/vp3/etc/apt/preferences.d/w132d-kernel 2>/dev/null \
     && ok "apt pin：官方源的同名内核包被挡住" || bad "缺 /etc/apt/preferences.d/w132d-kernel —— apt upgrade 会装上官方内核"
-
-  # ⚠️ BL31 cookie（实验性绕过）挂在 sysinit.target 下
-  ls /mnt/vp3/etc/systemd/system/sysinit.target.wants/w132d-bl31-cookie.service >/dev/null 2>&1 \
-    && ok "w132d-bl31-cookie.service 已使能（sysinit.target）" \
-    || bad "w132d-bl31-cookie.service 未使能"
-
-  ls /mnt/vp3/etc/systemd/system/sysinit.target.wants/w132d-vendor-mac.service >/dev/null 2>&1 \
-    && ok "w132d-vendor-mac.service 已使能（出厂 MAC）" || bad "w132d-vendor-mac.service 未使能 —— 每次重刷 MAC 都变"
 
   # getty 必须在 UART0（ttyS0）上，ttyS2 本板没使能
   ls /mnt/vp3/etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service >/dev/null 2>&1 \

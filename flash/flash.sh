@@ -188,7 +188,6 @@ fi
 cat <<'EOF'
 FLASH_OK
 ℹ️ 首次开机要几分钟：firstrun 扩容 rootfs、生成 SSH 密钥。第二次还慢就不是慢，是出问题了。
-ℹ️ 出厂 BL31 每约 32 分钟打死整机的缺陷由镜像里的 w132d-bl31-cookie.service 绕过
-   （开机早期往 GRF 0xff370220 写握手 cookie），rkbin 任何版本的 BL31 都适用。
-   看状态：systemctl status w132d-bl31-cookie（应为 active、"cookie present"）
+ℹ️ BL31 每约 32 分钟打死整机的缺陷由镜像里的 U-Boot 在 preboot 阶段写握手 cookie 绕过，
+   rkbin 任何版本的 BL31 都适用，Linux 里没有对应的服务要看。
 EOF
