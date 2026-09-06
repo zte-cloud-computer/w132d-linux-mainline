@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: wenziwanka <tech@wenziwanka.com>
 Date: Wed, 2 Sep 2026 06:07:24 +0000
-Subject: [PATCH 2/6] mmc: sdhci-of-dwcmshc: use the RK3528 HS400 DLL taps
+Subject: [PATCH 2/9] mmc: sdhci-of-dwcmshc: use the RK3528 HS400 DLL taps
 
 The revision==1 HS400 path hardcodes the RK3588 DLL taps (10/8/4).  The
 RK3528 needs 6/6/3; with the RK3588 values the eMMC does not enumerate

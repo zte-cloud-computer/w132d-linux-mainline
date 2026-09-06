@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: wenziwanka <tech@wenziwanka.com>
 Date: Fri, 4 Sep 2026 12:40:00 +0000
-Subject: [PATCH 5/6] Bluetooth: hci_sync: do not fail init when the controller
+Subject: [PATCH 5/9] Bluetooth: hci_sync: do not fail init when the controller
  rejects the default link policy
 
 hci_setup_link_policy_sync() builds the default link policy from the

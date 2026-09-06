@@ -1,0 +1,279 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wenziwanka <tech@wenziwanka.com>
+Date: Sat, 5 Sep 2026 10:00:00 +0000
+Subject: [PATCH 6/9] phy: rockchip: inno-hdmi: add RK3528 support
+
+The RK3528 integrates the same Innosilicon HDMI 2.0 PHY as the RK3328
+with a different analog front end. The pre-PLL, its register layout and
+the clock provider are identical, so the RK3328 clock ops are reused;
+only the power-up sequence, the post-PLL dividers and the lane tuning
+values differ, and the pre-PLL needs the bandgap on before it locks.
+
+The RK3528 has no separate reference clock for the pre-PLL, it runs from
+the 24 MHz oscillator alone, so make refpclk optional.
+
+Signed-off-by: wenziwanka <tech@wenziwanka.com>
+---
+ drivers/phy/rockchip/phy-rockchip-inno-hdmi.c | 199 +++++++++++++++++-
+ 1 file changed, 198 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/phy/rockchip/phy-rockchip-inno-hdmi.c b/drivers/phy/rockchip/phy-rockchip-inno-hdmi.c
+index 5ce8b5d..deaa142 100644
+--- a/drivers/phy/rockchip/phy-rockchip-inno-hdmi.c
++++ b/drivers/phy/rockchip/phy-rockchip-inno-hdmi.c
+@@ -468,14 +468,25 @@ static const struct pre_pll_config pre_pll_cfg_table[] = {
+ 	{ /* sentinel */ }
+ };
+ 
++/*
++ * The version field selects entries per PHY revision: bits 0-1 are the
++ * RK3228/RK3328 revisions read from the efuse, RK3528 uses bit 3.
++ */
++#define INNO_HDMI_PHY_VERSION_RK3528		BIT(3)
++
+ static const struct post_pll_config post_pll_cfg_table[] = {
+ 	{33750000,  1, 40, 8, 1},
+ 	{33750000,  1, 80, 8, 2},
++	{33750000,  1, 10, 2, INNO_HDMI_PHY_VERSION_RK3528},
+ 	{74250000,  1, 40, 8, 1},
+ 	{74250000, 18, 80, 8, 2},
++	{74250000,  1, 20, 4, INNO_HDMI_PHY_VERSION_RK3528},
+ 	{148500000, 2, 40, 4, 3},
++	{148500000, 1, 10, 2, INNO_HDMI_PHY_VERSION_RK3528},
+ 	{297000000, 4, 40, 2, 3},
++	{297000000, 2, 20, 2, INNO_HDMI_PHY_VERSION_RK3528},
+ 	{594000000, 8, 40, 1, 3},
++	{594000000, 4, 20, 1, INNO_HDMI_PHY_VERSION_RK3528},
+ 	{ /* sentinel */ }
+ };
+ 
+@@ -517,6 +528,29 @@ static const struct phy_config rk3328_phy_cfg[] = {
+ 	}, { /* sentinel */ },
+ };
+ 
++/*
++ * RK3528 uses a different set of tuning registers:
++ * bias-clk, bias-data, voltage-clk, voltage-data, pre-emphasis-data
++ */
++static const struct phy_config rk3528_phy_cfg[] = {
++	{	165000000, {
++			0x03, 0x04, 0x0c, 0x12, 0x00,
++		},
++	}, {
++		340000000, {
++			0x03, 0x04, 0x0c, 0x12, 0x00,
++		},
++	}, {
++		594000000, {
++			0x02, 0x08, 0x0d, 0x18, 0x00,
++		},
++	}, {
++		~0UL, {
++			0x00, 0x00, 0x00, 0x00, 0x00,
++		},
++	}
++};
++
+ static inline struct inno_hdmi_phy *to_inno_hdmi_phy(struct clk_hw *hw)
+ {
+ 	return container_of(hw, struct inno_hdmi_phy, hw);
+@@ -996,6 +1030,33 @@ static const struct clk_ops inno_hdmi_phy_rk3328_clk_ops = {
+ 	.set_rate = inno_hdmi_phy_rk3328_clk_set_rate,
+ };
+ 
++static int inno_hdmi_phy_rk3528_clk_set_rate(struct clk_hw *hw,
++					     unsigned long rate,
++					     unsigned long parent_rate)
++{
++	struct inno_hdmi_phy *inno = to_inno_hdmi_phy(hw);
++
++	/*
++	 * The pre-PLL only locks with the bandgap and the rxsense detection
++	 * powered, which power_on() would otherwise do after the rate change.
++	 */
++	inno_update_bits(inno, 0xb0, RK3328_BANDGAP_ENABLE,
++			 RK3328_BANDGAP_ENABLE);
++	inno_write(inno, 0xcc, 0x0f);
++
++	return inno_hdmi_phy_rk3328_clk_set_rate(hw, rate, parent_rate);
++}
++
++/* Same pre-PLL as RK3328, just a different power-up sequence */
++static const struct clk_ops inno_hdmi_phy_rk3528_clk_ops = {
++	.prepare = inno_hdmi_phy_rk3328_clk_prepare,
++	.unprepare = inno_hdmi_phy_rk3328_clk_unprepare,
++	.is_prepared = inno_hdmi_phy_rk3328_clk_is_prepared,
++	.recalc_rate = inno_hdmi_phy_rk3328_clk_recalc_rate,
++	.determine_rate = inno_hdmi_phy_rk3328_clk_determine_rate,
++	.set_rate = inno_hdmi_phy_rk3528_clk_set_rate,
++};
++
+ static int inno_hdmi_phy_clk_register(struct inno_hdmi_phy *inno)
+ {
+ 	struct device *dev = inno->dev;
+@@ -1277,6 +1338,133 @@ static const struct inno_hdmi_phy_ops rk3328_hdmi_phy_ops = {
+ 	.power_off = inno_hdmi_phy_rk3328_power_off,
+ };
+ 
++static void inno_hdmi_phy_rk3528_power_off(struct inno_hdmi_phy *inno)
++{
++	/* Power off driver */
++	inno_write(inno, 0xb2, 0);
++	/* Power off serializer */
++	inno_write(inno, 0xbe, 0);
++	/* Power off post PLL */
++	inno_update_bits(inno, 0xaa, RK3328_POST_PLL_POWER_DOWN,
++			 RK3328_POST_PLL_POWER_DOWN);
++	/* Power off rxsense detection circuit */
++	inno_write(inno, 0xcc, 0);
++	/* Power off band gap */
++	inno_update_bits(inno, 0xb0, RK3328_BANDGAP_ENABLE, 0);
++	/* Disable PHY IRQ */
++	inno_write(inno, 0x05, 0);
++	inno_write(inno, 0x07, 0);
++}
++
++static int inno_hdmi_phy_rk3528_init(struct inno_hdmi_phy *inno)
++{
++	/*
++	 * Use phy internal register control
++	 * rxsense/poweron/pllpd/pdataen signal.
++	 */
++	inno_write(inno, 0x02, 0x81);
++
++	inno->chip_version = INNO_HDMI_PHY_VERSION_RK3528;
++
++	/* Start from a known state whatever the bootloader left behind */
++	inno_hdmi_phy_rk3528_power_off(inno);
++
++	return 0;
++}
++
++static int
++inno_hdmi_phy_rk3528_power_on(struct inno_hdmi_phy *inno,
++			      const struct post_pll_config *cfg,
++			      const struct phy_config *phy_cfg)
++{
++	u64 temp;
++	u32 v;
++	int ret;
++
++	/* Configure post PLL */
++	inno_write(inno, 0xab, cfg->prediv);
++	if (cfg->postdiv == 1) {
++		inno_write(inno, 0xad, 0x8);
++		inno_write(inno, 0xaa, 0x2);
++	} else {
++		inno_write(inno, 0xad, (cfg->postdiv / 2) - 1);
++		inno_write(inno, 0xaa, 0xe);
++	}
++	inno_write(inno, 0xac, cfg->fbdiv & 0xff);
++	inno_update_bits(inno, 0xad, BIT(4), (cfg->fbdiv >> 8) & BIT(0) ? BIT(4) : 0);
++
++	/* Current bias for clock and data lanes */
++	inno_write(inno, 0xbf, phy_cfg->regs[0] << 4 | phy_cfg->regs[1]);
++	inno_write(inno, 0xc0, phy_cfg->regs[1] << 4 | phy_cfg->regs[1]);
++
++	/* Output voltage */
++	inno_write(inno, 0xb5, phy_cfg->regs[2]);
++	inno_write(inno, 0xb6, phy_cfg->regs[3]);
++	inno_write(inno, 0xb7, phy_cfg->regs[3]);
++	inno_write(inno, 0xb8, phy_cfg->regs[3]);
++
++	/* Pre-emphasis */
++	inno_write(inno, 0xbb, phy_cfg->regs[4]);
++	inno_write(inno, 0xbc, phy_cfg->regs[4]);
++	inno_write(inno, 0xbd, phy_cfg->regs[4]);
++
++	/* Enable LDO */
++	inno_write(inno, 0xb4, 0x7);
++	/* Enable serializer */
++	inno_write(inno, 0xbe, 0x70);
++	/* Enable TMDS driver */
++	inno_write(inno, 0xb2, 0x0f);
++
++	/* Wait for post PLL lock */
++	ret = inno_poll(inno, 0xaf, v, v & RK3328_POST_PLL_LOCK_STATUS,
++			1000, 10000);
++	if (ret) {
++		dev_err(inno->dev, "Post-PLL locking failed\n");
++		return ret;
++	}
++
++	/* Termination resistance */
++	inno_write(inno, 0xc7, 0x76);
++	inno_write(inno, 0xc5, 0x83);
++	inno_write(inno, 0xc8, 0x00);
++	v = phy_cfg->tmdsclock > 340000000 ? 0x2f : 0x0f;
++	inno_write(inno, 0xc9, v);
++	inno_write(inno, 0xca, v);
++	inno_write(inno, 0xcb, v);
++
++	/* TMDS sync detection counter length */
++	temp = 47520000000ULL;
++	do_div(temp, inno->tmdsclock);
++	inno_write(inno, 0xd8, (temp >> 8) & 0xff);
++	inno_write(inno, 0xd9, temp & 0xff);
++
++	/* Power up post PLL, band gap and TMDS driver */
++	inno_update_bits(inno, 0xaa, RK3328_POST_PLL_POWER_DOWN, 0);
++	inno_update_bits(inno, 0xb0, RK3328_BANDGAP_ENABLE,
++			 RK3328_BANDGAP_ENABLE);
++	inno_write(inno, 0xb2, 0x0f);
++
++	if (phy_cfg->tmdsclock > 340000000)
++		msleep(100);
++
++	/* Pulse pdata_en */
++	inno_update_bits(inno, 0x02, RK3328_PDATA_EN, 0);
++	inno_update_bits(inno, 0x02, RK3328_PDATA_EN, RK3328_PDATA_EN);
++
++	/* Enable PHY IRQ */
++	inno_write(inno, 0x05, 0x22);
++	inno_write(inno, 0x07, 0x22);
++	inno_write(inno, 0xcc, 0x0f);
++
++	return 0;
++}
++
++static const struct inno_hdmi_phy_ops rk3528_hdmi_phy_ops = {
++	.init = inno_hdmi_phy_rk3528_init,
++	.power_on = inno_hdmi_phy_rk3528_power_on,
++	.power_off = inno_hdmi_phy_rk3528_power_off,
++};
++
+ static const struct inno_hdmi_phy_drv_data rk3228_hdmi_phy_drv_data = {
+ 	.ops = &rk3228_hdmi_phy_ops,
+ 	.clk_ops = &inno_hdmi_phy_rk3228_clk_ops,
+@@ -1289,6 +1477,12 @@ static const struct inno_hdmi_phy_drv_data rk3328_hdmi_phy_drv_data = {
+ 	.phy_cfg_table = rk3328_phy_cfg,
+ };
+ 
++static const struct inno_hdmi_phy_drv_data rk3528_hdmi_phy_drv_data = {
++	.ops = &rk3528_hdmi_phy_ops,
++	.clk_ops = &inno_hdmi_phy_rk3528_clk_ops,
++	.phy_cfg_table = rk3528_phy_cfg,
++};
++
+ static const struct regmap_config inno_hdmi_phy_regmap_config = {
+ 	.reg_bits = 32,
+ 	.val_bits = 32,
+@@ -1332,7 +1526,7 @@ static int inno_hdmi_phy_probe(struct platform_device *pdev)
+ 		return ret;
+ 	}
+ 
+-	inno->refpclk = devm_clk_get(inno->dev, "refpclk");
++	inno->refpclk = devm_clk_get_optional(inno->dev, "refpclk");
+ 	if (IS_ERR(inno->refpclk)) {
+ 		ret = PTR_ERR(inno->refpclk);
+ 		dev_err(inno->dev, "failed to get ref clock: %d\n", ret);
+@@ -1422,6 +1616,9 @@ static const struct of_device_id inno_hdmi_phy_of_match[] = {
+ 	}, {
+ 		.compatible = "rockchip,rk3328-hdmi-phy",
+ 		.data = &rk3328_hdmi_phy_drv_data
++	}, {
++		.compatible = "rockchip,rk3528-hdmi-phy",
++		.data = &rk3528_hdmi_phy_drv_data
+ 	}, { /* sentinel */ }
+ };
+ MODULE_DEVICE_TABLE(of, inno_hdmi_phy_of_match);

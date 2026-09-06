@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: wenziwanka <tech@wenziwanka.com>
-Date: Fri, 4 Sep 2026 12:40:00 +0000
-Subject: [PATCH 6/6] arm64: dts: rockchip: add the ZTE Cloud Computer W132D
+Date: Sat, 5 Sep 2026 10:00:00 +0000
+Subject: [PATCH 9/9] arm64: dts: rockchip: add the ZTE Cloud Computer W132D
 
 The W132D is an RK3528-based set-top box with 1 GB of DDR4, 8 GB of eMMC,
 100 Mbit Ethernet, a UWE5622 SDIO Wi-Fi/Bluetooth combo, a 3.5 mm
@@ -14,16 +14,19 @@ the video decoder, the on-chip audio codec with the ES7202 capture path,
 the infrared receiver, the panel LEDs, OP-TEE and a pstore/ramoops
 region.
 
-The display path is deliberately left out: mainline has no RK3528 VOP2
-or HDMI support yet, so there is nothing for those nodes to bind to.
+The display path (VOP2, DesignWare HDMI, Innosilicon PHY) and the SAI
+feeding HDMI audio are described in the board file for now, together
+with the other SoC blocks that rk3528.dtsi does not have yet. Hot-plug
+uses the GPIO0_A2 workaround the RK3528 needs, so the HDMI pin group
+keeps that pin as a GPIO.
 
 Tested on the board itself.
 
 Signed-off-by: wenziwanka <tech@wenziwanka.com>
 ---
  arch/arm64/boot/dts/rockchip/Makefile         |   2 +
- arch/arm64/boot/dts/rockchip/rk3528-w132d.dts | 728 ++++++++++++++++++
- 2 files changed, 730 insertions(+)
+ arch/arm64/boot/dts/rockchip/rk3528-w132d.dts | 899 ++++++++++++++++++
+ 2 files changed, 901 insertions(+)
  create mode 100644 arch/arm64/boot/dts/rockchip/rk3528-w132d.dts
 
 diff --git a/arch/arm64/boot/dts/rockchip/Makefile b/arch/arm64/boot/dts/rockchip/Makefile
@@ -38,10 +41,10 @@ index 761d82b..ff9f9b5 100644
 +dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3528-w132d.dtb
 diff --git a/arch/arm64/boot/dts/rockchip/rk3528-w132d.dts b/arch/arm64/boot/dts/rockchip/rk3528-w132d.dts
 new file mode 100644
-index 0000000..69ca0fc
+index 0000000..d98f533
 --- /dev/null
 +++ b/arch/arm64/boot/dts/rockchip/rk3528-w132d.dts
-@@ -0,0 +1,728 @@
+@@ -0,0 +1,899 @@
 +// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 +/*
 + * 本文件由 patches-src/import-board-dts.py 从上游一次性导入。
@@ -62,6 +65,7 @@ index 0000000..69ca0fc
 +#include <dt-bindings/gpio/gpio.h>
 +#include <dt-bindings/leds/common.h>
 +#include <dt-bindings/phy/phy.h>
++#include <dt-bindings/soc/rockchip,vop2.h>
 +#include <dt-bindings/thermal/thermal.h>
 +
 +/ {
@@ -667,6 +671,176 @@ index 0000000..69ca0fc
 +		pinctrl-0 = <&pdm_clk1>, <&pdm_sdi2>;
 +		/* Only SDI2 is populated; map it onto path0. */
 +		rockchip,path-map = <2 1 0 3>;
++		#sound-dai-cells = <0>;
++		status = "okay";
++	};
++};
++
++&pinctrl {
++	hdmi {
++		/*
++		 * The SoC hdmi_pins group muxes GPIO0_A2 to the controller's HPD
++		 * function, but the RK3528 controller cannot sense hot-plug on
++		 * that pad: the driver reads it as a GPIO and mirrors the level
++		 * into the VO GRF, so the pin has to stay a GPIO.
++		 */
++		hdmi_gpio_hpd_pins: hdmi-gpio-hpd-pins {
++			rockchip,pins =
++				<0 RK_PA3 1 &pcfg_pull_none>,
++				<0 RK_PA2 0 &pcfg_pull_none>,
++				<0 RK_PA4 1 &pcfg_pull_none>,
++				<0 RK_PA5 1 &pcfg_pull_none>;
++		};
++	};
++};
++
++&{/} {
++	display_subsystem: display-subsystem {
++		compatible = "rockchip,display-subsystem";
++		ports = <&vop_out>;
++	};
++
++	/* SoC analog rail for the HDMI PHY and controller; never switched. */
++	vdd_0v9: regulator-vdd-0v9 {
++		compatible = "regulator-fixed";
++		regulator-name = "vdd_0v9";
++		regulator-min-microvolt = <900000>;
++		regulator-max-microvolt = <900000>;
++		regulator-always-on;
++		regulator-boot-on;
++	};
++
++	/*
++	 * SAI3 is wired to the HDMI controller's I2S input, so it has no pins.
++	 * The DesignWare HDMI I2S receiver needs a 64 x fs bit clock; the SAI
++	 * would otherwise shrink the slot to the sample width and 16-bit audio
++	 * goes silent, so pin the slots to 32 bits.
++	 */
++	hdmi_sound: hdmi-sound {
++		compatible = "simple-audio-card";
++		simple-audio-card,name = "HDMI";
++		simple-audio-card,format = "i2s";
++		simple-audio-card,mclk-fs = <256>;
++		simple-audio-card,bitclock-master = <&hdmi_sound_cpu>;
++		simple-audio-card,frame-master = <&hdmi_sound_cpu>;
++
++		hdmi_sound_cpu: simple-audio-card,cpu {
++			sound-dai = <&sai3>;
++			dai-tdm-slot-num = <2>;
++			dai-tdm-slot-width = <32>;
++		};
++
++		simple-audio-card,codec {
++			sound-dai = <&hdmi>;
++		};
++	};
++};
++
++/*
++ * Display path: VOP2 VP0 -> DesignWare HDMI -> Innosilicon HDMI 2.0 PHY.
++ * VP1 (CVBS) is not described.  The PHY provides the pixel clock: the CRU
++ * mux for DCLK_VOP0 is switched to it, so the VOP's rate requests end up in
++ * the PHY's pre-PLL, the same way the RK3328 does it.
++ *
++ * No IOMMU on purpose.  The VOP IOMMU (0xff847e00) sits behind the VOP's
++ * auto clock gating, which is enabled at reset: touching its registers before
++ * the VOP driver has cleared SYS_AUTO_GATING_CTRL hangs the bus, and the
++ * IOMMU is resumed through its device link before that driver runs.  The
++ * vendor kernel avoids the same trap with a non-standard "disable device
++ * link resume" property.  Scanout buffers come from CMA instead.
++ */
++&{/soc} {
++	vop: vop@ff840000 {
++		compatible = "rockchip,rk3528-vop";
++		reg = <0x0 0xff840000 0x0 0x3000>;
++		reg-names = "vop";
++		interrupts = <GIC_SPI 109 IRQ_TYPE_LEVEL_HIGH>;
++		clocks = <&cru ACLK_VOP>, <&cru HCLK_VOP>, <&cru DCLK_VOP0>;
++		clock-names = "aclk", "hclk", "dclk_vp0";
++		assigned-clocks = <&cru DCLK_VOP0>;
++		assigned-clock-parents = <&hdmiphy>;
++		power-domains = <&power RK3528_PD_VO>;
++		status = "okay";
++
++		vop_out: ports {
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			vp0: port@0 {
++				reg = <0>;
++				#address-cells = <1>;
++				#size-cells = <0>;
++
++				vp0_out_hdmi: endpoint@ROCKCHIP_VOP2_EP_HDMI0 {
++					reg = <ROCKCHIP_VOP2_EP_HDMI0>;
++					remote-endpoint = <&hdmi_in_vp0>;
++				};
++			};
++		};
++	};
++
++	hdmi: hdmi@ff8d0000 {
++		compatible = "rockchip,rk3528-dw-hdmi";
++		reg = <0x0 0xff8d0000 0x0 0x20000>;
++		interrupts = <GIC_SPI 102 IRQ_TYPE_LEVEL_HIGH>;
++		clocks = <&cru PCLK_HDMI>, <&cru CLK_SFR_HDMI>, <&cru CLK_CEC_HDMI>;
++		clock-names = "iahb", "isfr", "cec";
++		avdd-0v9-supply = <&vdd_0v9>;
++		avdd-1v8-supply = <&vdd_1v8_s3>;
++		hpd-gpios = <&gpio0 RK_PA2 GPIO_ACTIVE_HIGH>;
++		phys = <&hdmiphy>;
++		phy-names = "hdmi";
++		pinctrl-names = "default";
++		pinctrl-0 = <&hdmi_gpio_hpd_pins>;
++		power-domains = <&power RK3528_PD_VO>;
++		reg-io-width = <4>;
++		rockchip,grf = <&vo_grf>;
++		#sound-dai-cells = <0>;
++		status = "okay";
++
++		ports {
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			hdmi_in: port@0 {
++				reg = <0>;
++
++				hdmi_in_vp0: endpoint {
++					remote-endpoint = <&vp0_out_hdmi>;
++				};
++			};
++
++			hdmi_out: port@1 {
++				reg = <1>;
++			};
++		};
++	};
++
++	hdmiphy: phy@ffe00000 {
++		compatible = "rockchip,rk3528-hdmi-phy";
++		reg = <0x0 0xffe00000 0x0 0x10000>;
++		interrupts = <GIC_SPI 101 IRQ_TYPE_LEVEL_HIGH>;
++		clocks = <&cru PCLK_HDMIPHY>, <&xin24m>;
++		clock-names = "sysclk", "refoclk";
++		/* Must match the DCLK_VOP0 parent name in the clock driver. */
++		clock-output-names = "clk_hdmiphy_pixel_io";
++		#clock-cells = <0>;
++		#phy-cells = <0>;
++		power-domains = <&power RK3528_PD_VO>;
++		status = "okay";
++	};
++
++	sai3: sai@ffb70000 {
++		compatible = "rockchip,rk3528-sai", "rockchip,rk3576-sai";
++		reg = <0x0 0xffb70000 0x0 0x1000>;
++		interrupts = <GIC_SPI 128 IRQ_TYPE_LEVEL_HIGH>;
++		clocks = <&cru MCLK_SAI_I2S3>, <&cru HCLK_SAI_I2S3>;
++		clock-names = "mclk", "hclk";
++		dmas = <&dmac 5>;
++		dma-names = "tx";
++		power-domains = <&power RK3528_PD_VO>;
++		resets = <&cru SRST_M_SAI_I2S3>, <&cru SRST_H_SAI_I2S3>;
++		reset-names = "m", "h";
 +		#sound-dai-cells = <0>;
 +		status = "okay";
 +	};
