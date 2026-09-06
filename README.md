@@ -49,7 +49,7 @@ apt pin 保证不会被 apt.armbian.com 的同名内核顶掉：
 apt update && apt full-upgrade && reboot
 ```
 
-早期镜像（`v20260907` 之前）没有预埋源，补三个文件后同样可用：
+早期镜像（`v20260906` 之前）没有预埋源，补三个文件后同样可用：
 
 ```bash
 b=https://raw.githubusercontent.com/zte-cloud-computer/w132d-linux-mainline/main/userpatches/overlay/bsp-cli
