@@ -10,6 +10,9 @@ Armbian（Debian trixie，minimal）+ 主线内核 7.2 + 主线 U-Boot，整盘�
 > 开发阶段项目，只在少量实机上验证，且大量实现由 AI 协助生成、未经完整人工审查。
 > 请把它当作硬件移植项目，而不是面向普通用户的稳定发行版。
 
+> [!NOTE]
+> 之前基于 Linux 7.1.10 的实验性移植（25 个 HDMI/VOP 补丁 + 厂商 PHY 驱动的那套）保留在 [`legacy-7.1.10`](../../tree/legacy-7.1.10) 分支，不再维护。
+
 ## 硬件支持
 
 | 功能 | 状态 | 说明 |
@@ -95,7 +98,7 @@ CI（[build-packages.yml](.github/workflows/build-packages.yml)）构建 deb 包
 | `drm/rockchip: vop2: add RK3528 support` | Linux | 待投 |
 | `arm64: dts: rockchip: add ZTE W132D` | Linux | 待投 |
 | `ASoC: rockchip: RK3528 codec + ES7202` | Linux | 待整理 |
-| uwe5622 驱动：三处修复 + 直接注册 HCI 设备（免用户态 attach） | armbian/uwe5622 | 待投 |
+| uwe5622 驱动：四处修复（含 PMF 密钥槽越界）+ 直接注册 HCI 设备（免用户态 attach） | armbian/uwe5622 | 待投 |
 | pmdomain: rockchip: 整个 provider 延迟而不是丢掉延迟的域 | armbian/build | 待投 |
 | `rockchip_dnl_key_pressed()` 按 compatible 匹配 ADC | U-Boot | 待投 |
 | Marlin3E 三天线 RF 配置 | armbian/firmware | 待投 |

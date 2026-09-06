@@ -1,0 +1,92 @@
+From: wenziwanka <tech@wenziwanka.com>
+Subject: [PATCH] unisocwifi: store the management keys and bounds-check add_key
+
+The vif keeps four key slots per pairwise/group side, but the driver
+negotiates PMF (it passes sme->mfp to the firmware), and with PMF the
+group handshake installs the IGTK at key index 4. sprdwl_cfg80211_add_key()
+copied that key without any bounds check, straight past the end of
+vif->key into key_len and mgmt_reg. FORTIFY_SOURCE cannot bound the
+destination with an unchecked u8 index either and warned on every key
+install:
+
+  memcpy: detected field-spanning write (size 16) of single field
+  "vif->key[pairwise][key_index]" at .../unisocwifi/cfg80211.c:727 (size 0)
+
+Size the key arrays for six keys (0-3 plus IGTK/BIGTK at 4-5), raise
+SPRDWL_MAX_KEY_INDEX accordingly so del_key accepts them too, and reject
+out-of-range indexes and oversized keys with -EINVAL before touching the
+arrays. Rejecting index 4 instead would break every PMF association, which
+is what the first version of this fix did.
+
+Signed-off-by: wenziwanka <tech@wenziwanka.com>
+---
+--- a/drivers/net/wireless/uwe5622/unisocwifi/cfg80211.h
++++ b/drivers/net/wireless/uwe5622/unisocwifi/cfg80211.h
+@@ -68,7 +68,9 @@
+ #define SPRDWL_MAX_SCAN_SSIDS		12
+ #define SPRDWL_MAX_SCAN_IE_LEN		2304
+ #define SPRDWL_MAX_NUM_PMKIDS		4
+-#define SPRDWL_MAX_KEY_INDEX		3
++/* 0-3 pairwise/group keys, 4-5 the IGTK/BIGTK when PMF is negotiated */
++#define SPRDWL_MAX_KEY_INDEX		5
++#define SPRDWL_NUM_KEYS			(SPRDWL_MAX_KEY_INDEX + 1)
+ #define SPRDWL_SCAN_TIMEOUT_MS		10000
+ #define SPRDWL_MAX_PFN_LIST_COUNT	9
+ #define SPRDWL_MAX_IE_LEN           500
+--- a/drivers/net/wireless/uwe5622/unisocwifi/sprdwl.h
++++ b/drivers/net/wireless/uwe5622/unisocwifi/sprdwl.h
+@@ -115,8 +115,8 @@
+ 	u8 prwise_crypto;
+ 	u8 grp_crypto;
+ 	u8 key_index[2];
+-	u8 key[2][4][WLAN_MAX_KEY_LEN];
+-	u8 key_len[2][4];
++	u8 key[2][SPRDWL_NUM_KEYS][WLAN_MAX_KEY_LEN];
++	u8 key_len[2][SPRDWL_NUM_KEYS];
+ 	unsigned long mgmt_reg;
+ 
+ 	/* P2P stuff */
+--- a/drivers/net/wireless/uwe5622/unisocwifi/cfg80211.c
++++ b/drivers/net/wireless/uwe5622/unisocwifi/cfg80211.c
+@@ -721,6 +721,13 @@
+ 				   struct key_params *params)
+ {
+ 	struct sprdwl_vif *vif = netdev_priv(wdev->netdev);
++
++	if (key_index > SPRDWL_MAX_KEY_INDEX ||
++	    params->key_len > WLAN_MAX_KEY_LEN) {
++		wl_ndev_log(L_ERR, vif->ndev, "%s key index %d / len %d out of bounds!\n",
++			    __func__, key_index, params->key_len);
++		return -EINVAL;
++	}
+ 
+ 	vif->key_index[pairwise] = key_index;
+ 	vif->key_len[pairwise][key_index] = params->key_len;
+@@ -744,6 +751,13 @@
+ {
+ 	struct sprdwl_vif *vif = netdev_priv(ndev);
+ 
++	if (key_index > SPRDWL_MAX_KEY_INDEX ||
++	    params->key_len > WLAN_MAX_KEY_LEN) {
++		wl_ndev_log(L_ERR, vif->ndev, "%s key index %d / len %d out of bounds!\n",
++			    __func__, key_index, params->key_len);
++		return -EINVAL;
++	}
++
+ 	vif->key_index[pairwise] = key_index;
+ 	vif->key_len[pairwise][key_index] = params->key_len;
+ 	memcpy(vif->key[pairwise][key_index], params->key, params->key_len);
+@@ -765,6 +779,13 @@
+ 				   struct key_params *params)
+ {
+ 	struct sprdwl_vif *vif = netdev_priv(ndev);
++
++	if (key_index > SPRDWL_MAX_KEY_INDEX ||
++	    params->key_len > WLAN_MAX_KEY_LEN) {
++		wl_ndev_log(L_ERR, vif->ndev, "%s key index %d / len %d out of bounds!\n",
++			    __func__, key_index, params->key_len);
++		return -EINVAL;
++	}
+ 
+ 	vif->key_index[pairwise] = key_index;
+ 	vif->key_len[pairwise][key_index] = params->key_len;
