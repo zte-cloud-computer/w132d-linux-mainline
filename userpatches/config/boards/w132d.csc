@@ -252,9 +252,10 @@ function post_family_tweaks__w132d_enable_services() {
 function custom_kernel_config__w132d() {
 	kernel_config_modifying_hashes+=("CONFIG_SND_SOC_RK3528=m" "CONFIG_SND_SOC_ES7202=m"
 		"CONFIG_PSTORE_RAM=y" "CONFIG_PSTORE_CONSOLE=y" "CONFIG_PSTORE_PMSG=y"
-		"CONFIG_TTY_OVERY_SDIO_HCI=y")
+		"CONFIG_TTY_OVERY_SDIO_HCI=y"
+		"CONFIG_PHY_ROCKCHIP_INNO_HDMI=m" "CONFIG_SND_SOC_ROCKCHIP_SAI=m")
 	[[ -f .config ]] || return 0
-	display_alert "W132D" "打开 RK3528 acodec 与 ES7202（由 rk3528-audio 补丁引入）；pstore console 通路；uwe5622 蓝牙走 HCI 设备" "info"
+	display_alert "W132D" "打开 RK3528 acodec 与 ES7202（由 rk3528-audio 补丁引入）；pstore console 通路；uwe5622 蓝牙走 HCI 设备；HDMI PHY 与 SAI 编成模块" "info"
 	run_kernel_make olddefconfig
 	scripts/config --module CONFIG_SND_SOC_RK3528
 	scripts/config --module CONFIG_SND_SOC_ES7202
@@ -263,4 +264,7 @@ function custom_kernel_config__w132d() {
 	scripts/config --enable CONFIG_PSTORE_PMSG
 	# uwe5622 的蓝牙通道直接注册成 hci0（w132d-armbian-0005 补丁加的选项），不再经 /dev/ttyBT0 + 用户态 attach
 	scripts/config --enable CONFIG_TTY_OVERY_SDIO_HCI
+	# 显示链的内建部分改成模块：HDMI PHY 与 SAI 出问题时只丢一次 SSH 会话，不会把开机挂死
+	scripts/config --module CONFIG_PHY_ROCKCHIP_INNO_HDMI
+	scripts/config --module CONFIG_SND_SOC_ROCKCHIP_SAI
 }

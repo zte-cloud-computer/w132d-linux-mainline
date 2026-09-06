@@ -11,7 +11,10 @@ the video decoder, the on-chip audio codec with the ES7202 capture path,
 the infrared receiver, the panel LEDs, OP-TEE and a pstore/ramoops
 region.
 
-The display path is deliberately left out: mainline has no RK3528 VOP2
-or HDMI support yet, so there is nothing for those nodes to bind to.
+The display path (VOP2, DesignWare HDMI, Innosilicon PHY) and the SAI
+feeding HDMI audio are described in the board file for now, together
+with the other SoC blocks that rk3528.dtsi does not have yet. Hot-plug
+uses the GPIO0_A2 workaround the RK3528 needs, so the HDMI pin group
+keeps that pin as a GPIO.
 
 Tested on the board itself.

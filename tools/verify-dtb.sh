@@ -58,6 +58,12 @@ dtc -I dtb -O dts "$D" > /tmp/verify-dtb.dts 2>/dev/null \
 chk /soc/mmc@ffbf0000         mmc-hs400-1_8v            "eMMC HS400"
 chk /soc/mmc@ffbf0000         mmc-hs400-enhanced-strobe "eMMC Enhanced Strobe"
 chk /soc/watchdog@ffac0000    compatible                "看门狗"
+chkval /soc/vop@ff840000      compatible "rockchip,rk3528-vop"      "VOP2"
+nochk  /soc/vop@ff840000      iommus                    "VOP 不挂 IOMMU（自动门控会卡总线）"
+chkval /soc/hdmi@ff8d0000     compatible "rockchip,rk3528-dw-hdmi"  "HDMI 控制器"
+chk    /soc/hdmi@ff8d0000     hpd-gpios                 "HDMI 热插拔走 GPIO"
+chkval /soc/phy@ffe00000      compatible "rockchip,rk3528-hdmi-phy" "HDMI PHY"
+chk    /soc/sai@ffb70000      compatible                "SAI3（HDMI 音频）"
 chk /soc/tsadc@ffad0000       status                    "温度传感器"
 chk /regulator-vdd-cpu        pwm-dutycycle-range       "vdd_cpu 占空比映射"
 chk /cpus/cpu@0               cpu-supply                "cpu-supply"
@@ -72,16 +78,6 @@ chk /leds                     compatible                "面板指示灯"
 chk /reserved-memory/ramoops@110000 reg                 "ramoops 崩溃留存"
 chk /firmware/optee           compatible                "OP-TEE"
 nochk /ir-receiver            wakeup-source             "红外唤醒策略"
-
-# 显示路径必须确实不在树里：主线 7.2 对 RK3528 的 VOP2/HDMI 零支持，
-# 漏进来会得到一个引用不存在驱动的节点。
-if grep -qiE '^\s*(vop|hdmi|hdmiphy)@|display-subsystem' /tmp/verify-dtb.dts; then
-  echo "  ❌ 树里出现了显示节点，但本版不带显示驱动"
-  grep -niE '^\s*(vop|hdmi|hdmiphy)@|display-subsystem' /tmp/verify-dtb.dts | head -5 | sed 's/^/     /'
-  FAIL=1
-else
-  printf '  ✅ %-30s 不存在，符合预期\n' "显示节点（本版不带）"
-fi
 
 [ "$FAIL" = 0 ] || { echo "  ❌ 关键属性缺失，不要用这份 DTB"; exit 1; }
 echo "DTB_VERIFY_OK $D ($(wc -c < "$D" | tr -d ' ') B)"

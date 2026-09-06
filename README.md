@@ -23,7 +23,7 @@ Armbian（Debian trixie，minimal）+ 主线内核 7.2 + 主线 U-Boot，整盘�
 | H.264 / HEVC 硬解 | 可用 | 主线 RKVDEC |
 | 温控 / DVFS / 看门狗 / pstore | 可用 | |
 | 面板指示灯 · 软件待机 | 可用 | 红外/BLE 电源键 |
-| HDMI | 不支持 | 主线 7.2 对 RK3528 显示链尚无支持 |
+| HDMI | 可用 | VOP2 + DesignWare HDMI + Innosilicon PHY，三个主线形态补丁；1080p60 出图（显示器与电视）、热插拔、音频（SAI3→HDMI，电视出声）、CEC 适配器已实测，2560x1440 有 PLL 表项但未实测。热插拔走 GPIO0_A2 镜像到 VO-GRF（SoC 设计如此）；VOP 不挂 IOMMU（见 docs/maintenance.md）。不做 HDCP、CVBS |
 
 ## 下载与刷写
 
@@ -90,6 +90,9 @@ CI（[build-packages.yml](.github/workflows/build-packages.yml)）构建 deb 包
 | `mmc: sdhci-of-dwcmshc: RK3528 HS400 DLL taps` | Linux | 待投 |
 | `thermal: rockchip: add RK3528 TSADC support` | Linux | 待投 |
 | `Bluetooth: hci_sync: don't fail init when the controller rejects the default link policy` | Linux | 待投 |
+| `phy: rockchip: inno-hdmi: add RK3528 support` | Linux | 待投 |
+| `drm/rockchip: dw_hdmi: add RK3528 support` | Linux | 待投 |
+| `drm/rockchip: vop2: add RK3528 support` | Linux | 待投 |
 | `arm64: dts: rockchip: add ZTE W132D` | Linux | 待投 |
 | `ASoC: rockchip: RK3528 codec + ES7202` | Linux | 待整理 |
 | uwe5622 驱动：三处修复 + 直接注册 HCI 设备（免用户态 attach） | armbian/uwe5622 | 待投 |

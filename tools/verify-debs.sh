@@ -45,11 +45,13 @@ if [ -n "$IMG" ]; then
   dpkg-deb --fsys-tarfile "$IMG" > "$T/image.tar"
   tar -tf "$T/image.tar" > "$T/image.list"
   for m in snd-soc-rk3528.ko snd-soc-es7202.ko sprdwl_ng.ko uwe5622_bsp_sdio.ko sprdbt_tty.ko \
-           rockchip-vdec.ko lima.ko gpio-ir-recv.ko; do
+           rockchip-vdec.ko lima.ko gpio-ir-recv.ko \
+           rockchipdrm.ko phy-rockchip-inno-hdmi.ko snd-soc-rockchip-sai.ko; do
     grep -q "/$m\$" "$T/image.list" && ok "模块 $m" || bad "缺模块 $m"
   done
   tar -xOf "$T/image.tar" --wildcards './boot/config-*' > "$T/config"
-  for c in CONFIG_PSTORE_CONSOLE=y CONFIG_PSTORE_RAM=y CONFIG_SND_SOC_RK3528=m CONFIG_SND_SOC_ES7202=m; do
+  for c in CONFIG_PSTORE_CONSOLE=y CONFIG_PSTORE_RAM=y CONFIG_SND_SOC_RK3528=m CONFIG_SND_SOC_ES7202=m \
+           CONFIG_PHY_ROCKCHIP_INNO_HDMI=m CONFIG_SND_SOC_ROCKCHIP_SAI=m CONFIG_ROCKCHIP_VOP2=y CONFIG_ROCKCHIP_DW_HDMI=y; do
     grep -qx "$c" "$T/config" && ok "config $c" || bad "config 缺 $c"
   done
 else

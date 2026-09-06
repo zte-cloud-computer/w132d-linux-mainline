@@ -62,3 +62,22 @@ Armbian 构建代码里两处漂移点，补丁干跑测不出来：
 - **`custom_kernel_config` 钩子**要在 `.config` 存在性检查之前追加 `kernel_config_modifying_hashes`，否则内核永远不重编。
 - **构建容器里没有 `strings` / `xxd`**：校验脚本用 `grep -a` 和 `od`。
 - **rkdeveloptool `db` 在 Loader 模式下会被拒**，只有 MaskROM 才需要；原厂 loader 大批量读写后会崩成 Maskrom。
+- **RK3528 的 VOP IOMMU 寄存器被 VOP 自动门控挡住**：`SYS_AUTO_GATING_CTRL`（0xff840008）复位值 0x9fffffff，
+  这时读 0xff847e00（vop_mmu）总线直接卡死（CPU 对 NMI 都不响应，只有硬件看门狗能救）。而 IOMMU 是通过
+  device link 在 VOP 驱动 probe **之前**被 runtime resume 的，所以驱动没有机会先清门控。厂商内核用私有属性
+  `rockchip,disable-device-link-resume` 绕开，主线没有对应物 —— 板级 DTS 里 VOP 干脆不挂 IOMMU，扫描输出走 CMA
+  （128 MB，1440p 一帧 14.7 MB）。VOP 版本寄存器实测 0x50174334，厂商头文件里的 0x1263 是错的。
+- **没有串口时怎么抓"加载驱动就挂死"**：systemd 已把 DesignWare 看门狗设为 89 s，硬挂后自动复位且 DRAM 保留，
+  `console=ttyS0` 之外 ramoops 也注册成 console，所以复位后 `/sys/fs/pstore/console-ramoops-0` 就是上一次的完整
+  内核输出；先 `echo 8 > /proc/sys/kernel/printk`、给 `drivers/base/dd.c`、`component.c`、`base/power/*` 开
+  dyndbg，再 `echo MARK > /dev/kmsg` 后 modprobe，就能看到卡在哪个设备的哪一步。排查期间把内建驱动改成模块
+  （`custom_kernel_config`）并用 `/etc/modprobe.d` 黑名单，开机永远安全，一次挂死只损失一次 SSH。
+- **MaskROM 会话下设备是离线的**（网线要拔），扫段扫不到不代表没开机；面板绿灯慢闪 = 用户态在跑、有单元失败。
+  bootfs 是 FAT，`rkdeveloptool rl 24576 1048576` 读回后用 mtools 改 `extlinux.conf` / 换 DTB 再 `wl` 回去，
+  不用重刷整盘；rootfs 用 `debugfs -c` 只读取证（头 4 GiB 就够拿到 /etc 和 journal）。
+- **HDMI 音频要把 SAI3 的时隙钉成 32 位**：DesignWare HDMI 的 I2S 接收器要 64×fs 的位时钟，而主线 rockchip_sai
+  默认把时隙宽度收成采样宽度，16 位素材就变成 32×fs，驱动侧全部正常（流在跑、N/CTS 对、EDID 有音频）但电视静音；
+  32 位素材能响就是这个原因。板级 DTS 的 `hdmi_sound` cpu 节点加 `dai-tdm-slot-num = <2>; dai-tdm-slot-width = <32>;`。
+  排查时别被 `MC_CLKDIS` 骗：AUDCLK 是 bit3（0x08），bit2 是 PREP 时钟。
+- **别把旧 Image 和新模块混装**：同版本号（7.2.3-edge-rockchip64）但不同构建的 Image 与 `/lib/modules`
+  混用时所有模块 `Invalid argument`，sshd 也起不来；`dpkg -i` 时 glob 匹配到多个 deb 会按字母序装、后者覆盖前者。

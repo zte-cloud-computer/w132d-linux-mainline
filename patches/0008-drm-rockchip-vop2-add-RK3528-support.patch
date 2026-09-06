@@ -1,0 +1,225 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: wenziwanka <tech@wenziwanka.com>
+Date: Sat, 5 Sep 2026 10:00:00 +0000
+Subject: [PATCH] drm/rockchip: vop2: add RK3528 support
+
+Add the RK3528 VOP. Its overlay follows the RK3576 layout (per-port
+layer select, mixers and background delay), so those helpers are shared;
+the port assignment and the window delays live in the OVL_SYS block
+instead, and the HDMI interface needs the inverted dclk polarity.
+
+Only VP0 (HDMI) with the Esmart0 primary and a Cluster0 overlay window is
+described. VP1 drives the CVBS encoder, which mainline has no driver for.
+
+The version register reads 0x50174334 on the RK3528, not the 0x1263 build
+number the vendor kernel header carries, so use the value the hardware
+reports.
+
+Signed-off-by: wenziwanka <tech@wenziwanka.com>
+---
+
+--- a/drivers/gpu/drm/rockchip/rockchip_drm_vop2.h
++++ b/drivers/gpu/drm/rockchip/rockchip_drm_vop2.h
+@@ -18,7 +18,7 @@
+ /* The VOP version of new SoC is bigger than the old */
+ #define VOP_VERSION_RK3568	VOP2_VERSION(0x40, 0x15, 0x8023)
+ #define VOP_VERSION_RK3588	VOP2_VERSION(0x40, 0x17, 0x6786)
+-#define VOP_VERSION_RK3528	VOP2_VERSION(0x50, 0x17, 0x1263)
++#define VOP_VERSION_RK3528	VOP2_VERSION(0x50, 0x17, 0x4334)
+ #define VOP_VERSION_RK3562	VOP2_VERSION(0x50, 0x17, 0x4350)
+ #define VOP_VERSION_RK3576	VOP2_VERSION(0x50, 0x19, 0x9765)
+ 
+@@ -446,6 +446,9 @@
+ 
+ /* Extra OVL register definition */
+ #define RK3576_SYS_EXTRA_ALPHA_CTRL		0x500
++#define RK3528_OVL_SYS_PORT_SEL_IMD		0x504
++#define RK3528_OVL_SYS_CLUSTER0_CTRL		0x510
++#define RK3528_OVL_SYS_ESMART0_CTRL		0x520
+ #define RK3576_CLUSTER0_MIX_SRC_COLOR_CTRL	0x530
+ #define RK3576_CLUSTER0_MIX_DST_COLOR_CTRL	0x534
+ #define RK3576_CLUSTER0_MIX_SRC_ALPHA_CTRL	0x538
+@@ -706,6 +709,7 @@
+ #define RK3568_DSP_IF_POL__MIPI_PIN_POL			GENMASK(19, 16)
+ #define RK3568_DSP_IF_POL__EDP_PIN_POL			GENMASK(15, 12)
+ #define RK3568_DSP_IF_POL__HDMI_PIN_POL			GENMASK(7, 4)
++#define RK3568_DSP_IF_POL__HDMI_DCLK_POL		BIT(7)
+ #define RK3568_DSP_IF_POL__RGB_LVDS_PIN_POL		GENMASK(3, 0)
+ 
+ #define RK3588_DSP_IF_POL__DP1_PIN_POL			GENMASK(14, 12)
+@@ -773,6 +777,11 @@
+ 
+ #define POLFLAG_DCLK_INV	BIT(3)
+ 
++#define RK3528_OVL_SYS_PORT_SEL_IMD__ESMART0		GENMASK(17, 16)
++#define RK3528_OVL_SYS_PORT_SEL_IMD__CLUSTER0		GENMASK(1, 0)
++#define RK3528_OVL_SYS_CLUSTER0_CTRL__DLY_NUM		GENMASK(15, 0)
++#define RK3528_OVL_SYS_ESMART0_CTRL__DLY_NUM		GENMASK(7, 0)
++
+ #define RK3576_OVL_CTRL__YUV_MODE			BIT(0)
+ #define RK3576_OVL_BG_MIX_CTRL__BG_DLY			GENMASK(31, 24)
+ 
+--- a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
++++ b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
+@@ -2502,7 +2502,151 @@
+ 	.setup_bg_dly = rk3568_vop2_setup_bg_dly,
+ 	.setup_overlay = rk3568_vop2_setup_overlay,
+ };
++
++static unsigned long rk3528_set_intf_mux(struct vop2_video_port *vp, int id, u32 polflags)
++{
++	struct vop2 *vop2 = vp->vop2;
++	unsigned long clock;
++	u32 dip;
++
++	clock = rk3568_set_intf_mux(vp, id, polflags);
++	if (!clock)
++		return 0;
++
++	/* The HDMI controller samples the pixel data on the inverted dclk */
++	if (id == ROCKCHIP_VOP2_EP_HDMI0) {
++		dip = vop2_readl(vop2, RK3568_DSP_IF_POL);
++		dip |= RK3568_DSP_IF_POL__HDMI_DCLK_POL;
++		vop2_writel(vop2, RK3568_DSP_IF_POL, dip);
++	}
++
++	return clock;
++}
+ 
++/*
++ * The overlay of the RK3528 is laid out like the RK3576 one, but the
++ * port assignment and the delay of the windows live in the OVL_SYS block
++ * instead of the window registers.
++ */
++static void rk3528_vop2_setup_overlay(struct vop2_video_port *vp)
++{
++	struct vop2 *vop2 = vp->vop2;
++	struct drm_crtc *crtc = &vp->crtc;
++	struct drm_plane *plane;
++	u32 port_sel;
++
++	vp->win_mask = 0;
++	port_sel = vop2_readl(vop2, RK3528_OVL_SYS_PORT_SEL_IMD);
++
++	drm_atomic_crtc_for_each_plane(plane, crtc) {
++		struct vop2_win *win = to_vop2_win(plane);
++
++		vp->win_mask |= BIT(win->data->phys_id);
++
++		if (vop2_cluster_window(win))
++			vop2_setup_cluster_alpha(vop2, win);
++
++		switch (win->data->phys_id) {
++		case ROCKCHIP_VOP2_CLUSTER0:
++			port_sel &= ~RK3528_OVL_SYS_PORT_SEL_IMD__CLUSTER0;
++			port_sel |= FIELD_PREP(RK3528_OVL_SYS_PORT_SEL_IMD__CLUSTER0, vp->id);
++			vop2_writel(vop2, RK3528_OVL_SYS_CLUSTER0_CTRL, 0);
++			break;
++		case ROCKCHIP_VOP2_ESMART0:
++			port_sel &= ~RK3528_OVL_SYS_PORT_SEL_IMD__ESMART0;
++			port_sel |= FIELD_PREP(RK3528_OVL_SYS_PORT_SEL_IMD__ESMART0, vp->id);
++			vop2_writel(vop2, RK3528_OVL_SYS_ESMART0_CTRL, 0);
++			break;
++		}
++	}
++
++	if (!vp->win_mask)
++		return;
++
++	vop2_writel(vop2, RK3528_OVL_SYS_PORT_SEL_IMD, port_sel);
++	rk3576_vop2_setup_layer_mixer(vp);
++	vop2_setup_alpha(vp);
++}
++
++static const struct vop2_ops rk3528_vop_ops = {
++	.setup_intf_mux = rk3528_set_intf_mux,
++	.setup_bg_dly = rk3576_vop2_setup_bg_dly,
++	.setup_overlay = rk3528_vop2_setup_overlay,
++};
++
++static const struct vop2_video_port_data rk3528_vop_video_ports[] = {
++	{
++		.id = 0,
++		.feature = VOP2_VP_FEATURE_OUTPUT_10BIT,
++		.max_output = { 4096, 4096 },
++		/* win layer_mix hdr */
++		.pre_scan_max_dly = { 8, 6, 2, 0 },
++		.offset = 0xc00,
++		.pixel_rate = 1,
++	},
++};
++
++/*
++ * rk3528 vop with 1 cluster and 4 esmart win, VP0 drives HDMI and VP1 the
++ * CVBS encoder. Only VP0 with Esmart0 and Cluster0 is described for now.
++ *
++ * AXI config::
++ *
++ * * Cluster0 win0: 0x2, 0x3
++ * * Cluster0 win1: 0x4, 0x5
++ * * Esmart0:       0x6, 0x7
++ */
++static const struct vop2_win_data rk3528_vop_win_data[] = {
++	{
++		.name = "Esmart0-win0",
++		.phys_id = ROCKCHIP_VOP2_ESMART0,
++		.base = 0x1800,
++		.possible_vp_mask = BIT(0),
++		.formats = formats_rk356x_esmart,
++		.nformats = ARRAY_SIZE(formats_rk356x_esmart),
++		.format_modifiers = format_modifiers,
++		.layer_sel_id = { 1, 0xf, 0xf, 0xf },
++		.supported_rotations = DRM_MODE_REFLECT_Y,
++		.type = DRM_PLANE_TYPE_PRIMARY,
++		.axi_yrgb_r_id = 6,
++		.axi_uv_r_id = 7,
++		.max_upscale_factor = 8,
++		.max_downscale_factor = 8,
++	}, {
++		.name = "Cluster0-win0",
++		.phys_id = ROCKCHIP_VOP2_CLUSTER0,
++		.base = 0x1000,
++		.possible_vp_mask = BIT(0),
++		.formats = formats_cluster,
++		.nformats = ARRAY_SIZE(formats_cluster),
++		.format_modifiers = format_modifiers,
++		.layer_sel_id = { 0, 0xf, 0xf, 0xf },
++		.supported_rotations = DRM_MODE_REFLECT_X | DRM_MODE_REFLECT_Y,
++		.type = DRM_PLANE_TYPE_OVERLAY,
++		.axi_yrgb_r_id = 2,
++		.axi_uv_r_id = 3,
++		.max_upscale_factor = 4,
++		.max_downscale_factor = 4,
++		.feature = WIN_FEATURE_CLUSTER,
++	},
++};
++
++static const struct vop2_data rk3528_vop = {
++	.version = VOP_VERSION_RK3528,
++	.nr_vps = 1,
++	.max_input = { 4096, 4096 },
++	.max_output = { 4096, 4096 },
++	.vp = rk3528_vop_video_ports,
++	.win = rk3528_vop_win_data,
++	.win_size = ARRAY_SIZE(rk3528_vop_win_data),
++	.cluster_reg = rk3576_vop_cluster_regs,
++	.nr_cluster_regs = ARRAY_SIZE(rk3576_vop_cluster_regs),
++	.smart_reg = rk3568_vop_smart_regs,
++	.nr_smart_regs = ARRAY_SIZE(rk3568_vop_smart_regs),
++	.ops = &rk3528_vop_ops,
++	.soc_id = 3528,
++};
++
+ static const struct vop2_data rk3566_vop = {
+ 	.version = VOP_VERSION_RK3568,
+ 	.feature = VOP2_FEATURE_HAS_SYS_GRF,
+@@ -2582,6 +2726,9 @@
+ 
+ static const struct of_device_id vop2_dt_match[] = {
+ 	{
++		.compatible = "rockchip,rk3528-vop",
++		.data = &rk3528_vop,
++	}, {
+ 		.compatible = "rockchip,rk3566-vop",
+ 		.data = &rk3566_vop,
+ 	}, {

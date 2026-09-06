@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: wenziwanka <tech@wenziwanka.com>
 Date: Wed, 2 Sep 2026 06:07:25 +0000
-Subject: [PATCH 3/6] thermal: rockchip: add RK3528 TSADC support
+Subject: [PATCH 3/9] thermal: rockchip: add RK3528 TSADC support
 
 The RK3528 TSADC is close to the RK3568 one but needs its own code table,
 an 11-bit data mask and a separate initialisation sequence that programs
