@@ -79,5 +79,10 @@ Armbian 构建代码里两处漂移点，补丁干跑测不出来：
   默认把时隙宽度收成采样宽度，16 位素材就变成 32×fs，驱动侧全部正常（流在跑、N/CTS 对、EDID 有音频）但电视静音；
   32 位素材能响就是这个原因。板级 DTS 的 `hdmi_sound` cpu 节点加 `dai-tdm-slot-num = <2>; dai-tdm-slot-width = <32>;`。
   排查时别被 `MC_CLKDIS` 骗：AUDCLK 是 bit3（0x08），bit2 是 PREP 时钟。
+- **unisocwifi 的密钥槽只有 4 个，但路由器开 PMF 时 IGTK 装在 index 4**：原驱动直接越界写进 key_len/mgmt_reg，
+  表现为 FORTIFY 的 `field-spanning write ... (size 0)` 告警；只加边界检查会让每次 PMF 关联在组握手阶段断开
+  （`GROUP_HANDSHAKE -> DISCONNECTED`），必须把槽扩到 6 个（w132d-armbian-0006）。
+- **在 Wi‑Fi 会话里别跑 `wpa_cli reassociate`**：这台路由器会回 ASSOC_REJECT，之后 wpa_supplicant 退避几十分钟，
+  没有有线就只能断电。
 - **别把旧 Image 和新模块混装**：同版本号（7.2.3-edge-rockchip64）但不同构建的 Image 与 `/lib/modules`
   混用时所有模块 `Invalid argument`，sshd 也起不来；`dpkg -i` 时 glob 匹配到多个 deb 会按字母序装、后者覆盖前者。

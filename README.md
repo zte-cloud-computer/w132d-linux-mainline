@@ -95,7 +95,7 @@ CI（[build-packages.yml](.github/workflows/build-packages.yml)）构建 deb 包
 | `drm/rockchip: vop2: add RK3528 support` | Linux | 待投 |
 | `arm64: dts: rockchip: add ZTE W132D` | Linux | 待投 |
 | `ASoC: rockchip: RK3528 codec + ES7202` | Linux | 待整理 |
-| uwe5622 驱动：三处修复 + 直接注册 HCI 设备（免用户态 attach） | armbian/uwe5622 | 待投 |
+| uwe5622 驱动：四处修复（含 PMF 密钥槽越界）+ 直接注册 HCI 设备（免用户态 attach） | armbian/uwe5622 | 待投 |
 | pmdomain: rockchip: 整个 provider 延迟而不是丢掉延迟的域 | armbian/build | 待投 |
 | `rockchip_dnl_key_pressed()` 按 compatible 匹配 ADC | U-Boot | 待投 |
 | Marlin3E 三天线 RF 配置 | armbian/firmware | 待投 |
