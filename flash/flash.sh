@@ -1,40 +1,23 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# 把整盘镜像 w132d.img 刷进 W132D。
+# 把整盘镜像 w132d.img 刷进 W132D（rkdeveloptool，MaskROM 下用 rkbin loader 写入，写完回读比对再重启）。
 #
 # 用法：
-#   tools/flash.sh [发布目录或镜像文件]        默认 out/release
+#   flash/flash.sh [发布目录或镜像文件]    默认：脚本旁边的 w132d.img（发布包里），否则仓库的 out/release
 #   --dry-run 只做检查、不写任何东西；--verify-only 只把 eMMC 回读与镜像比对
-#   W132D_SPL_LOADER=<path> 指向 rkbin 的 rk3528 loader；不给就用发布目录或 cache/rkbin 里的
+#   W132D_SPL_LOADER=<path> 指定 rkbin 的 rk3528 loader；不给就用发布目录或 cache/rkbin 里的
 #
-# 需要设备进入 MaskROM：用顶针按住 HDMI 口旁的 Reset 针孔，保持按住插入电源，
-# 用 USB-A 直连电脑（别经 hub）。针孔是 SARADC ch1 下载键，由 U-Boot proper 读到后
-# 写 BOOT_BROM_DOWNLOAD 复位，BootROM 进 MaskROM（2026-09-04 实测）。
+# 进 MaskROM：用顶针按住 HDMI 口旁的 Reset 针孔（SARADC ch1 下载键），保持按住插入电源，USB-A 直连电脑（别经 hub）。
 # 还在跑厂商 U-Boot 的设备按针孔进的是厂商 Loader 模式，本脚本用 `rd 3` 把它复位进 MaskROM。
 #
-# ## 整盘覆盖，不保留任何逐机数据
+# 从扇区 0 整盘覆盖，不保留任何逐机数据：引导链（rkbin DDR/BL31 blob + 主线 SPL/U-Boot）镜像自带；出厂
+# vendor storage（扇区 7168 起，Rockchip 私有格式，主线无驱动）一并清零，MAC 由 U-Boot 按 OTP cpuid 派生。
 #
-# 引导链全是主线的（rkbin DDR/BL31 blob + 主线 SPL/U-Boot），镜像自带，所以从扇区 0 整盘写。
-# 出厂 vendor storage（扇区 7168 起，Rockchip 私有格式，主线两边都没有驱动）一并清零 ——
-# 里面唯一有用的出厂 MAC 不抢救：U-Boot 按 OTP cpuid 派生一个固定地址注入 DT（主线 Rockchip
-# 板的标准做法），每台机器固定、不同机器不同。2026-09-05 试过把出厂 MAC 迁进 U-Boot env，
-# 能做但要维护一整套 env 生成（只写一条会让设备停在 U-Boot 提示符），不值得，作罢。
-#
-# ## ⚠️ 厂商 miniloader 写大文件会静默截断（2026-09-04 实测，两次刷写都栽在这）
-#
-# 厂商 Loader 模式用它 `wl` 2.4 GB，rkdeveloptool 一路报到 100%、返回成功，
-# **但 eMMC 上只有前 16–24 MB 是对的**，后面全是 0xCC。所以：
-#   1. 写入一律走 rkbin 的 loader（usbplug）：MaskROM 下 `db` 下载，再写。
-#   2. 写完**必须回读抽样比对**（含 p3 的 ext4 超级块），"100%" 不算数。
-#
-# ## 三个设了闸的坑
-#
-# 1. `db` 在 Loader 模式下会被拒绝，只有 MaskROM 才需要。所以必须**先看 `ld`
-#    报的模式再决定**，不能无脑 db。
-# 2. 原厂 loader 在大批量读写后会崩，`ld` 会从 Loader 变成 Maskrom，此后所有命令
-#    报 failed。看到这种情况先重新读一次模式，别急着怀疑别的。
-# 3. `cmd | grep` 之后取 `$?` 拿到的是 grep 的状态，会把 rkdeveloptool 的失败
-#    读成成功。这里一律用 `if cmd; then` 直接判。
+# 写入一律走 rkbin loader（usbplug）：厂商 miniloader 写大文件报 100% 却只写前 16–24 MB、后面全 0xCC，
+# 所以写完必须回读抽样比对（含 p3 的 ext4 超级块），"100%" 不算数。
+# `db` 只有 MaskROM 才需要、Loader 模式下会被拒，必须先看 `ld` 报的模式；厂商 loader 大批量读写后会崩，
+# `ld` 变成 Maskrom 且此后命令全 failed，此时先重新读模式。判 rkdeveloptool 成败用 `if cmd`，
+# `cmd | grep` 之后的 `$?` 是 grep 的。
 set -uo pipefail
 
 SELF="$(cd "$(dirname "$0")" && pwd)"
@@ -64,9 +47,8 @@ step(){ echo; echo "########## $* ##########"; }
 die(){ echo "❌ $*" >&2; exit 1; }
 fsize(){ stat -f%z "$1" 2>/dev/null || stat -c%s "$1"; }
 
-# 回读抽样：GPT 全部 64 扇区逐字节；idbloader 与 u-boot.itb 整段逐字节；p2/p3 按等距
-# 16 个点 + 末尾 + p3 的 ext4 超级块所在扇区，每点 8 扇区与镜像比对。厂商 miniloader
-# 截断时前 16 MB 是对的、后面全 0xCC，这样的采样一定抓得住。
+# 回读抽样：GPT 64 扇区与 idbloader、u-boot.itb 整段逐字节；p2/p3 等距 16 个点 + 末尾 + p3 的 ext4
+# 超级块，每点 8 扇区。厂商 miniloader 截断时只有前十几 MB 是对的，这样的采样一定抓得住。
 verify_written() {
   local tmp; tmp=$(mktemp -d); local fail=0
   local total=$(( $(fsize "$IMG") / 512 ))
@@ -131,7 +113,7 @@ echo "  模式：$MODE"
 
 step "3/5 准备写入通道"
 if [ "$MODE" = Loader ]; then
-  # 还在跑厂商 U-Boot 的设备。厂商 miniloader 写大文件会静默截断（见抬头），复位进 MaskROM 换 loader。
+  # 还在跑厂商 U-Boot 的设备：厂商 miniloader 写大文件会静默截断（见抬头），复位进 MaskROM 换 loader
   echo "  当前是厂商 Loader，复位进 MaskROM 换用 rkbin loader（rd 3）"
   if [ "$DRY" = 0 ]; then
     rkdeveloptool rd 3 >/dev/null 2>&1 || true
@@ -188,6 +170,5 @@ fi
 cat <<'EOF'
 FLASH_OK
 ℹ️ 首次开机要几分钟：firstrun 扩容 rootfs、生成 SSH 密钥。第二次还慢就不是慢，是出问题了。
-ℹ️ BL31 每约 32 分钟打死整机的缺陷由镜像里的 U-Boot 在 preboot 阶段写握手 cookie 绕过，
-   rkbin 任何版本的 BL31 都适用，Linux 里没有对应的服务要看。
+ℹ️ BL31 约 32 分钟挂死整机的缺陷由镜像里的 U-Boot 在 preboot 阶段写握手 cookie 绕过，Linux 侧无需任何服务。
 EOF

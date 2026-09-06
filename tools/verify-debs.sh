@@ -4,9 +4,7 @@
 #
 # 用法：bash tools/verify-debs.sh <放 deb 的目录>
 #
-# 和 verify-image.sh 是一个思路：产出"有"不等于"对"。内核包少了板级 DTB 设备起不来；
-# 少了 rk3528 音频模块没声音；config 里 PSTORE_CONSOLE 没开硬挂零现场 —— 这些构建
-# 都不会报错。这里把每一条都对应到一个真实后果。
+# 产出"有"不等于"对"：缺板级 DTB 设备起不来、缺音频模块没声、PSTORE_CONSOLE 没开硬挂零现场，构建都不报错。
 set -uo pipefail
 DIR="${1:?用法: verify-debs.sh <deb 目录>}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -26,7 +24,7 @@ if [ -n "$DTB" ]; then
   f=$(find "$T/dtb" -name rk3528-w132d.dtb | head -1)
   if [ -n "$f" ]; then
     ok "rk3528-w132d.dtb 在包里（$(stat -c %s "$f") B）"
-    # 关键属性 16 条：DTS 改坏了 DTB 照样编得出来
+    # DTS 改坏了 DTB 照样编得出来，所以再过一遍关键属性
     if bash "$HERE/verify-dtb.sh" "$f" >"$T/dtb.log" 2>&1; then
       ok "DTB 关键属性校验通过"
     else
@@ -81,12 +79,16 @@ echo "── armbian-bsp-cli ──"
 BSP=$(one armbian-bsp-cli-w132d-edge)
 if [ -n "$BSP" ]; then
   dpkg-deb -c "$BSP" > "$T/bsp.list"
-  for f in etc/apt/preferences.d/w132d-kernel etc/rc_keymaps/w132d.toml usr/local/bin/w132d-bt-smp-ensure \
+  for f in etc/apt/preferences.d/w132d-kernel etc/apt/sources.list.d/w132d.sources \
+           usr/share/keyrings/w132d-archive-keyring.gpg etc/rc_keymaps/w132d.toml usr/local/bin/w132d-bt-smp-ensure \
            lib/firmware/uwe5622/wifi_56630001_3ant.ini lib/firmware/wifi_56630001_3ant.ini \
            lib/firmware/uwe5622/wcnmodem-marlin3e.bin; do
     # dpkg-deb -c 对软链打印 "path -> target"，所以不能要求行尾就是路径
     grep -qE " \./$f( -> |\$)" "$T/bsp.list" && ok "bsp 含 $f" || bad "bsp 缺 $f"
   done
+  dpkg-deb --fsys-tarfile "$BSP" | tar -xO ./etc/apt/preferences.d/w132d-kernel 2>/dev/null > "$T/pin"
+  grep -q "Pin: origin apt.armbian.com" "$T/pin" && grep -q "Pin: release o=W132D" "$T/pin" \
+    && ok "apt pin：封 apt.armbian.com、优先 o=W132D" || bad "apt pin 缺 apt.armbian.com 封禁或 o=W132D 优先"
   # WCN 固件必须是钉住的那份（CoreELEC/uwe5631-aml @ 82f0b4a1，MARLIN3E_20A_W23.03.2）
   WCN_SHA=d84724b2e442a79d3999c630e5a13a418ef3f1b0a5ecafcf1ce031b3ede758cb
   got=$(dpkg-deb --fsys-tarfile "$BSP" | tar -xOf - ./lib/firmware/uwe5622/wcnmodem-marlin3e.bin 2>/dev/null | { sha256sum 2>/dev/null || shasum -a 256; } | cut -d' ' -f1)

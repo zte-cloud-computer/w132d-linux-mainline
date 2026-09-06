@@ -1,37 +1,26 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# 把 Armbian 出的镜像做成一张**设备形状的整盘镜像** w132d.img。
-#
-# 用法（容器里）：
-#   bash /w/tools/make-release.sh [镜像] [输出目录]
+# 把 Armbian 出的镜像做成设备形状的整盘镜像 w132d.img，并连同刷写脚本与 loader 打成发布包
+# out/release/w132d-armbian-<日期>.zip。
+# 用法（容器里）：bash /w/tools/make-release.sh [镜像] [输出目录]
 #   默认取 armbian-build/output/images/ 下最新的，输出到 /w/out/release/
 #
-# ## 布局（扇区）
-#
-#   0–63          设备形状的 GPT：三个分区、固定 UUID、bootfs 带 LegacyBIOSBootable，
-#                 last-lba 按目标 eMMC 算（Armbian 镜像自带的 GPT 只有两个分区且按 2.6 GB 算，不用）
+# 布局（扇区）：
+#   0–63          设备形状的 GPT：三个分区、固定 UUID、bootfs 带 LegacyBIOSBootable，last-lba 按目标 eMMC 算
+#                 （Armbian 镜像自带的 GPT 只有两个分区且按 2.6 GB 算，不用）
 #   64–7167       idbloader：rkbin DDR blob + 主线 SPL（Armbian 构建时 write_uboot_platform 写进镜像）
-#   7168–10239    零。设备出厂时这里是 Rockchip 私有格式的 vendor storage（SN/MAC/HDCP/IMEI）
-#                 与 RKSS，主线两边都没有驱动，整盘覆盖清掉；MAC 由 U-Boot 按 OTP cpuid 派生。
-#                 镜像里这段必须是零
+#   7168–10239    必须为零。设备出厂时这里是 Rockchip 私有格式的 vendor storage（SN/MAC/HDCP/IMEI）与 RKSS，
+#                 主线两边都没有驱动，整盘覆盖清掉；MAC 由 U-Boot 按 OTP cpuid 派生
 #   10240–16383   零
 #   16384–24575   p1：u-boot.itb（BL31 + U-Boot proper）
 #   24576–        p2 bootfs、p3 rootfs，与 Armbian 镜像逐字节相同
-#
-# 2026-09-04 之前发布物是"GPT + 24576 起的净荷"两段式，保留设备的厂商引导链；引导链换成
-# 主线 U-Boot 之后镜像自带引导链，发布物就是一整张盘。
-#
-# ## last-lba 必须按目标 eMMC 算
-#
-# GPT 头里记着磁盘大小与 last-lba。镜像是 2.6 GB 而设备 eMMC 是 29.3 GB，
-# 直接抄镜像的 GPT 会让 rootfs 只能用到 2.6 GB 处。这里按 --emmc-sectors 生成，
-# 默认取实测值。
 set -euo pipefail
 W="${W132D_ROOT:-/w}"
 IMG="${1:-}"
 OUT="${2:-$W/out/release}"
 
-# 设备 eMMC 的总扇区数（29.3 GB）。实测自本机 `sfdisk -d`：last-lba 61472734。
+# 设备 eMMC 的总扇区数（29.3 GB）。GPT 的 last-lba 必须按它算：抄 Armbian 镜像的 GPT（2.6 GB）会让 rootfs
+# 只能用到 2.6 GB 处。
 EMMC_SECTORS="${W132D_EMMC_SECTORS:-61472768}"
 P2_START=24576
 
@@ -60,9 +49,8 @@ boot_start=$(sed -n 's|.*start= *\([0-9]*\).*name="bootfs".*|\1|p' <<<"$LAYOUT" 
 root_start=$(sed -n 's|.*start= *\([0-9]*\).*name="rootfs".*|\1|p' <<<"$LAYOUT" | tr -d ' ')
 [ "$boot_start" = "24576" ]   || die "bootfs 起点是 ${boot_start:-?}，应为 24576 —— 板级配置的 OFFSET 被改了？"
 [ "$root_start" = "1073152" ] || die "rootfs 起点是 ${root_start:-?}，应为 1073152 —— BOOTSIZE 被改了？"
-# 取 size 要在**同一行内**匹配，而且 name= 在 size= 之后 —— 早先那句先把整行
-# 用 name= 清空了，再 sed size 自然什么也取不到，结果 size 为空串，
-# 第 3 个分区的起点被第 2 个吃掉，sfdisk 才报 "Sector 1073152 already used"。
+# size= 在 name= 之前，必须先按 name 选行再在同一行里取 size；取空了第 3 个分区会被第 2 个吃掉
+# （sfdisk 报 "Sector 1073152 already used"）
 boot_size=$(grep 'name="bootfs"' <<<"$LAYOUT" | sed -n 's|.*size= *\([0-9]*\).*|\1|p' | tr -d ' ')
 [ -n "$boot_size" ] || die "解析不出 bootfs 的大小 —— sfdisk 输出格式变了？"
 echo "  ✅ bootfs @24576（$boot_size 扇区）、rootfs @1073152"
@@ -82,7 +70,7 @@ start=16384,   size=8192,    type=$TYPE_LINUX,    uuid=$UUID_P1, name="uboot"
 start=$P2_START, size=$boot_size, type=$TYPE_ESP_DATA, uuid=$UUID_P2, name="bootfs"
 start=1073152, size=$((EMMC_SECTORS - 1073152 - 34)), type=$TYPE_LINUX, uuid=$UUID_P3, name="rootfs"
 EOF
-# bootfs 打 LegacyBIOSBootable（属性位 2）—— 厂商 U-Boot 靠它扫到 boot.scr
+# bootfs 打 LegacyBIOSBootable（属性位 2）：U-Boot distro boot 优先扫带它的分区，也是钉住的 GPT 身份的一部分
 sgdisk --attributes=2:set:2 "$TMP/disk.img" >/dev/null
 # 只取前 64 个扇区：保护性 MBR + 主 GPT + 保留区
 dd if="$TMP/disk.img" of="$GPTIMG" bs=512 count=64 status=none
@@ -122,21 +110,21 @@ fi
 
 rm -f "$OUT"/w132d-gpt.bin "$OUT"/w132d-p2p3.img "$OUT"/u-boot-initial-env
 [ "$FAIL" = 0 ] || die "自检未通过，不要用这份发布物"
-# 发布包：镜像 + 校验和 + flash/ 整目录（刷写脚本 mac/linux + windows、README）+ loader，打成 zip
+# 发布包：镜像 + 校验和 + flash/ 整目录（mac/linux 与 windows 刷写脚本、README）+ loader
 step "5/5 打发布包"
 FLASH="$W/flash"; LOADER="$W/cache/rkbin/rk3528_loader_v1.13.107.bin"
 for f in "$FLASH/README.md" "$FLASH/flash.ps1" "$FLASH/flash.sh" "$LOADER"; do [ -f "$f" ] || die "缺 $f"; done
 cp "$FLASH/flash.sh" "$FLASH/flash.ps1" "$FLASH/README.md" "$LOADER" "$OUT/"
 chmod +x "$OUT/flash.sh"
 (cd "$OUT" && sha256sum w132d.img flash.sh flash.ps1 README.md "$(basename "$LOADER")" > SHA256SUMS)
-# 私有构建（userpatches/customize-image.sh 存在：本机 SSH 公钥、讯飞语音解码器、以后的 QMI/厂商驱动等）
-# 打出来的包和公开包长得一样，发错就是事故 —— 文件名加 -private 后缀，从名字上分开。
+# 私有构建（存在 userpatches/customize-image.sh）打出来的包和公开包长得一样，发错就是事故 ——
+# 文件名加 -private 后缀，从名字上分开
 SUFFIX=""
 if [ -f "$W/userpatches/customize-image.sh" ] && [ "${W132D_PUBLIC:-}" != yes ]; then
   SUFFIX="-private"
   echo "  ⚠️  存在 userpatches/customize-image.sh：这是**私有构建**，包名加 -private，不要公开发布"
 fi
-ZIP="$OUT/w132d-armbian-$(date +%Y%m%d)$SUFFIX.zip"
+ZIP="$OUT/w132d-armbian-${W132D_RELEASE_STAMP:-$(date +%Y%m%d)}$SUFFIX.zip"
 rm -f "$ZIP"   # 只覆盖同名的；公开包和私有包可以并存
 command -v zip >/dev/null || { apt-get -qq update >/dev/null 2>&1; apt-get -qq install -y zip >/dev/null 2>&1; }
 (cd "$OUT" && zip -q -1 "$(basename "$ZIP")" w132d.img SHA256SUMS flash.sh flash.ps1 README.md "$(basename "$LOADER")") || die "zip 失败"

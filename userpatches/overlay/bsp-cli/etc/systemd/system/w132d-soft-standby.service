@@ -1,7 +1,6 @@
 [Unit]
 Description=W132D IR/BLE power-key software standby
-# 本版不含 HDMI：脚本里的 CEC Standby / DRM DPMS 两步在没有 HDMI 连接器时
-# 会自行跳过（只记一条 warning），所以这里不再依赖 w132d-hdmi.service。
+# 没有 HDMI 连接器时脚本自行跳过 CEC/DPMS 两步，所以不依赖任何 HDMI 单元。
 After=w132d-ir-keymap.service
 Wants=w132d-ir-keymap.service
 

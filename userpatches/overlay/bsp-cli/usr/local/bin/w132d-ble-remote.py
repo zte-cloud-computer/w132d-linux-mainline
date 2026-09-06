@@ -1,35 +1,20 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""W132D 蓝牙语音遥控 -> uhid 桥接。
+"""W132D 蓝牙语音遥控 -> uhid 桥接（w132d-ble-remote.service）。
 
-遥控器不响应 HID Report Map (0x2A4B) 读取，BlueZ 的 HoG 因此建不出输入设备；
-但它的 Report 特征会推送标准 8 字节引导键盘报文，所以绕开 HOGP：
-    GATT 通知 -> /dev/uhid 合成输入设备
+遥控器不响应 HID Report Map (0x2A4B) 读取，BlueZ 的 HoG 建不出输入设备；但它的 Report 特征
+会推送标准 8 字节引导键盘报文，所以绕开 HOGP：GATT 通知 -> /dev/uhid 合成输入设备。
+配对流程对齐原厂 Android 的 AutoParingService（startLeScan -> 名字前缀匹配 -> stopLeScan
+-> createBond -> connect）。配对窗口由 w132d-ble-pair 打开。
 
-配对流程复刻原厂 Android 的 com.android.stb.bt.auto.AutoParingService
-（配合 com.changhong.bleaidl.BLEAIDLService），其日志串给出的顺序是：
-
-    startLeScan
-      -> onLeScan: device.getName()=
-      -> "!device.name == null, go on scan !"
-      -> 名字前缀匹配 -> ") MATCHED, stop LE scan and bind to device"
-      -> createBond -> Bond state change(10 none / 11 bonding / 12 bonded)
-      -> "------------device boned, start connect------------"
-      -> connectDevice -> "BLE connect mBluetoothHidHost"
-
-对齐要点：
-  * **按名字前缀匹配，不认地址**。原厂全程用 getName()，地址随便变都能认出来。
-    早期版本把 MAC 与 D-Bus 路径写死，遥控器一换地址就永远等不到。
-  * **用 ObjectManager 的 InterfacesAdded 捕获新发现的设备**（等价于原厂的
-    onLeScan 回调）。RemoveDevice 之后 BlueZ 会销毁设备对象，此时 PropertiesChanged
-    无从发起——早期版本只订阅了后者，"解绑后重新发现"这条路是断的。
-  * **特征按 UUID 定位**（Report=0x2A4D，语音=0xFD02），不认 charXXXX 句柄编号，
-    那是按发现顺序分配的，重新配对后会变。
-  * 匹配到目标先 stopLeScan 再 createBond：同时扫描与建连会在 UWE5622 上抢时隙。
-  * 已绑定则不扫描，直接连（原厂 "has device bonded, not connect"）。
-  * 配对成功立即关闭配对窗口（原厂配对完即 stopLeScan 并结束服务），
-    否则下一轮会把刚建立的绑定当旧记录解掉。
-  * 配对在途绝不插手断开——那会在 SMP 握手中途掐断自己。
+要点：
+  * 按名字前缀匹配，不认地址（遥控器换地址也能认出）。
+  * 新发现的设备靠 ObjectManager 的 InterfacesAdded：RemoveDevice 之后设备对象被销毁，
+    PropertiesChanged 无从发起。
+  * 特征按 UUID 定位，不认 charXXXX 句柄编号（按发现顺序分配，重新配对后会变）。
+  * 匹配到目标先停扫再配对：同时扫描与建连会在 UWE5622 上抢时隙。
+  * 已绑定则不扫描，由内核接受列表后台自动连；配对成功立即关窗口，否则下一轮会把新绑定当旧记录解掉。
+  * 配对在途绝不断开——会在 SMP 握手中途掐断自己。
 
 线程约定：dbus-python 非线程安全，所有 D-Bus 调用都在 GLib 主循环线程内。
 """
@@ -109,11 +94,8 @@ class Uhid:
 bus = None
 uhid = None
 stats = {"kb": 0, "cc": 0, "voice": 0}
-# dev: 当前锁定的设备 D-Bus 路径（动态，不写死 MAC）
-# 实测得到的 report map（2026-08-27，未加密链路读 0x2908 得到）。
-# 遥控器只给约 10.7 秒就会 Remote User Terminated (0x13) 主动挂断，
-# 而重读一遍要 15 次 GATT 读、耗掉 4 秒——足以把配对窗口吃掉。
-# 所以默认用这张已知表，只有 charXXXX 编号对不上时才重新发现。
+# 实机读 0x2908 得到的 report map。遥控器约 10.7 秒就会主动挂断 (0x13)，而重读一遍要 15 次
+# GATT 读、约 4 秒，足以吃掉配对窗口；所以默认查表，只有 charXXXX 对不上时才重新发现。
 KNOWN_REPORTS = {
     "char002b": (0x01, 1), "char002f": (0x03, 1), "char0033": (0xFC, 1),
     "char0037": (0xFB, 2), "char003a": (0xF8, 1), "char003e": (0xFA, 2),
@@ -191,12 +173,8 @@ def adopt_device(path):
         state["dev"] = path
 
 
-# btmgmt 会阻塞等 mgmt index 重新 added（sprd_pskey 关掉 HCI_CHANNEL_USER 之后
-# 尤其明显，实测每次吃满 timeout）。早期版本用 os.system() 同步调它，而
-# os.system 阻塞在 wait4 上 —— GLib 主循环因此每 3 秒被冻住 8 秒，arm_notify()
-# 被推迟到连接后 30 秒开外。BlueZ 只把 Value 变化投递给已经 StartNotify 的
-# 客户端，所以那段时间遥控器推来的按键通知全部被丢弃（btmon 里能看到通知，
-# 桥接日志里一条没有）。一律改成非阻塞起进程 + 惰性回收。
+# 外部命令一律非阻塞起进程 + 惰性回收：btmgmt 会阻塞等 mgmt index 重新 added（常吃满 timeout），
+# 同步调用会冻住 GLib 主循环，期间遥控器推来的按键通知全部丢失。
 _kids = []
 
 
@@ -378,13 +356,9 @@ def set_pairable(on):
 def set_discovery(on):
     """开/关 LE 扫描。
 
-    同时核对 Adapter1.Discovering 与本地意图。BlueZ 会在连接期间自动
-    停扫，所以只看上次请求会把扫描永久卡在关闭。Failed/NotReady
-    是真的控制器错误，不能当作成功缓存。
+    同时核对 Adapter1.Discovering 与本地意图：BlueZ 会在连接期间自动停扫，
+    只看上次请求会把扫描永久卡在关闭。Failed/NotReady 是真的控制器错误，不能当作成功缓存。
     """
-    # Intent alone is not enough: BlueZ automatically stops discovery while
-    # connecting.  If that happened behind our back, retry StartDiscovery even
-    # when the last requested intent was already True.
     try:
         actual = bool(prop(ADAPTER, "org.bluez.Adapter1", "Discovering"))
     except dbus.exceptions.DBusException:
@@ -411,20 +385,16 @@ def set_discovery(on):
         elif not on and actual is False:
             state["discovering"] = False
         else:
-            # Failed/NotReady can be real controller failures.  Do not cache
-            # them as success; the next one-second health tick will retry.
+            # 不缓存为成功，下一秒的 tick 会重试。
             state["discovering"] = None
             log("LE 扫描%s失败: %s（下轮重试）"
                 % ("开启" if on else "停止", n.rsplit(".", 1)[-1]))
 
 
 def arm_notify(dev):
-    """订阅所有带 notify 的特征，并建立 report id 映射。
+    """订阅全部带 notify 的特征，并按 0x2908 描述符建立 report id 映射。
 
-    早期版本只订 0x2A4D 与 0xFD02，且按 payload 长度猜报告类型 —— 语音那条
-    (id=0xFC) 的 20 字节包因此被当成"未知报文"丢弃。现在改为：
-      * 订阅**全部** notify 特征（没有代价，还能看清厂商通道有没有在推）
-      * 读每个 Report 特征的 0x2908 描述符建立 report_id 映射
+    只订 0x2A4D/0xFD02 并按 payload 长度猜报告类型会把语音 (id=0xFC) 的 20 字节包当未知报文丢掉。
     """
     snap = managed()
     targets = {}
@@ -437,13 +407,8 @@ def arm_notify(dev):
     if not targets:
         return 0
 
-    # StartNotify 必须【异步】发。它会真往对端写 CCCD 并等 Write Response；
-    # 任一特征不应答时，同步调用就会把 GLib 主循环堵到 ATT 超时。
-    #
-    # 2026-08-27 交接后更正：07:12 抓包里那段 30 秒空窗后来确认主要来自
-    # BlueZ 的独立 `hog` 插件（旧配置只禁用了 `input`）。hog-lib 写完 6 个
-    # HID CCCD 后读取必超时的 0x2A4B，并把 ServicesResolved 拖住。服务现用
-    # --noplugin=input,hog；这里保留异步调用作为独立的防阻塞措施。
+    # StartNotify 必须异步发：它会真往对端写 CCCD 并等 Write Response，任一特征不应答
+    # 同步调用就会把 GLib 主循环堵到 ATT 超时。
     pend = state.setdefault("notify_pending", set())
     for p2, already in targets.items():
         if already or p2 in pend:
@@ -462,18 +427,14 @@ def arm_notify(dev):
         except dbus.exceptions.DBusException:
             pend.discard(p2)
 
-    # ok 只统计 BlueZ 真正标成 Notifying 的那些。StartNotify 返回成功证明
-    # 不了什么——死链路上它照样成功（probe_link 的注释里早写明了）。
+    # ok 只统计 BlueZ 真正标成 Notifying 的：StartNotify 返回成功在死链路上照样成功（见 probe_link）。
     ok = sum(1 for v in targets.values() if v)
     if ok != state["armed_n"]:
         log("通知已武装 %d/%d" % (ok, len(targets)))
         state["armed_n"] = ok
-    # The first keyboard notification can arrive before all StartNotify calls
-    # settle.  dispatch_notification() then seeds just char002b.  "map is
-    # non-empty" is therefore not a completeness test: Output reports never
-    # notify and cannot repair themselves later.  Keep this outside the
-    # armed-count-change branch so clearing stale paths on an unusual reconnect
-    # ordering is repaired on the very next health tick.
+    # 第一条键盘通知可能早于 StartNotify 全部落定，dispatch_notification() 只会种下 char002b；
+    # 「映射非空」不代表完整——Output 报告从不通知、无法自愈。放在 armed 计数分支之外，
+    # 重连顺序异常时下一 tick 就能修好。
     expected = set(KNOWN_REPORTS.values())
     if ok and not expected.issubset(rmap["by_id"]):
         build_report_map(dev)
@@ -521,11 +482,9 @@ def readable_char(dev):
 def probe_link(dev):
     """异步 GATT 读取验证链路真伪。
 
-    BlueZ 在这颗 UWE5622 上会把 Device1.Connected 卡在 True，而实际 ACL 已断
-    （btmgmt/hcitool con 为空、RX bytes 不再增长）。此时 tick 一直走"已连接"
-    分支什么也不做 -> 桥接假死。
-    StartNotify 不能当判据：它只写 BlueZ 自己的缓存，链路死了照样返回成功。
-    只有真正的 ReadValue 会打到对端，失败即链路已死。
+    BlueZ 在这颗 UWE5622 上会把 Device1.Connected 卡在 True 而 ACL 早已断开，tick 于是
+    一直走「已连接」分支什么也不做。StartNotify 只写 BlueZ 缓存、死链路照样成功，
+    只有 ReadValue 真打到对端，失败即链路已死。
     """
     p = readable_char(dev)
     if not p:
@@ -538,22 +497,16 @@ def probe_link(dev):
 
     def err(_e):
         state["probing"] = False
-        # 「链路还没就绪」和「链路死了」必须区分开。ACL 建立(Connected=True)
-        # 与 ATT 通道挂载之间隔着独立一轮事件 + LTK 重加密，这段窗口里
-        # BlueZ 的 characteristic_read_value() 会直接回
-        # org.bluez.Error.Failed "Not connected"（src/gatt-client.c:991）。
-        # 早期版本对任何异常一律 dead += 1，于是刚回连的健康链路被判死刑。
+        # ACL 建立与 ATT 通道挂载之间隔着一轮事件 + LTK 重加密，这段窗口 ReadValue 会回
+        # "Not connected"，不是链路死了；所以探测以 resolved 为前置（见 _tick）。
         n = ""
         try:
             n = _e.get_dbus_name() or ""
             msg = str(_e)
         except Exception:
             msg = str(_e)
-        # 只放过 InProgress（同一时刻已有一笔 ATT 事务在飞）。
-        # 【修正】早先这里连 "Not connected" 也放过——那是错的：探测现在
-        # 已经以 resolved 为前置，resolved=1 却回 "Not connected" 恰恰是
-        # 僵尸链路的确证（bluetoothd 的 client->gatt 已为 NULL），
-        # 放过它等于让僵尸永远清不掉。实测正是这条把自愈堵死了。
+        # 只放过 InProgress（已有一笔 ATT 事务在飞）。resolved=1 却回 "Not connected" 恰恰是
+        # 僵尸链路的确证（bluetoothd 的 client->gatt 已为 NULL），不能放过。
         if "InProgress" in n:
             return
         state["dead"] += 1
@@ -566,13 +519,9 @@ def probe_link(dev):
             except dbus.exceptions.DBusException:
                 pass
 
-            # 升级恢复。实测这颗 UWE5622 会出现三层状态互相矛盾：
-            #   控制器仍持有 ACL 句柄（Read Remote Version 回 Success）
-            #   内核 L2CAP 层已无该连接（debugfs 只剩监听项）
-            #   bluetoothd 的 Connected 卡在 True，且 ATT socket 已销毁
-            #     （ReadValue 失败且全程发不出一个 HCI 报文）
-            # 此时 Device1.Disconnect() 清不掉，唯一有效的是重启 bluetoothd。
-            # 带冷却，避免异常时变成重启风暴。
+            # 升级恢复：这颗 UWE5622 会出现控制器仍持 ACL、内核 L2CAP 已无连接、bluetoothd
+            # Connected 卡在 True 的三层矛盾，Device1.Disconnect() 清不掉，只有重启 bluetoothd 有效。
+            # 带冷却，避免变成重启风暴。
             def _escalate():
                 try:
                     if not bool(prop(dev, "org.bluez.Device1", "Connected")):
@@ -633,8 +582,7 @@ def voice_ctl(on):
     """开/停录音：往 (0xFB, Output) 特征写 1 个字节。"""
     p = rmap["by_id"].get((RPT_VOICE_CTL, 2))
     if not p and state.get("dev"):
-        # Last-resort, zero-I/O repair for startup ordering races.  Output
-        # reports never emit Value notifications, so waiting cannot fix them.
+        # 零 I/O 的兜底：Output 报告从不发 Value 通知，等是等不来的。
         seed_known_report_map(state["dev"])
         p = rmap["by_id"].get((RPT_VOICE_CTL, 2))
     if not p:
@@ -645,17 +593,14 @@ def voice_ctl(on):
     voice["ctl_seq"] += 1
     ctl_seq = voice["ctl_seq"]
 
-    # 必须异步。同步 WriteValue 同样要等对端 Write Response，而原本还要
-    # 顺序试 request / command 两种写类型 —— 最坏把主循环堵死 60 秒。
+    # 必须异步：同步 WriteValue 要等对端 Write Response，最坏把主循环堵死 60 秒。
     def _wok():
         log("录音 %s (写 0x%02X=%d)"
             % ("开始" if on else "停止", RPT_VOICE_CTL, int(on)))
 
     def _wfail(e):
         log("写录音控制失败: %s" % e.get_dbus_name().rsplit(".", 1)[-1])
-        # voice_ctl() reports successful dispatch before the asynchronous ATT
-        # result exists.  Roll back only if this is still the newest command;
-        # a late failure from Start must not undo a later Stop/Start sequence.
+        # 只在这仍是最新一条命令时回滚：Start 的迟到失败不能撤销其后的 Stop/Start。
         if on and ctl_seq == voice["ctl_seq"]:
             voice["recording"] = False
             voice_close()
@@ -699,9 +644,7 @@ def append_raw_voice(frame):
 
 
 def voice_open():
-    # poll() 不为 None = 子进程已退出。早期版本只看 voice["proc"] 是否为真，
-    # 于是解码器一崩就每帧(20ms)重开一次 = 50Hz fork 循环，而 wav 名只精确到
-    # 秒，同秒重开会把刚录好的那段直接截断覆盖。
+    # 要看 poll()，不能只看 proc 是否为真：否则解码器一崩就每帧(20ms)重开一次，成 50 Hz fork 循环。
     if voice["proc"] is not None and voice["proc"].poll() is None:
         return
     if voice["proc"] is not None:
@@ -807,7 +750,7 @@ def on_voice_report(body):
 
 
 # --------------------------------------------------------------------------
-# on_props() 里 GattCharacteristic1/Value 分支替换成这一段
+# GATT 通知分发：按 Report Reference (0x2908) 给的 report id 路由，不按 payload 长度猜
 # --------------------------------------------------------------------------
 def dispatch_notification(path, data):
     ent = rmap["by_path"].get(path)
@@ -818,7 +761,7 @@ def dispatch_notification(path, data):
         if ent:
             rmap["by_path"][path] = ent
             rmap["by_id"][ent] = path
-    if ent is None:                      # 映射没建起来时的兜底（旧行为）
+    if ent is None:
         log("未映射特征 %s len=%d %s"                              
             % (path.rsplit("/", 1)[-1], len(data), data.hex()))
         return
@@ -834,8 +777,7 @@ def dispatch_notification(path, data):
         if len(data) >= 4 and data[0] == 0x82:
             k, action, extra = data[1], data[2], data[3]
             log("  on recv key event, %d, %d, %d" % (k, action, extra))
-            # 定点实测：k=3，action=1 是按下、0 是松开。旧注释把动作语义
-            # 写反了；时间线上 1 始终先于 0，且覆盖用户实际按住的时长。
+            # 实机确认：k=3 是语音键，action=1 按下、0 松开。
             if k == VOICE_KEY:
                 if action == 1 and not voice["recording"]:
                     voice["recording"] = True
@@ -853,8 +795,7 @@ def dispatch_notification(path, data):
     elif rid == RPT_IFLY:
         log("IFLY 通道 %s" % data.hex())                           
     elif rid == RPT_KEYBOARD:
-        # 必须按 report id 路由，不能按长度猜。0x03 Consumer 在这支遥控器
-        # 上也可能带 8 字节 payload；旧代码会把它误送成键盘报告。
+        # 0x03 Consumer 在这支遥控器上也可能带 8 字节 payload，所以只能按 report id 路由。
         if len(data) != 8:
             log("键盘报告长度异常 len=%d %s" % (len(data), data.hex()))
             return
@@ -964,11 +905,8 @@ def _err(what, token=None):
         if n == "InProgress":
             state["retry_after"] = time.time() + 25.0
             return
-        # 配对失败必须显式取消，否则会在遥控器那侧留下半开的 SMP 会话。
-        # 原厂 AutoParingService 有对应动作 cancelBondProcess，配合
-        # MSG_CHECK_IS_UNBOND / MSG_CHECK_DISCONNECTING 做带确认的收尾。
-        # 我们早期几十次失败的 Pair() 一次都没取消过，累积的半开会话极可能
-        # 就是遥控器「配对后两条通路全静默、只能拔电池」的成因。
+        # 配对失败必须显式取消（原厂 cancelBondProcess），否则遥控器那侧累积半开的 SMP 会话，
+        # 最后两条通路全静默、只能拔电池。
         if what == "配对":
             dev = state.get("dev")
             if dev:
@@ -1044,8 +982,6 @@ def on_props(iface, changed, invalidated, path=None):
         if dev and not path.startswith(dev + "/"):
             return
         # 设备对象还没被认领时，靠上面的已知特征名放行，避免首批通知被丢。
-        # 按 Report Reference(0x2908) 给出的 report id 分发，而不是猜 payload 长度。
-        # 语音正是 (id=0xFC, Input) 推来的 20 字节包，早先被长度分支当"未知报文"丢掉。
         dispatch_notification(path, bytes(changed["Value"]))
         return
 
@@ -1074,11 +1010,8 @@ def _autoconnect_once():
     connectDevice -> mBluetoothHidHost.connect()，其底层是
     connectGatt(autoConnect=true)，即内核接受列表的后台连接。
 
-    为什么必须用它：这支遥控器的广播窗口极短（实测 90 秒只有 3 次），
-    用户态主动扫描 + Device1.Connect() 的占空比根本抓不住；而接受列表由
-    控制器持续守着，见到广播立刻发 LE Extended Create Connection。
-    早期版本删掉过这条（当时误以为它导致 7ms 掉线，真凶其实是 LL Privacy），
-    删掉后就再没抓到过遥控器的广播。
+    必须用它：这支遥控器的广播窗口极短（90 秒只有 3 次），用户态扫描 + Device1.Connect()
+    的占空比抓不住；接受列表由控制器持续守着，见到广播立刻建连。
     """
     dev = state["dev"] or find_device()
     if not dev:
@@ -1097,9 +1030,8 @@ def _autoconnect_once():
 
 
 def tick():
-    """主循环。整体裹 try/except：早期版本一次 DBusException 就会让
-    GLib 把这个 timeout source 移除，进程还活着但再也不 tick，
-    而 service 的 Restart=on-failure 救不回来（进程没退出）。"""
+    """主循环。整体裹 try/except：一次未捕获异常会让 GLib 移除这个 timeout source，
+    进程还活着但再也不 tick，systemd 的 Restart 救不回来。"""
     try:
         return _tick()
     except Exception as e:
@@ -1135,8 +1067,7 @@ def _tick():
     # 信号，一秒健康检查也必须重建所有每连接状态。
     connection_changed(connected)
 
-    # busy 必须带截止时间：早期版本只在 reply/error 回调里清它，
-    # 一旦 D-Bus 回调丢失就把主循环永久锁死。
+    # busy 必须带截止时间：D-Bus 回调丢失时不能把主循环永久锁死。
     if state["busy"] and time.time() >= state["busy_until"]:
         state["busy"] = False
         log("busy 超时自动解除")
@@ -1150,10 +1081,8 @@ def _tick():
         pairing = False
         session = None
 
-    # ★ 订阅必须先于 busy 门。BlueZ 只把 Value 变化投递给已经 StartNotify
-    # 的客户端；连接建立后每晚订阅一秒，就白丢一秒内的全部按键。
-    # 之前 Device1.Connect() 把 busy 顶满 25 秒，arm_notify() 因此推迟到
-    # 连接后第 34 秒 —— 抓包里两条真实按键通知就是这样掉的。
+    # 订阅必须先于 busy 门：BlueZ 只把 Value 变化投递给已经 StartNotify 的客户端，
+    # 连接后每晚订阅一秒就白丢一秒的按键。
     if connected and resolved:
         set_discovery(False)
         arm_notify(dev)
@@ -1162,9 +1091,7 @@ def _tick():
         return True
 
     # ── 配对窗口：先解绑再配对 ──
-    # w132d-ble-pair 脚本一直宣称"会解绑旧记录"，但 Python 里 RemoveDevice
-    # 只存在于注释中，这个功能从未实现过。已绑定时直接 Pair() 会被 BlueZ
-    # 顶回 AlreadyExists，进入 CancelPairing -> 重试的无限循环。
+    # 已绑定时直接 Pair() 会被 BlueZ 顶回 AlreadyExists，陷入 CancelPairing -> 重试的循环。
     if pairing and paired:
         token = session[1]
         set_discovery(False)
@@ -1177,10 +1104,8 @@ def _tick():
             log("解绑失败: %s" % e.get_dbus_name().rsplit(".", 1)[-1])
             state["retry_after"] = time.time() + 3.0
             return True
-        # RemoveDevice 已同时删 BlueZ 密钥与内核绑定。旧版本又并发
-        # btmgmt unpair/add-device，结果取决于两个子进程的先后，
-        # 可能刚加入接受列表又被 unpair 删掉。新条目只在
-        # 配对成功后添加。
+        # RemoveDevice 已同时删 BlueZ 密钥与内核绑定，别再并发 btmgmt unpair/add-device
+        # （先后顺序不定）。接受列表条目只在配对成功后添加。
         adopt_device(None)
         state["discovering"] = None
         state["retry_after"] = time.time() + 3.0
@@ -1190,22 +1115,11 @@ def _tick():
         set_discovery(False)
         if resolved:
             arm_notify(dev)
-            # 连上后立刻试写一次 0xFB 开录音。这一步与配对成败无关，
-            # 用来单独验证 ExportClaimedServices 是否真的打开了写通道
-            # （BlueZ 对 hog 插件 claim 的 0x1812 服务默认拒绝 WriteValue，
-            #  而 StartNotify 没有该检查——所以"订阅成功"证明不了写能成功）。
-            # 【已移除】早期这里连上就写 0xFB=0x01 打开遥控器录音，用来验证
-            # ExportClaimedServices。但全文件没有任何 voice_ctl(False)，唯一
-            # 的关闭时机是断链——等于每次回连都把遥控器永久置于录音态，
-            # 既拿不到按句切分的 wav，也白耗遥控器电量。
-            # 录音的开/关一律只由 0xF8 厂商按键事件驱动（见
-            # dispatch_notification 的 RPT_KEYEVENT 分支）。
+            # 连上后不要写 0xFB 开录音：那会把遥控器永久置于录音态、白耗电。
+            # 录音开/关只由 0xF8 厂商按键事件驱动（dispatch_notification 的 RPT_KEYEVENT 分支）。
             pass
-        # 配对判断必须放在 connected 分支内部：接受列表的后台自动连接
-        # 会让设备在开窗口时早已是 Connected=True，早期版本的 Pair() 在
-        # connected 分支 return 之后，永远走不到。
-        # 以 ServicesResolved 为前置：att 通道未就绪时 bt_att_set_security()
-        # 返回 -ENOTCONN，BlueZ 会误判成功并静默设置 bonding。
+        # 配对判断必须在 connected 分支内：接受列表的后台自动连接让设备在开窗口时早已 Connected=True。
+        # 以 ServicesResolved 为前置：ATT 未就绪时 bt_att_set_security() 回 -ENOTCONN，BlueZ 会误判成功。
         if pairing and not paired and resolved:
             token = session[1]
             set_discovery(False)
@@ -1221,10 +1135,8 @@ def _tick():
                 state["busy"] = False
                 state["pair_token"] = None
                 log("配对发起失败: %s" % e.get_dbus_name().rsplit(".", 1)[-1])
-        # 僵尸链路兜底。ACL 早断了而 bluetoothd 的 Connected 卡在 True 时，
-        # ServicesResolved 会一直是 False —— 而 probe_link 现在要求 resolved
-        # 才探测，于是僵尸永远清不掉。健康链路 1~2 秒内必然 resolved，
-        # 所以「连上 25 秒还没解析」就按假死处理，强制断开让它重连。
+        # 僵尸链路兜底：Connected 卡在 True 时 ServicesResolved 一直 False，probe_link 又要求
+        # resolved 才探测。健康链路 1~2 秒内必然 resolved，连上 25 秒没解析就按假死断开重连。
         if not resolved:
             if state.get("conn_since") is None:
                 state["conn_since"] = time.time()

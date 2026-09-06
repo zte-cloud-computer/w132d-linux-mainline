@@ -1,12 +1,5 @@
-# ZTE W132D 随机遥控器完整键位表（29 键）
-#
-# 协议: NEC，地址 0x22
-# 来源: ir-keytable -t 实测采集（2026-08-26），两轮独立采集交叉验证：
-#   第一轮按指定顺序采 12 键，第二轮按遥控器物理排列采全部 29 键，
-#   两轮顺序完全不同而 12 个重叠键位置全部吻合 -> 映射无错位。
-#
-# 注: 原厂 Android DTB（Rockchip RK3528 DEMO4 DDR4 V11 Board）里 9 张
-#     ir_key 表没有一张匹配本遥控器（语义一致度均为 0/12），故全部实测得出。
+# ZTE W132D 随机遥控器键位表（29 键），NEC 协议、地址 0x22，ir-keytable -t 实测采集。
+# 原厂 Android DTB 里的 9 张 ir_key 表没有一张匹配本遥控器。
 [[protocols]]
 name = "w132d"
 protocol = "nec"
@@ -68,4 +61,4 @@ variant = "nec"
 0x2289 = "KEY_BLUE"
 0x2284 = "KEY_YELLOW"
 0x2296 = "KEY_F8"
-0x2298 = "BTN_1"             # 原厂 cmd 0x67 / keycode 257（审查指出的漏项）
+0x2298 = "BTN_1"             # 原厂 cmd 0x67 / keycode 257

@@ -1,17 +1,10 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# 确保 LE 的 SMP 固定通道 (CID 0x0006) 已注册后，才让 BLE 桥接启动。
+# 确认 LE 的 SMP 固定通道 (CID 0x0006) 已注册，再让 BLE 桥接启动（w132d-ble-remote.service 的 ExecStartPre）。
 #
-# 该通道只在 smp_register() 里创建，而 smp_register() 【只】被
-# hci_powered_update_sync() 调用；后者又要求适配器是被 mgmt 客户端上电的
-# （hci_dev_open_sync() 里 hci_dev_test_flag(hdev, HCI_MGMT) 那个条件）。
-# 任何 ioctl 上电（hciconfig hci0 up）都会让它缺席，且事后无法补救——
-# 因为 hci_power_on_sync() 看到 HCI_UP 且 HCI_AUTO_OFF 未置位就直接返回。
-#
-# 缺席的症状很有迷惑性：LE 能扫描、能建连，但每条连接约 2 秒后被本地拆掉，
-# 全程零 ATT 流量，dmesg 里只有一行 "security requested but not available"。
-# 根因是 conn->smp == NULL 让 setsockopt(BT_SECURITY) 恒回 EINVAL，
-# bluetoothd 的 device_attach_att() 因此 return false，ATT 通道压根没挂上。
+# smp_register() 只在 mgmt 客户端上电（hci_powered_update_sync）时跑；用 ioctl 上电（hciconfig hci0 up）
+# 会让它缺席且事后补不上。症状：LE 能扫能连，但每条连接约 2 秒被本地拆掉、零 ATT 流量，
+# dmesg 只有 "security requested but not available"。补救只能 btmgmt power off/on 一轮。
 set -uo pipefail
 DEV=${DEV:-hci0}
 L2=/sys/kernel/debug/bluetooth/l2cap

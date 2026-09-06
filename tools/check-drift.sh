@@ -1,35 +1,16 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# 对一批内核版本干跑我们的补丁与板级 DTS，提前发现漂移。
+# 对一批内核版本干跑 patches/ 里的补丁并真编一次板级 DTB，在 Armbian 的 edge 跟进新内核之前发现漂移。
+# 用法（容器里）：bash /w/tools/check-drift.sh [版本...]   默认 7.2.2；支持 -rc 版本。
 #
-# 用法（容器里）：
-#   bash /w/tools/check-drift.sh [版本...]
-#   默认测：钉住的 7.2.2 + 同系列较新的 + 下一个系列
-#
-# ## 为什么需要
-#
-# Armbian 的 edge 跟的是 `branch:linux-7.2.y` 的 **HEAD**，不是我们测过的 7.2.2；
-# 而且它迟早会 bump 到 7.3。两件事都会在我们不知情的时候把补丁打崩。
-#
-# 这个脚本的价值在于**提前**：在 Armbian 动之前就知道会不会炸，以及炸在哪个 hunk。
-#
-# ## fuzz 当预警，不当通过
-#
-# `patch` 打出 fuzz 意味着上下文已经对不齐、只是还能猜出位置。今天的 fuzz 就是
-# 明天的 fail —— 所以这里单独统计，出现即提示重新锚定，而不是当成成功。
-#
-# ## 为什么还要编 DTS
-#
-# 光测补丁会漏掉一整类漂移：**上游 dtsi 自己变了**。实测例子 —— 主线 7.2 自带了
-# RK3528 的 usb2phy 节点，标签叫 `usb2phy_*`，而上游板级 DTS 用的是 `u2phy_*`，
-# 补丁全绿但 dtc 直接报 "Label or path not found"。所以每个版本都真编一次 DTB。
+# fuzz 只当预警、不当通过：上下文已对不齐，今天的 fuzz 就是明天的 fail。补丁全绿也要编 DTS：上游 dtsi
+# 自己会变（主线 7.2 自带的 usb2phy 节点标签与旧 DTS 的 u2phy 对不上，补丁全绿而 dtc 报 label not found）。
 set -uo pipefail
 
 W="${W132D_ROOT:-/w}"
 B=/build
-# 测主线形态（patches/），不是 userpatches/kernel/ 里的 Armbian 形态：这里的树是纯净
-# 内核，Armbian 形态的 0002 重锚在 Armbian 补丁栈之上，纯净树上必然打不上。
-# Armbian 那一侧的漂移由真实构建验：tools/armbian-kernel.sh kernel-patch。
+# 测主线形态（patches/），不是 userpatches/kernel/ 里的 Armbian 形态：这里的树是纯净内核，Armbian 形态
+# 重锚在 Armbian 补丁栈之上、必然打不上；那一侧的漂移由 tools/armbian-kernel.sh kernel-patch 验。
 PATCHDIR="$W/patches"
 DTS="$W/patches/rk3528-w132d.dts"
 # shellcheck source=tools/lib.sh
@@ -59,8 +40,7 @@ for KVER in "${VERSIONS[@]}"; do
   echo "══════════════ linux-$KVER ══════════════"
   MAJOR="${KVER%%.*}"
   mkdir -p "$B/tarballs"
-  # 正式版在 cdn 的 v<major>.x/ 下是 .tar.xz；-rc 只有 git.kernel.org 的快照 .tar.gz。
-  # 要提前对下一个系列预警就绕不开 rc，所以两种都支持。
+  # 正式版在 cdn 的 v<major>.x/ 下是 .tar.xz；-rc 只有 git.kernel.org 的快照 .tar.gz
   case "$KVER" in
     *-rc*) TB="$B/tarballs/linux-$KVER.tar.gz"
            URL="https://git.kernel.org/torvalds/t/linux-$KVER.tar.gz" ;;
@@ -113,7 +93,7 @@ for KVER in "${VERSIONS[@]}"; do
           | grep "❌" | head -5 | sed 's/^/     /'
         fail=$((fail+1))
       else
-        echo "  ✅ DTB 关键属性 16 条全绿"
+        echo "  ✅ DTB 关键属性全绿"
       fi
     else
       echo "  ❌ 板级 DTS 编译失败"
@@ -132,7 +112,7 @@ done
 echo
 echo "DRIFT_RESULT fail=$TOTAL_FAIL fuzz=$TOTAL_FUZZ"
 if [ "$TOTAL_FAIL" -gt 0 ]; then
-  echo "❌ 有补丁打不上了 —— 在出问题的那个版本上重新锚定 patches/ 里的源补丁（README「防漂与上游化」）"
+  echo "❌ 有补丁打不上了 —— 在出问题的那个版本上重新锚定 patches/ 里的源补丁（tools/make-patch-series.sh）"
   exit 1
 fi
 if [ "$TOTAL_FUZZ" -gt 0 ]; then

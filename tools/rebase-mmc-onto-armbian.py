@@ -1,26 +1,15 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""把 RK3528 的 HS400 tap 覆盖改到 Armbian 补丁栈之上。
-
-## 为什么需要单独一份
-
-我们的 mmc 补丁与 Armbian 自带的
-`rk3576-0013-mmc-sdhci-dwcmshc-rk3576-dll-tap-calibration` 改同一处：两边都在
-`int revision;` 后面往 struct 里插字段，也都重写 `dwcmshc_rk3568_set_clock()` 的
-HS400 分支。按纯净内核锚定的那份 diff 打在它之后，6 个 hunk 里 4 个失败。
-
-Armbian 那个补丁把 HS400 分支改成了二选一：
-
-    if (needs_hs400_dll_calibration)   rk3576：标定 tap + DLL 锁定值
-    else                                rk3588 等：原来的固定 tap
-
-RK3528 属于后者，但要用自己的 tap 值（6/6/3，来自 GPL-2.0 的 Rockchip BSP），
-所以只需让 else 分支支持覆盖，rk3576 与 rk3588 的行为一字不动。
-
-用脚本而不是手写 diff：每处改动都断言锚点唯一命中，Armbian 那个补丁将来变了会
-立刻失败，而不是产出一份打了一半的树。
+"""把 RK3528 的 HS400 tap 覆盖（patches/0002）改到 Armbian 补丁栈之上。
 
 用法: rebase-mmc-onto-armbian.py <sdhci-of-dwcmshc.c>
+
+Armbian 的 rk3576-0013-mmc-sdhci-dwcmshc-rk3576-dll-tap-calibration 与 0002 改同一处：都在
+`int revision;` 后往 struct 插字段、都重写 dwcmshc_rk3568_set_clock() 的 HS400 分支，纯净基线的
+diff 打不上。Armbian 把 HS400 分支改成了二选一（needs_hs400_dll_calibration：rk3576 标定 tap；
+else：rk3588 等固定 tap），RK3528 属于后者但要用自己的 tap 值（6/6/3，来自 GPL-2.0 的 Rockchip BSP），
+所以只让 else 分支支持覆盖，rk3576 与 rk3588 的行为不动。
+每处改动都断言锚点唯一命中：Armbian 那个补丁将来变了会立刻失败，而不是产出打了一半的树。
 """
 import sys
 

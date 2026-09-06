@@ -1,28 +1,25 @@
-# 拉来的上游输入：内核源码、上游仓库克隆。丢了跑 tools/fetch-inputs.sh 重来。
+# 上游输入（内核源码、rkbin、签名私钥），tools/fetch-inputs.sh 可重新获取
 /cache/
 
 # 构建产物
 /out/
 
+# 本地维护笔记，不入库
+/notes/
+
+# Armbian 运行时写进 userpatches 的模板；customize-image.sh 是本机私有内容
+/userpatches/config-example.conf
+/userpatches/customize-image.sh
+/userpatches/.tmp/
+/userpatches/overlay/local/
+
+# rkdeveloptool 在当前目录写的日志
+/log/
+
+/w132d-armbian-*.zip
 .DS_Store
 ._*
 *.swp
 *~
 __pycache__/
 *.pyc
-
-# macOS
-.DS_Store
-
-# Armbian 运行时会往 ${USERPATCHES_PATH} 里写自己的模板（我们把 userpatches 软链
-# 进它的克隆，于是落到本仓库里）。这些不是我们的东西。
-/userpatches/config-example.conf
-/userpatches/customize-image.sh
-/userpatches/.tmp/
-
-# rkdeveloptool 会在当前工作目录写自己的 log/（内容是它找不到 config.ini 的抱怨）
-/log/
-
-# 旧构建链的发布物（用户手放在根目录，含厂商 .so 等私有内容），只读不入库
-/w132d-armbian-*.zip
-/userpatches/overlay/local/

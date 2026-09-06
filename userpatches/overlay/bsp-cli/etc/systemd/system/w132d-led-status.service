@@ -2,7 +2,7 @@
 Description=W132D panel LEDs (network + fault)
 Documentation=file:/usr/local/bin/w132d-led-status
 After=multi-user.target network.target
-# 不设 Requires —— 灯挂了不该影响别的东西
+# 不设 Requires：灯挂了不该影响别的东西。
 
 [Service]
 Type=simple
@@ -11,7 +11,6 @@ Restart=always
 RestartSec=5
 Nice=19
 IOSchedulingClass=idle
-# 只需要写 /sys/class/leds 和读 /sys、调 systemctl
 ProtectHome=yes
 PrivateTmp=yes
 NoNewPrivileges=yes

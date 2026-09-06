@@ -1,3 +1,4 @@
+# armbian-hardware-optimization 无条件读这里的调速器设置；schedutil 是内核默认且没有 ondemand 那堆参数。
 ENABLE=false
 MIN_SPEED=408000
 MAX_SPEED=2016000

@@ -1,22 +1,11 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# 校验编出来的 rk3528-w132d.dtb 带着设备起得来所必需的那些属性。
-#
+# 校验编出来的 rk3528-w132d.dtb 带着设备起得来、功能齐全所必需的属性：DTS 掉一个属性，DTB 照样合法地编出来。
 # 用法: verify-dtb.sh <dtb>
 #
-# ## 为什么需要
-#
-# 板级 DTS 在本仓库自己手里（patches/rk3528-w132d.dts）。但改它的人不
-# 一定意识到某个属性掉了会怎样 —— DTB 照样编得出来、照样是合法的树，只是设备起不来，
-# 或者起来了缺一半功能。上游那份 DTS 就有现成的例子：我们导入的那个提交之后紧接着
-# 的一次改动把 eMMC 从 HS400 降回了 52MHz，纯 DTS 属性变更，编译毫无异常。
-#
-# 每一条都对应一个真实后果：
-#   - HS400 掉了                → eMMC 掉到 52MHz，整机 I/O 慢一个数量级
-#   - pwm-dutycycle-range 掉了  → 「请求高电压得到低电压」，2016MHz 直接挂死
-#   - tsadc 掉了                → 没有温控，也没有热降频
-#   - ir wakeup-source 冒出来   → 与软件待机冲突（本项目不做 s2ram）
-#   - 冒出 vop/hdmi 节点        → 显示路径漏进来了，而主线 7.2 没有对应驱动
+# 每条都对应一个真实后果：HS400 掉了 eMMC 降到 52MHz；pwm-dutycycle-range 掉了「请求高电压得到低电压」、
+# 2016MHz 直接挂死；tsadc 掉了没有热降频；VOP 挂上 IOMMU 会被自动门控卡总线；ir wakeup-source 冒出来
+# 与软件待机冲突（本项目不做 s2ram）。
 set -euo pipefail
 
 D="${1:?用法: $0 <dtb>}"

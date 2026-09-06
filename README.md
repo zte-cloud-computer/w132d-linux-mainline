@@ -26,7 +26,7 @@ Armbian（Debian trixie，minimal）+ 主线内核 7.2 + 主线 U-Boot，整盘�
 | H.264 / HEVC 硬解 | 可用 | 主线 RKVDEC |
 | 温控 / DVFS / 看门狗 / pstore | 可用 | |
 | 面板指示灯 · 软件待机 | 可用 | 红外/BLE 电源键 |
-| HDMI | 可用 | VOP2 + DesignWare HDMI + Innosilicon PHY，三个主线形态补丁；1080p60 出图（显示器与电视）、热插拔、音频（SAI3→HDMI，电视出声）、CEC 适配器已实测，2560x1440 有 PLL 表项但未实测。热插拔走 GPIO0_A2 镜像到 VO-GRF（SoC 设计如此）；VOP 不挂 IOMMU（见 docs/maintenance.md）。不做 HDCP、CVBS |
+| HDMI | 可用 | VOP2 + DesignWare HDMI + Innosilicon PHY（三个主线形态补丁）。1080p60、热插拔、音频、CEC 已实测；2560x1440 有 PLL 表项未实测。VOP 不挂 IOMMU。不做 HDCP、CVBS |
 
 ## 下载与刷写
 
@@ -38,6 +38,25 @@ Armbian（Debian trixie，minimal）+ 主线内核 7.2 + 主线 U-Boot，整盘�
 3. 首次开机需要几分钟（扩容 rootfs、生成 SSH 密钥）。
 
 刷写会抹掉整张 eMMC，包括出厂系统。救砖不依赖任何厂商内容：按住针孔上电即可回到 MaskROM 重刷。
+
+### 更新
+
+镜像自带本项目的 apt 源（[w132d.sources](userpatches/overlay/bsp-cli/etc/apt/sources.list.d/w132d.sources)，
+GitHub Release `apt` 的附件，元数据有签名，公钥在 bsp 里）。内核、DTB、U-Boot、bsp 都从这里升级，
+apt pin 保证不会被 apt.armbian.com 的同名内核顶掉：
+
+```bash
+apt update && apt full-upgrade && reboot
+```
+
+早期镜像（`v20260907` 之前）没有预埋源，补三个文件后同样可用：
+
+```bash
+b=https://raw.githubusercontent.com/zte-cloud-computer/w132d-linux-mainline/main/userpatches/overlay/bsp-cli
+curl -fsSL $b/etc/apt/sources.list.d/w132d.sources -o /etc/apt/sources.list.d/w132d.sources
+curl -fsSL $b/usr/share/keyrings/w132d-archive-keyring.gpg -o /usr/share/keyrings/w132d-archive-keyring.gpg
+curl -fsSL $b/etc/apt/preferences.d/w132d-kernel -o /etc/apt/preferences.d/w132d-kernel && sync
+```
 
 ## 从源码构建
 
@@ -56,8 +75,8 @@ docker run --rm --privileged -v /dev:/tmp/dev -v w132d-armbian:/build -v "$PWD":
 本地放了 `userpatches/customize-image.sh`（不入库，用于加入私有内容）时构建的是私有镜像，包名自动带 `-private`；
 加 `-e W132D_PUBLIC=yes` 可在同一台机器上出公开镜像。
 
-CI（[build-packages.yml](.github/workflows/build-packages.yml)）构建 deb 包（内核、U-Boot、bsp）并发 Release，
-设备上 `dpkg -i` 更新；细节见 [docs/maintenance.md](docs/maintenance.md)。
+CI（[build.yml](.github/workflows/build.yml)）：push 到 main 构建 deb 包（内核、U-Boot、bsp）并签名发到 apt 源
+（Release `apt`）；打 `v<日期>` 标签则再构建整盘镜像、校验、打成发布包并建正式 Release。
 
 ## 仓库结构
 
@@ -75,12 +94,11 @@ CI（[build-packages.yml](.github/workflows/build-packages.yml)）构建 deb 包
 │   ├── kernel/archive/rockchip64-7.2/  内核补丁（Armbian 形态，由 patches/ 生成）
 │   ├── u-boot/v2026.07/                U-Boot 补丁
 │   └── overlay/
-│       ├── bsp-cli/                    进 bsp 包：systemd unit、脚本、keymap、RF 配置、apt pin
+│       ├── bsp-cli/                    进 bsp 包：systemd unit、脚本、keymap、RF 配置、apt 源/公钥/pin
 │       └── rootfs-edits/               归属其他包、直接写进 rootfs 的整文件配置
 ├── flash/                              刷写脚本与说明，整目录进发布包
 ├── tools/                              构建、校验、出包脚本
-├── docs/                               引导链、上游化与维护备忘
-├── .github/workflows/                  CI：构建 deb 并发 Release
+├── .github/workflows/                  CI：deb 发 apt 源；打标签出镜像 Release
 ├── cache/                              上游源码与 rkbin（不入库，tools/fetch-inputs.sh 生成）
 └── out/                                构建产物（不入库）
 ```
@@ -102,9 +120,6 @@ CI（[build-packages.yml](.github/workflows/build-packages.yml)）构建 deb 包
 | pmdomain: rockchip: 整个 provider 延迟而不是丢掉延迟的域 | armbian/build | 待投 |
 | `rockchip_dnl_key_pressed()` 按 compatible 匹配 ADC | U-Boot | 待投 |
 | Marlin3E 三天线 RF 配置 | armbian/firmware | 待投 |
-
-更多：[docs/boot-chain.md](docs/boot-chain.md)（引导链、针孔、MAC、BL31 缺陷的绕过）、
-[docs/maintenance.md](docs/maintenance.md)（补丁维护、防漂、CI、已知坑）。
 
 ## 许可
 

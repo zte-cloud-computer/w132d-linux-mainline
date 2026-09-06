@@ -1,17 +1,12 @@
 #!/bin/bash
 # SPDX-License-Identifier: MIT
-# 开启一次蓝牙遥控配对窗口（复刻原厂 persist.sys.ch.bt.pair.timeout=600000）。
-#
-# 平时桥接「已绑定就不扫描、只连」——与原厂 "has device bonded, not connect"
-# 一致。要（重新）配对必须显式开窗口：本命令会让桥接解绑旧记录并开始扫描，
-# 因为遥控器进入配对模式时会清掉自己那侧的密钥，本地不清就只会
-# Encryption Change: PIN or Key Missing。
-#
+# 开启一次蓝牙遥控配对窗口（对应原厂 persist.sys.ch.bt.pair.timeout=600000）。
 # 用法: w132d-ble-pair [--force] [分钟数，默认 10]
 #
-# 默认拒绝破坏一个已经有 LTK 的绑定。确实要换遥控器或重建密钥时必须显式
-# 加 --force；重复执行一个尚未结束的配对会话只重新附着日志，不重写会话，
-# 避免旧 Pair() 回调误删新窗口，也避免刚配好又立刻被第二次命令解绑。
+# 桥接平时「已绑定就不扫描、只连」；本命令让桥接解绑旧记录并开始扫描——遥控器进入配对模式
+# 会清掉自己那侧的密钥，本地不清就只会 Encryption Change: PIN or Key Missing。
+# 已有 LTK 的绑定默认不动，要重建必须 --force；重复执行只重新附着日志、不重写会话，
+# 避免旧 Pair() 回调误删新窗口或刚配好又被第二次命令解绑。
 set -euo pipefail
 
 PAIR_FLAG=/run/w132d-ble-pair-until
@@ -41,9 +36,7 @@ if ! [[ "$MIN" =~ ^[0-9]+$ ]] || (( MIN < 1 || MIN > 60 )); then
   exit 2
 fi
 
-# Serialize only the short session update.  The journal follower must not keep
-# the lock, otherwise a later invocation would appear to hang behind the first
-# terminal even though the pairing session is already active.
+# 只对写会话文件那一小段加锁；跟日志时必须放锁，否则第二次执行会卡在第一个终端后面。
 exec 9>"$PAIR_LOCK"
 flock -x 9
 
