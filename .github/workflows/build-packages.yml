@@ -49,10 +49,10 @@ jobs:
       contents: write   # 发 Release 要写权限
     steps:
       - name: 取本仓库
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 取 armbian/build
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: armbian/build
           ref: ${{ inputs.armbian_ref || 'main' }}
@@ -109,7 +109,7 @@ jobs:
           bash tools/verify-debs.sh out/debs
 
       - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: w132d-debs-${{ steps.ver.outputs.revision }}
           path: out/debs/
@@ -118,7 +118,7 @@ jobs:
 
       - name: 发布 Release
         if: github.event_name == 'schedule' || inputs.publish == true
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: pkg-${{ steps.ver.outputs.revision }}
           name: 内核与 bsp 包 ${{ steps.ver.outputs.revision }}
