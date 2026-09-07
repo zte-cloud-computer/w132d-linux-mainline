@@ -25,7 +25,8 @@ def main():
     if len(sys.argv) != 2:
         raise SystemExit(f"用法: {sys.argv[0]} <sdhci-of-dwcmshc.c>")
     path = sys.argv[1]
-    s = open(path, encoding="utf-8").read()
+    with open(path, encoding="utf-8") as f:
+        s = f.read()
 
     # 1) 三个 tap 覆盖字段，插在 Armbian 那个字段之后（而不是抢它的位置）
     s = sub(s, """	bool needs_hs400_dll_calibration;
@@ -73,7 +74,8 @@ def main():
 			 DLL_STRBIN_TAPNUM_DEFAULT;""",
         "STRBIN 支持 tap 覆盖")
 
-    open(path, "w", encoding="utf-8").write(s)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(s)
     print("  ✅ mmc：三处改动已叠到 Armbian 补丁栈之上")
 
 
