@@ -1,8 +1,8 @@
 # 在 GitHub Actions 上用 armbian/build 构建本板的 deb 包（内核、U-Boot、bsp）与整盘镜像。
 #
 # push 到 main：出 deb，签名后整体替换到 Release `apt` 的附件（设备的 apt 源）。
-# 打 v* 标签：再出整盘镜像，校验后连刷写脚本打成发布包，建正式 Release；deb 同样发到 apt 源。
-# 手动触发：勾 publish 才发 apt。
+# 打 v* 标签：再出整盘镜像与 fnOS 镜像，校验后连刷写脚本打成发布包，建正式 Release；deb 同样发到 apt 源。
+# 手动触发：勾 publish 才发 apt；勾 build_fnos 单独构建 fnOS 镜像。
 # 版本号追加 日期.运行序号 才能让 apt 看到升级（Armbian 的 VERSION 是固定串）。
 name: build
 
@@ -14,6 +14,10 @@ on:
         default: main
       publish:
         description: "发到 apt 源（Release apt）"
+        type: boolean
+        default: false
+      build_fnos:
+        description: "构建 fnOS 镜像"
         type: boolean
         default: false
   push:
@@ -37,6 +41,9 @@ jobs:
     timeout-minutes: 300
     permissions:
       contents: write   # 更新 apt Release 的附件要写权限
+    outputs:
+      revision: ${{ steps.ver.outputs.revision }}
+      debs_artifact: w132d-debs-${{ steps.ver.outputs.revision }}
     steps:
       - name: 取本仓库
         uses: actions/checkout@v7
@@ -187,3 +194,118 @@ jobs:
             case "$keep" in *" $a "*) ;; *) gh release delete-asset apt "$a" -R "$REPO" -y ;; esac
           done
           gh release edit apt -R "$REPO" --prerelease --notes "设备上的 /etc/apt/sources.list.d/w132d.sources 指向这里，不要手动改附件；设备上 \`apt update && apt full-upgrade\` 即可。当前包版本 ${{ steps.ver.outputs.revision }}（armbian/build \`${{ inputs.armbian_ref || 'main' }}\`，内核 linux-7.2.y HEAD，$(date -u +%FT%TZ)）。手动安装顺序：dtb → image → bsp。"
+
+  fnos:
+    # 用 ophub/fnnas 把官方 fnOS Rockchip ARM64 镜像重新打包：替换内核与 DTB 为本项目构建的版本。
+    # 打 v* 标签或手动勾选 build_fnos 时才跑。
+    needs: packages
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.build_fnos == true
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    permissions:
+      contents: write
+    steps:
+      - name: 取本仓库
+        uses: actions/checkout@v7
+
+      - name: 下载内核 deb
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ needs.packages.outputs.debs_artifact }}
+          path: debs/
+
+      - name: deb 转 ophub 内核格式
+        id: ophub_kernel
+        run: |
+          bash tools/deb-to-ophub-kernel.sh debs/ ophub-kernel/ rockchip
+          kver=$(ls ophub-kernel/boot-rockchip-*.tar.gz | sed 's|.*boot-rockchip-||;s|\.tar\.gz||')
+          echo "kernel_version=$kver" >> "$GITHUB_OUTPUT"
+          echo "内核版本: $kver"
+
+      - name: 取 ophub/fnnas
+        uses: actions/checkout@v7
+        with:
+          repository: ophub/fnnas
+          ref: main
+          path: fnnas-build
+
+      - name: 注入 W132D 板级配置
+        # ophub/fnnas 用 model_database.conf 映射板名到 DTB/U-Boot/平台。
+        # W132D 不在上游列表里，追加一行即可；格式与已有 RK3528 条目一致。
+        run: |
+          conf="fnnas-build/make-fnnas/fnnas-files/common-files/etc/model_database.conf"
+          if ! grep -q 'w132d' "$conf"; then
+            echo '# ZTE Cloud Computer W132D (added by w132d-linux-mainline CI)' >> "$conf"
+            echo 'r790    :ZTE-W132D                                     :rk3528   :rk3528-w132d.dtb                         :NA                           :u-boot.itb                          :idbloader.img                   :2GB-LPDDR4,32G-eMMC,WiFi,1Gb-Nic           :rockchip/all          :rockchip    :rk3528       :extlinux.conf   :w132d-linux-mainline                                 :w132d                     :yes' >> "$conf"
+            echo "✅ 已追加 W132D 到 model_database.conf"
+            tail -3 "$conf"
+          fi
+
+      - name: 放置自定义内核
+        # ophub/fnnas 的 renas 会在 make-fnnas/kernel/<kver>/<kver>-<platform>/ 下找内核文件。
+        # 把转换好的 tar.gz 放到正确位置，renas 就会跳过下载直接使用。
+        run: |
+          kver="${{ steps.ophub_kernel.outputs.kernel_version }}"
+          dest="fnnas-build/make-fnnas/kernel/${kver}/${kver}-rockchip"
+          mkdir -p "$dest"
+          cp ophub-kernel/*.tar.gz ophub-kernel/sha256sums "$dest/"
+          echo "✅ 内核文件已放置到 $dest"
+          ls -la "$dest/"
+
+      - name: 安装构建依赖
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y $(curl -fsSL https://ophub.org/ubuntu2604-make-fnnas-depends)
+
+      - name: 下载 fnOS 官方 Rockchip 基础镜像
+        id: fnos_base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: fnnas-build
+        run: |
+          mkdir -p fnnas-arm64
+          # 从 ophub/fnnas 的 fnnas_base_image release 下载最新的 Rockchip 镜像
+          latest=$(gh release view fnnas_base_image -R ophub/fnnas --json assets -q \
+            '[.assets[] | select(.name | test("rockchip.*\.img\.xz"))] | sort_by(.updatedAt) | reverse | .[0].name' \
+            2>/dev/null || true)
+          if [ -n "$latest" ] && [ "$latest" != "null" ]; then
+            echo "下载: $latest"
+            gh release download fnnas_base_image -R ophub/fnnas -p "$latest" -D fnnas-arm64 --clobber
+          else
+            echo "❌ 找不到 fnOS Rockchip 基础镜像"; exit 1
+          fi
+          echo "status=success" >> "$GITHUB_OUTPUT"
+
+      - name: 构建 fnOS 镜像
+        if: steps.fnos_base.outputs.status == 'success'
+        working-directory: fnnas-build
+        run: |
+          sudo ./renas \
+            -b w132d \
+            -k ${{ steps.ophub_kernel.outputs.kernel_version }} \
+            -a false \
+            -n w132d
+
+      - name: 上传 fnOS 镜像
+        uses: actions/upload-artifact@v7
+        with:
+          name: w132d-fnos-${{ needs.packages.outputs.revision }}
+          path: fnnas-build/fnnas/out/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 发布 fnOS 镜像
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=${GITHUB_REF_NAME}
+          # fnOS 镜像附加到已有的 Release（packages job 已创建）
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" fnnas-build/fnnas/out/*.img.gz --clobber || true
+            gh release upload "$tag" fnnas-build/fnnas/out/*.img.xz --clobber || true
+          else
+            echo "⚠️ Release $tag 不存在，跳过 fnOS 镜像发布（Armbian 镜像 Release 应由 packages job 先创建）"
+          fi
