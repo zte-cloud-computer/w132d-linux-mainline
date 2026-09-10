@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # 把 Armbian 构建出的内核 deb 包转成 ophub/fnnas 的内核格式。
 # ophub/fnnas 的 renas 脚本要求四个 tar.gz：
-#   boot-<platform>-<kver>.tar.gz     vmlinuz + config + System.map
+#   boot-<platform>-<kver>.tar.gz     vmlinuz + uInitrd + config + System.map
 #   dtb-<platform>-<kver>.tar.gz      所有 dtb 文件
 #   modules-<platform>-<kver>.tar.gz  /lib/modules/<kver>/
 #   header-<platform>-<kver>.tar.gz   内核头文件
@@ -47,16 +47,29 @@ echo "  内核版本: $KVER"
 mkdir -p "$OUT"
 
 step "2/5 打 boot tar.gz"
-# ophub 的 boot tar.gz 包含 vmlinuz-<kver>、config-<kver>、System.map-<kver>
+# ophub 的 boot tar.gz 包含 vmlinuz-<kver>、uInitrd-<kver>、config-<kver>、System.map-<kver>
 BOOT_DIR="$TMP/boot-pack"
 mkdir -p "$BOOT_DIR"
-# Armbian 的 linux-image 把内核放在 /boot/vmlinuz-<kver>
+# Armbian 的 linux-image 把内核与 initramfs 放在 /boot。
 for f in vmlinuz config System.map; do
   src=$(find "$TMP/img/boot" -maxdepth 1 -name "${f}-*" -type f 2>/dev/null | head -1)
   [ -f "$src" ] && cp "$src" "$BOOT_DIR/"
 done
 # 确保至少有 vmlinuz
 ls "$BOOT_DIR"/vmlinuz-* >/dev/null 2>&1 || die "boot 目录里没有 vmlinuz"
+
+# renas 的 Rockchip 引导配置固定引用 /boot/uInitrd，因此不能只打包 Linux 的 initrd.img。
+INITRD_SRC=$(find "$TMP/img/boot" -maxdepth 1 \( -name "uInitrd-*" -o -name "initrd.img-*" \) -type f | head -1)
+[ -f "$INITRD_SRC" ] || die "boot 目录里没有 initrd.img 或 uInitrd"
+INITRD_NAME=$(basename "$INITRD_SRC")
+if [[ "$INITRD_NAME" == uInitrd-* ]]; then
+  cp "$INITRD_SRC" "$BOOT_DIR/uInitrd-$KVER"
+else
+  command -v mkimage >/dev/null 2>&1 || die "缺少 mkimage，请安装 u-boot-tools"
+  mkimage -A arm64 -O linux -T ramdisk -C gzip \
+    -n "W132D initramfs $KVER" -d "$INITRD_SRC" "$BOOT_DIR/uInitrd-$KVER" >/dev/null
+fi
+[ -s "$BOOT_DIR/uInitrd-$KVER" ] || die "生成 uInitrd 失败"
 (cd "$BOOT_DIR" && tar -czf "$OUT/boot-${PLATFORM}-${KVER}.tar.gz" ./)
 echo "  ✅ boot-${PLATFORM}-${KVER}.tar.gz"
 

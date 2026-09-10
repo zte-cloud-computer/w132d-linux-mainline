@@ -214,6 +214,13 @@ jobs:
           name: ${{ needs.packages.outputs.debs_artifact }}
           path: debs/
 
+      - name: 安装构建依赖
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y u-boot-tools xz-utils $(curl -fsSL https://ophub.org/ubuntu2604-make-fnnas-depends)
+
       - name: deb 转 ophub 内核格式
         id: ophub_kernel
         run: |
@@ -228,6 +235,24 @@ jobs:
           repository: ophub/fnnas
           ref: main
           path: fnnas-build
+
+      - name: 注入 W132D U-Boot
+        # renas 会从 make-fnnas/u-boot/rockchip/w132d 写入新镜像的启动区域。
+        # U-Boot deb 已由 packages job 上传，这里必须显式提取，不能只在 model_database.conf 中声明文件名。
+        run: |
+          uboot_deb=$(find debs/ -maxdepth 1 -type f -name 'linux-u-boot-w132d-edge_*.deb' -print -quit)
+          [ -n "$uboot_deb" ] || { echo "❌ 找不到 W132D U-Boot deb"; exit 1; }
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          dpkg-deb -x "$uboot_deb" "$tmp"
+          src="$tmp/usr/lib/linux-u-boot-edge-w132d"
+          dest="fnnas-build/make-fnnas/u-boot/rockchip/w132d"
+          mkdir -p "$dest"
+          for f in idbloader.img u-boot.itb; do
+            [ -s "$src/$f" ] || { echo "❌ U-Boot deb 缺少 $f"; exit 1; }
+            install -D -m 0644 "$src/$f" "$dest/$f"
+          done
+          ls -l "$dest/"
 
       - name: 注入 W132D 板级配置
         # ophub/fnnas 用 model_database.conf 映射板名到 DTB/U-Boot/平台。
@@ -252,13 +277,6 @@ jobs:
           echo "✅ 内核文件已放置到 $dest"
           ls -la "$dest/"
 
-      - name: 安装构建依赖
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          sudo apt-get -qq update
-          sudo apt-get -qq install -y $(curl -fsSL https://ophub.org/ubuntu2604-make-fnnas-depends)
-
       - name: 下载 fnOS 官方 Rockchip 基础镜像
         id: fnos_base
         env:
@@ -273,6 +291,10 @@ jobs:
           if [ -n "$latest" ] && [ "$latest" != "null" ]; then
             echo "下载: $latest"
             gh release download fnnas_base_image -R ophub/fnnas -p "$latest" -D fnnas-arm64 --clobber
+            base="fnnas-arm64/$latest"
+            [ -s "$base" ] || { echo "❌ 基础镜像下载为空: $base"; exit 1; }
+            unxz -f "$base"
+            [ -s "${base%.xz}" ] || { echo "❌ 解压后没有 .img: ${base%.xz}"; exit 1; }
           else
             echo "❌ 找不到 fnOS Rockchip 基础镜像"; exit 1
           fi
@@ -304,8 +326,10 @@ jobs:
           tag=${GITHUB_REF_NAME}
           # fnOS 镜像附加到已有的 Release（packages job 已创建）
           if gh release view "$tag" > /dev/null 2>&1; then
-            gh release upload "$tag" fnnas-build/fnnas/out/*.img.gz --clobber || true
-            gh release upload "$tag" fnnas-build/fnnas/out/*.img.xz --clobber || true
+            shopt -s nullglob
+            images=(fnnas-build/fnnas/out/*.img.gz)
+            [ "${#images[@]}" -gt 0 ] || { echo "❌ fnOS 没有生成 .img.gz"; exit 1; }
+            gh release upload "$tag" "${images[@]}" --clobber
           else
             echo "⚠️ Release $tag 不存在，跳过 fnOS 镜像发布（Armbian 镜像 Release 应由 packages job 先创建）"
           fi
