@@ -1,8 +1,8 @@
 # 在 GitHub Actions 上用 armbian/build 构建本板的 deb 包（内核、U-Boot、bsp）与整盘镜像。
 #
 # push 到 main：出 deb，签名后整体替换到 Release `apt` 的附件（设备的 apt 源）。
-# 打 v* 标签：再出整盘镜像，校验后连刷写脚本打成发布包，建正式 Release；deb 同样发到 apt 源。
-# 手动触发：勾 publish 才发 apt。
+# 打 v* 标签：再出整盘镜像与 fnOS 镜像，校验后连刷写脚本打成发布包，建正式 Release；deb 同样发到 apt 源。
+# 手动触发：勾 publish 才发 apt；勾 build_fnos 构建 fnOS 镜像，可指定历史 run 复用 deb、跳过 packages。
 # 版本号追加 日期.运行序号 才能让 apt 看到升级（Armbian 的 VERSION 是固定串）。
 name: build
 
@@ -16,6 +16,14 @@ on:
         description: "发到 apt 源（Release apt）"
         type: boolean
         default: false
+      build_fnos:
+        description: "构建 fnOS 镜像"
+        type: boolean
+        default: false
+      reuse_debs_run_id:
+        description: "复用历史 run 的 w132d-debs artifact（留空则重新构建 packages）"
+        type: string
+        default: ""
   push:
     branches: [main]
     tags: ["v*"]
@@ -33,10 +41,14 @@ jobs:
   packages:
     # 公共仓库可免费用 GitHub 托管的 arm64 runner，本机架构编译不用交叉工具链。
     # 私有仓库没有这个 label，换成 ubuntu-24.04（x86，Armbian 自动交叉编译）即可。
+    if: github.event_name != 'workflow_dispatch' || inputs.reuse_debs_run_id == ''
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 300
     permissions:
       contents: write   # 更新 apt Release 的附件要写权限
+    outputs:
+      revision: ${{ steps.ver.outputs.revision }}
+      debs_artifact: w132d-debs-${{ steps.ver.outputs.revision }}
     steps:
       - name: 取本仓库
         uses: actions/checkout@v7
@@ -187,3 +199,256 @@ jobs:
             case "$keep" in *" $a "*) ;; *) gh release delete-asset apt "$a" -R "$REPO" -y ;; esac
           done
           gh release edit apt -R "$REPO" --prerelease --notes "设备上的 /etc/apt/sources.list.d/w132d.sources 指向这里，不要手动改附件；设备上 \`apt update && apt full-upgrade\` 即可。当前包版本 ${{ steps.ver.outputs.revision }}（armbian/build \`${{ inputs.armbian_ref || 'main' }}\`，内核 linux-7.2.y HEAD，$(date -u +%FT%TZ)）。手动安装顺序：dtb → image → bsp。"
+
+  fnos:
+    # 用 ophub/fnnas 把官方 fnOS Rockchip ARM64 镜像重新打包：替换内核与 DTB 为本项目构建的版本。
+    # 打 v* 标签或手动勾选 build_fnos 时才跑。
+    needs: packages
+    if: >-
+      always() &&
+      (startsWith(github.ref, 'refs/tags/v') || inputs.build_fnos == true) &&
+      (needs.packages.result == 'success' || inputs.reuse_debs_run_id != '')
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: 取本仓库
+        uses: actions/checkout@v7
+
+      - name: 下载本次构建的 deb
+        if: inputs.reuse_debs_run_id == ''
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ needs.packages.outputs.debs_artifact }}
+          path: debs/
+
+      - name: 下载历史 run 的 deb
+        if: inputs.reuse_debs_run_id != ''
+        uses: actions/download-artifact@v7
+        with:
+          pattern: w132d-debs-*
+          path: debs/
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.reuse_debs_run_id }}
+
+      - name: 取 ophub/fnnas
+        uses: actions/checkout@v7
+        with:
+          repository: ophub/fnnas
+          # rekernel/renas 是本 job 的构建接口；固定版本避免上游 main 漂移导致无人审核的发布变化。
+          ref: 2c34125dbc681dc24626399f5e74ca465309fc85
+          path: fnnas-build
+
+      - name: 安装构建依赖
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y $(< fnnas-build/make-fnnas/scripts/ubuntu2404-make-fnnas-depends)
+
+      - name: 校验并注入 W132D deb
+        id: kernel_input
+        # rekernel 在 fnOS 根文件系统中安装这些 deb，并由 update-initramfs 生成匹配的 uInitrd。
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          exact_one() {
+            local pattern="$1"
+            local files=(debs/$pattern)
+            if [ "${#files[@]}" -ne 1 ]; then
+              echo "❌ $pattern 应恰好匹配一个文件，实际为 ${#files[@]} 个" >&2
+              printf '  %s\n' "${files[@]}" >&2
+              return 1
+            fi
+            printf '%s\n' "${files[0]}"
+          }
+
+          image_deb=$(exact_one 'linux-image-edge-rockchip64_*.deb')
+          dtb_deb=$(exact_one 'linux-dtb-edge-rockchip64_*.deb')
+          headers_deb=$(exact_one 'linux-headers-edge-rockchip64_*.deb')
+          uboot_deb=$(exact_one 'linux-u-boot-w132d-edge_*.deb')
+
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          dpkg-deb -x "$image_deb" "$tmp/image"
+          mapfile -t module_dirs < <(find "$tmp/image/lib/modules" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+          [ "${#module_dirs[@]}" -eq 1 ] || {
+            echo "❌ linux-image 中的内核模块目录应恰好为一个，实际为 ${#module_dirs[@]} 个"
+            exit 1
+          }
+          kernel_release="${module_dirs[0]}"
+          kernel_version="${kernel_release%%-*}"
+          [ -n "$kernel_version" ] || { echo "❌ 无法确定内核版本"; exit 1; }
+          package_revision=$(dpkg-deb -f "$image_deb" Version)
+          [ -n "$package_revision" ] || { echo "❌ 无法确定 deb 版本"; exit 1; }
+          for deb in "$dtb_deb" "$headers_deb" "$uboot_deb"; do
+            [ "$(dpkg-deb -f "$deb" Version)" = "$package_revision" ] || {
+              echo "❌ $(basename "$deb") 与 linux-image 版本不一致"
+              exit 1
+            }
+          done
+
+          deb_dest="fnnas-build/fnnas-debs/rockchip"
+          mkdir -p "$deb_dest"
+          install -m 0644 "$image_deb" "$dtb_deb" "$headers_deb" "$deb_dest/"
+
+          dpkg-deb -x "$uboot_deb" "$tmp"
+          src="$tmp/usr/lib/linux-u-boot-edge-w132d"
+          dest="fnnas-build/make-fnnas/u-boot/rockchip/w132d"
+          mkdir -p "$dest"
+          for f in idbloader.img u-boot.itb; do
+            [ -s "$src/$f" ] || { echo "❌ U-Boot deb 缺少 $f"; exit 1; }
+            install -D -m 0644 "$src/$f" "$dest/$f"
+          done
+          echo "kernel_release=$kernel_release" >> "$GITHUB_OUTPUT"
+          echo "kernel_version=$kernel_version" >> "$GITHUB_OUTPUT"
+          echo "package_revision=$package_revision" >> "$GITHUB_OUTPUT"
+          echo "内核版本: $kernel_release（renas 版本目录: $kernel_version）"
+          ls -l "$deb_dest/"
+          ls -l "$dest/"
+
+      - name: 注入 W132D 板级配置
+        # ophub/fnnas 用 model_database.conf 映射板名到 DTB/U-Boot/平台。
+        # W132D 不在上游列表里，追加一行即可；格式与已有 RK3528 条目一致。
+        run: |
+          conf="fnnas-build/make-fnnas/fnnas-files/common-files/etc/model_database.conf"
+          if ! grep -Eq ':w132d[[:space:]]*:' "$conf"; then
+            echo '# ZTE Cloud Computer W132D (added by w132d-linux-mainline CI)' >> "$conf"
+            echo 'r790    :ZTE-W132D                                     :rk3528   :rk3528-w132d.dtb                         :NA                           :u-boot.itb                          :idbloader.img                   :2GB-LPDDR4,32G-eMMC,WiFi,1Gb-Nic           :rockchip/all          :rockchip    :rk3528       :extlinux.conf   :w132d-linux-mainline                                 :w132d                     :yes' >> "$conf"
+            echo "✅ 已追加 W132D 到 model_database.conf"
+            tail -3 "$conf"
+          else
+            echo "W132D 已存在于上游 model_database.conf，跳过追加："
+            grep -nE ':w132d[[:space:]]*:' "$conf"
+          fi
+
+      - name: 注入 W132D apt 源与内核锁
+        # fnOS 不安装 Armbian BSP 包，必须把源、签名公钥和 apt pin 直接放进 renas 的 common-files。
+        # renas 会把 common-files 原样复制到目标 rootfs。
+        run: |
+          set -euo pipefail
+          src="userpatches/overlay/bsp-cli"
+          root="fnnas-build/make-fnnas/fnnas-files/common-files"
+          install -D -m 0644 "$src/etc/apt/sources.list.d/w132d.sources" \
+            "$root/etc/apt/sources.list.d/w132d.sources"
+          install -D -m 0644 "$src/etc/apt/preferences.d/w132d-kernel" \
+            "$root/etc/apt/preferences.d/w132d-kernel"
+          install -D -m 0644 "$src/usr/share/keyrings/w132d-archive-keyring.gpg" \
+            "$root/usr/share/keyrings/w132d-archive-keyring.gpg"
+          grep -q 'releases/download/apt' "$root/etc/apt/sources.list.d/w132d.sources"
+          grep -q '^Package: linux-image-\*' "$root/etc/apt/preferences.d/w132d-kernel"
+          grep -q '^Pin: release o=W132D$' "$root/etc/apt/preferences.d/w132d-kernel"
+          test -s "$root/usr/share/keyrings/w132d-archive-keyring.gpg"
+          echo "✅ W132D apt 源、签名公钥和内核锁已加入 fnOS rootfs"
+
+      - name: 下载 fnOS 官方 Rockchip 基础镜像
+        id: fnos_base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: fnnas-build
+        run: |
+          set -euo pipefail
+          mkdir -p fnnas-arm64
+          mapfile -t assets < <(gh release view fnnas_base_image -R ophub/fnnas --json assets -q \
+            '.assets[].name | select(contains("rockchip_1253") and endswith(".img.xz"))')
+          [ "${#assets[@]}" -eq 1 ] || {
+            echo "❌ rockchip_1253 基础镜像应恰好为一个，实际为 ${#assets[@]} 个"
+            printf '  %s\n' "${assets[@]}"
+            exit 1
+          }
+          base="fnnas-arm64/${assets[0]}"
+          echo "下载: ${assets[0]}"
+          gh release download fnnas_base_image -R ophub/fnnas -p "${assets[0]}" -D fnnas-arm64 --clobber
+          [ -s "$base" ] || { echo "❌ 基础镜像下载为空: $base"; exit 1; }
+          unxz -f "$base"
+          [ -s "${base%.xz}" ] || { echo "❌ 解压后没有 .img: ${base%.xz}"; exit 1; }
+          echo "status=success" >> "$GITHUB_OUTPUT"
+
+      - name: 在 fnOS 中生成自定义内核包
+        working-directory: fnnas-build
+        run: |
+          set -euo pipefail
+          expected='[[ "${debs_install}" =~ ^(amlogic|allwinner|rockchip)$ ]] && download_debs'
+          [ "$(sed -n '540p' rekernel)" = "$expected" ] || {
+            echo "❌ 固定版本的 rekernel 下载入口与预期不符"
+            exit 1
+          }
+          # -e rockchip 负责安装已暂存的 W132D deb；禁用其默认的上游官方 deb 下载。
+          sed -i '540s|^|# Local W132D debs are already staged; |' rekernel
+          sudo ./rekernel -e rockchip -t false
+
+      - name: 校验并放置自定义内核
+        working-directory: fnnas-build
+        env:
+          KERNEL_RELEASE: ${{ steps.kernel_input.outputs.kernel_release }}
+          KERNEL_VERSION: ${{ steps.kernel_input.outputs.kernel_version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          bundles=(fnnas/out/*-rockchip.tar.gz)
+          [ "${#bundles[@]}" -eq 1 ] || {
+            echo "❌ rekernel 产物应恰好为一个，实际为 ${#bundles[@]} 个"
+            printf '  %s\n' "${bundles[@]}"
+            exit 1
+          }
+
+          dest="make-fnnas/kernel/$KERNEL_VERSION"
+          kernel_dir="$dest/$KERNEL_VERSION-rockchip"
+          mkdir -p "$dest"
+          tar -xzf "${bundles[0]}" -C "$dest"
+          [ -d "$kernel_dir" ] || { echo "❌ 内核包目录不符合预期: $kernel_dir"; exit 1; }
+          for part in boot dtb modules header; do
+            file="$kernel_dir/$part-rockchip-$KERNEL_RELEASE.tar.gz"
+            [ -s "$file" ] || { echo "❌ 缺少内核归档: $file"; exit 1; }
+          done
+          (cd "$kernel_dir" && sha256sum -c sha256sums)
+
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          tar -xzf "$kernel_dir/boot-rockchip-$KERNEL_RELEASE.tar.gz" -C "$tmp"
+          [ -s "$tmp/uInitrd-$KERNEL_RELEASE" ] || { echo "❌ boot 归档缺少 uInitrd"; exit 1; }
+          mkimage -l "$tmp/uInitrd-$KERNEL_RELEASE"
+          sudo rm -f "${bundles[0]}"
+          echo "✅ 自定义内核已放置到 $kernel_dir"
+          ls -la "$kernel_dir/"
+
+      - name: 构建 fnOS 镜像
+        if: steps.fnos_base.outputs.status == 'success'
+        working-directory: fnnas-build
+        run: |
+          # 关闭自动选取上游内核，强制使用上一步生成并校验过的本项目内核。
+          sudo ./renas \
+            -b w132d \
+            -k ${{ steps.kernel_input.outputs.kernel_version }} \
+            -a false \
+            -n w132d
+
+      - name: 上传 fnOS 镜像
+        uses: actions/upload-artifact@v7
+        with:
+          name: w132d-fnos-${{ steps.kernel_input.outputs.package_revision }}
+          path: fnnas-build/fnnas/out/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 发布 fnOS 镜像
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=${GITHUB_REF_NAME}
+          # fnOS 镜像附加到已有的 Release（packages job 已创建）
+          if gh release view "$tag" > /dev/null 2>&1; then
+            shopt -s nullglob
+            images=(fnnas-build/fnnas/out/*.img.gz)
+            [ "${#images[@]}" -gt 0 ] || { echo "❌ fnOS 没有生成 .img.gz"; exit 1; }
+            gh release upload "$tag" "${images[@]}" --clobber
+          else
+            echo "❌ Release $tag 不存在（Armbian 镜像 Release 应由 packages job 先创建）"
+            exit 1
+          fi
