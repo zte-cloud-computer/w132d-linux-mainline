@@ -201,7 +201,7 @@ jobs:
     needs: packages
     if: startsWith(github.ref, 'refs/tags/v') || inputs.build_fnos == true
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 120
+    timeout-minutes: 240
     permissions:
       contents: write
     steps:
@@ -214,36 +214,60 @@ jobs:
           name: ${{ needs.packages.outputs.debs_artifact }}
           path: debs/
 
+      - name: 取 ophub/fnnas
+        uses: actions/checkout@v7
+        with:
+          repository: ophub/fnnas
+          # rekernel/renas 是本 job 的构建接口；固定版本避免上游 main 漂移导致无人审核的发布变化。
+          ref: 2c34125dbc681dc24626399f5e74ca465309fc85
+          path: fnnas-build
+
       - name: 安装构建依赖
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get -qq update
-          sudo apt-get -qq install -y u-boot-tools xz-utils $(curl -fsSL https://ophub.org/ubuntu2604-make-fnnas-depends)
+          sudo apt-get -qq install -y $(< fnnas-build/make-fnnas/scripts/ubuntu2404-make-fnnas-depends)
 
-      - name: deb 转 ophub 内核格式
-        id: ophub_kernel
+      - name: 校验并注入 W132D deb
+        id: kernel_input
+        # rekernel 在 fnOS 根文件系统中安装这些 deb，并由 update-initramfs 生成匹配的 uInitrd。
         run: |
-          bash tools/deb-to-ophub-kernel.sh debs/ ophub-kernel/ rockchip
-          kver=$(ls ophub-kernel/boot-rockchip-*.tar.gz | sed 's|.*boot-rockchip-||;s|\.tar\.gz||')
-          echo "kernel_version=$kver" >> "$GITHUB_OUTPUT"
-          echo "内核版本: $kver"
+          set -euo pipefail
+          shopt -s nullglob
 
-      - name: 取 ophub/fnnas
-        uses: actions/checkout@v7
-        with:
-          repository: ophub/fnnas
-          ref: main
-          path: fnnas-build
+          exact_one() {
+            local pattern="$1"
+            local files=(debs/$pattern)
+            if [ "${#files[@]}" -ne 1 ]; then
+              echo "❌ $pattern 应恰好匹配一个文件，实际为 ${#files[@]} 个" >&2
+              printf '  %s\n' "${files[@]}" >&2
+              return 1
+            fi
+            printf '%s\n' "${files[0]}"
+          }
 
-      - name: 注入 W132D U-Boot
-        # renas 会从 make-fnnas/u-boot/rockchip/w132d 写入新镜像的启动区域。
-        # U-Boot deb 已由 packages job 上传，这里必须显式提取，不能只在 model_database.conf 中声明文件名。
-        run: |
-          uboot_deb=$(find debs/ -maxdepth 1 -type f -name 'linux-u-boot-w132d-edge_*.deb' -print -quit)
-          [ -n "$uboot_deb" ] || { echo "❌ 找不到 W132D U-Boot deb"; exit 1; }
+          image_deb=$(exact_one 'linux-image-edge-rockchip64_*.deb')
+          dtb_deb=$(exact_one 'linux-dtb-edge-rockchip64_*.deb')
+          headers_deb=$(exact_one 'linux-headers-edge-rockchip64_*.deb')
+          uboot_deb=$(exact_one 'linux-u-boot-w132d-edge_*.deb')
+
           tmp=$(mktemp -d)
           trap 'rm -rf "$tmp"' EXIT
+          dpkg-deb -x "$image_deb" "$tmp/image"
+          mapfile -t module_dirs < <(find "$tmp/image/lib/modules" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+          [ "${#module_dirs[@]}" -eq 1 ] || {
+            echo "❌ linux-image 中的内核模块目录应恰好为一个，实际为 ${#module_dirs[@]} 个"
+            exit 1
+          }
+          kernel_release="${module_dirs[0]}"
+          kernel_version="${kernel_release%%-*}"
+          [ -n "$kernel_version" ] || { echo "❌ 无法确定内核版本"; exit 1; }
+
+          deb_dest="fnnas-build/fnnas-debs/rockchip"
+          mkdir -p "$deb_dest"
+          install -m 0644 "$image_deb" "$dtb_deb" "$headers_deb" "$deb_dest/"
+
           dpkg-deb -x "$uboot_deb" "$tmp"
           src="$tmp/usr/lib/linux-u-boot-edge-w132d"
           dest="fnnas-build/make-fnnas/u-boot/rockchip/w132d"
@@ -252,6 +276,10 @@ jobs:
             [ -s "$src/$f" ] || { echo "❌ U-Boot deb 缺少 $f"; exit 1; }
             install -D -m 0644 "$src/$f" "$dest/$f"
           done
+          echo "kernel_release=$kernel_release" >> "$GITHUB_OUTPUT"
+          echo "kernel_version=$kernel_version" >> "$GITHUB_OUTPUT"
+          echo "内核版本: $kernel_release（renas 版本目录: $kernel_version）"
+          ls -l "$deb_dest/"
           ls -l "$dest/"
 
       - name: 注入 W132D 板级配置
@@ -259,23 +287,15 @@ jobs:
         # W132D 不在上游列表里，追加一行即可；格式与已有 RK3528 条目一致。
         run: |
           conf="fnnas-build/make-fnnas/fnnas-files/common-files/etc/model_database.conf"
-          if ! grep -q 'w132d' "$conf"; then
+          if ! grep -Eq ':w132d[[:space:]]*:' "$conf"; then
             echo '# ZTE Cloud Computer W132D (added by w132d-linux-mainline CI)' >> "$conf"
             echo 'r790    :ZTE-W132D                                     :rk3528   :rk3528-w132d.dtb                         :NA                           :u-boot.itb                          :idbloader.img                   :2GB-LPDDR4,32G-eMMC,WiFi,1Gb-Nic           :rockchip/all          :rockchip    :rk3528       :extlinux.conf   :w132d-linux-mainline                                 :w132d                     :yes' >> "$conf"
             echo "✅ 已追加 W132D 到 model_database.conf"
             tail -3 "$conf"
+          else
+            echo "W132D 已存在于上游 model_database.conf，跳过追加："
+            grep -nE ':w132d[[:space:]]*:' "$conf"
           fi
-
-      - name: 放置自定义内核
-        # ophub/fnnas 的 renas 会在 make-fnnas/kernel/<kver>/<kver>-<platform>/ 下找内核文件。
-        # 把转换好的 tar.gz 放到正确位置，renas 就会跳过下载直接使用。
-        run: |
-          kver="${{ steps.ophub_kernel.outputs.kernel_version }}"
-          dest="fnnas-build/make-fnnas/kernel/${kver}/${kver}-rockchip"
-          mkdir -p "$dest"
-          cp ophub-kernel/*.tar.gz ophub-kernel/sha256sums "$dest/"
-          echo "✅ 内核文件已放置到 $dest"
-          ls -la "$dest/"
 
       - name: 下载 fnOS 官方 Rockchip 基础镜像
         id: fnos_base
@@ -283,30 +303,79 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         working-directory: fnnas-build
         run: |
+          set -euo pipefail
           mkdir -p fnnas-arm64
-          # 从 ophub/fnnas 的 fnnas_base_image release 下载最新的 Rockchip 镜像
-          latest=$(gh release view fnnas_base_image -R ophub/fnnas --json assets -q \
-            '[.assets[] | select(.name | test("rockchip.*\.img\.xz"))] | sort_by(.updatedAt) | reverse | .[0].name' \
-            2>/dev/null || true)
-          if [ -n "$latest" ] && [ "$latest" != "null" ]; then
-            echo "下载: $latest"
-            gh release download fnnas_base_image -R ophub/fnnas -p "$latest" -D fnnas-arm64 --clobber
-            base="fnnas-arm64/$latest"
-            [ -s "$base" ] || { echo "❌ 基础镜像下载为空: $base"; exit 1; }
-            unxz -f "$base"
-            [ -s "${base%.xz}" ] || { echo "❌ 解压后没有 .img: ${base%.xz}"; exit 1; }
-          else
-            echo "❌ 找不到 fnOS Rockchip 基础镜像"; exit 1
-          fi
+          mapfile -t assets < <(gh release view fnnas_base_image -R ophub/fnnas --json assets -q \
+            '.assets[].name | select(contains("rockchip_1253") and endswith(".img.xz"))')
+          [ "${#assets[@]}" -eq 1 ] || {
+            echo "❌ rockchip_1253 基础镜像应恰好为一个，实际为 ${#assets[@]} 个"
+            printf '  %s\n' "${assets[@]}"
+            exit 1
+          }
+          base="fnnas-arm64/${assets[0]}"
+          echo "下载: ${assets[0]}"
+          gh release download fnnas_base_image -R ophub/fnnas -p "${assets[0]}" -D fnnas-arm64 --clobber
+          [ -s "$base" ] || { echo "❌ 基础镜像下载为空: $base"; exit 1; }
+          unxz -f "$base"
+          [ -s "${base%.xz}" ] || { echo "❌ 解压后没有 .img: ${base%.xz}"; exit 1; }
           echo "status=success" >> "$GITHUB_OUTPUT"
+
+      - name: 在 fnOS 中生成自定义内核包
+        working-directory: fnnas-build
+        run: |
+          set -euo pipefail
+          expected='[[ "${debs_install}" =~ ^(amlogic|allwinner|rockchip)$ ]] && download_debs'
+          [ "$(sed -n '540p' rekernel)" = "$expected" ] || {
+            echo "❌ 固定版本的 rekernel 下载入口与预期不符"
+            exit 1
+          }
+          # -e rockchip 负责安装已暂存的 W132D deb；禁用其默认的上游官方 deb 下载。
+          sed -i '540s|^|# Local W132D debs are already staged; |' rekernel
+          sudo ./rekernel -e rockchip -t false
+
+      - name: 校验并放置自定义内核
+        working-directory: fnnas-build
+        env:
+          KERNEL_RELEASE: ${{ steps.kernel_input.outputs.kernel_release }}
+          KERNEL_VERSION: ${{ steps.kernel_input.outputs.kernel_version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          bundles=(fnnas/out/*-rockchip.tar.gz)
+          [ "${#bundles[@]}" -eq 1 ] || {
+            echo "❌ rekernel 产物应恰好为一个，实际为 ${#bundles[@]} 个"
+            printf '  %s\n' "${bundles[@]}"
+            exit 1
+          }
+
+          dest="make-fnnas/kernel/$KERNEL_VERSION"
+          kernel_dir="$dest/$KERNEL_VERSION-rockchip"
+          mkdir -p "$dest"
+          tar -xzf "${bundles[0]}" -C "$dest"
+          [ -d "$kernel_dir" ] || { echo "❌ 内核包目录不符合预期: $kernel_dir"; exit 1; }
+          for part in boot dtb modules header; do
+            file="$kernel_dir/$part-rockchip-$KERNEL_RELEASE.tar.gz"
+            [ -s "$file" ] || { echo "❌ 缺少内核归档: $file"; exit 1; }
+          done
+          (cd "$kernel_dir" && sha256sum -c sha256sums)
+
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          tar -xzf "$kernel_dir/boot-rockchip-$KERNEL_RELEASE.tar.gz" -C "$tmp"
+          [ -s "$tmp/uInitrd-$KERNEL_RELEASE" ] || { echo "❌ boot 归档缺少 uInitrd"; exit 1; }
+          mkimage -l "$tmp/uInitrd-$KERNEL_RELEASE"
+          rm -f "${bundles[0]}"
+          echo "✅ 自定义内核已放置到 $kernel_dir"
+          ls -la "$kernel_dir/"
 
       - name: 构建 fnOS 镜像
         if: steps.fnos_base.outputs.status == 'success'
         working-directory: fnnas-build
         run: |
+          # 关闭自动选取上游内核，强制使用上一步生成并校验过的本项目内核。
           sudo ./renas \
             -b w132d \
-            -k ${{ steps.ophub_kernel.outputs.kernel_version }} \
+            -k ${{ steps.kernel_input.outputs.kernel_version }} \
             -a false \
             -n w132d
 
@@ -331,5 +400,6 @@ jobs:
             [ "${#images[@]}" -gt 0 ] || { echo "❌ fnOS 没有生成 .img.gz"; exit 1; }
             gh release upload "$tag" "${images[@]}" --clobber
           else
-            echo "⚠️ Release $tag 不存在，跳过 fnOS 镜像发布（Armbian 镜像 Release 应由 packages job 先创建）"
+            echo "❌ Release $tag 不存在（Armbian 镜像 Release 应由 packages job 先创建）"
+            exit 1
           fi
