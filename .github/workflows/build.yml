@@ -394,7 +394,7 @@ jobs:
           tar -xzf "$kernel_dir/boot-rockchip-$KERNEL_RELEASE.tar.gz" -C "$tmp"
           [ -s "$tmp/uInitrd-$KERNEL_RELEASE" ] || { echo "❌ boot 归档缺少 uInitrd"; exit 1; }
           mkimage -l "$tmp/uInitrd-$KERNEL_RELEASE"
-          rm -f "${bundles[0]}"
+          sudo rm -f "${bundles[0]}"
           echo "✅ 自定义内核已放置到 $kernel_dir"
           ls -la "$kernel_dir/"
 
