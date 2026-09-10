@@ -87,8 +87,12 @@ if [ -n "$BSP" ]; then
     grep -qE " \./$f( -> |\$)" "$T/bsp.list" && ok "bsp 含 $f" || bad "bsp 缺 $f"
   done
   dpkg-deb --fsys-tarfile "$BSP" | tar -xO ./etc/apt/preferences.d/w132d-kernel 2>/dev/null > "$T/pin"
-  grep -q "Pin: origin apt.armbian.com" "$T/pin" && grep -q "Pin: release o=W132D" "$T/pin" \
-    && ok "apt pin：封 apt.armbian.com、优先 o=W132D" || bad "apt pin 缺 apt.armbian.com 封禁或 o=W132D 优先"
+  allow_line=$(grep -n '^Package: linux-image-edge-rockchip64 ' "$T/pin" | cut -d: -f1)
+  deny_line=$(grep -n '^Package: linux-image-\*' "$T/pin" | cut -d: -f1)
+  [ -n "$allow_line" ] && [ -n "$deny_line" ] && [ "$allow_line" -lt "$deny_line" ] \
+    && grep -q '^Pin: version \*$' "$T/pin" \
+    && grep -q '^Pin: release o=W132D$' "$T/pin" \
+    && ok "apt pin：先放行 o=W132D，再封禁所有外部内核" || bad "apt pin 缺放行/封禁规则或顺序错误"
   # WCN 固件必须是钉住的那份（CoreELEC/uwe5631-aml @ 82f0b4a1，MARLIN3E_20A_W23.03.2）
   WCN_SHA=d84724b2e442a79d3999c630e5a13a418ef3f1b0a5ecafcf1ce031b3ede758cb
   got=$(dpkg-deb --fsys-tarfile "$BSP" | tar -xOf - ./lib/firmware/uwe5622/wcnmodem-marlin3e.bin 2>/dev/null | { sha256sum 2>/dev/null || shasum -a 256; } | cut -d' ' -f1)

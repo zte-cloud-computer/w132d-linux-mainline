@@ -327,6 +327,25 @@ jobs:
             grep -nE ':w132d[[:space:]]*:' "$conf"
           fi
 
+      - name: 注入 W132D apt 源与内核锁
+        # fnOS 不安装 Armbian BSP 包，必须把源、签名公钥和 apt pin 直接放进 renas 的 common-files。
+        # renas 会把 common-files 原样复制到目标 rootfs。
+        run: |
+          set -euo pipefail
+          src="userpatches/overlay/bsp-cli"
+          root="fnnas-build/make-fnnas/fnnas-files/common-files"
+          install -D -m 0644 "$src/etc/apt/sources.list.d/w132d.sources" \
+            "$root/etc/apt/sources.list.d/w132d.sources"
+          install -D -m 0644 "$src/etc/apt/preferences.d/w132d-kernel" \
+            "$root/etc/apt/preferences.d/w132d-kernel"
+          install -D -m 0644 "$src/usr/share/keyrings/w132d-archive-keyring.gpg" \
+            "$root/usr/share/keyrings/w132d-archive-keyring.gpg"
+          grep -q 'releases/download/apt' "$root/etc/apt/sources.list.d/w132d.sources"
+          grep -q '^Package: linux-image-\*' "$root/etc/apt/preferences.d/w132d-kernel"
+          grep -q '^Pin: release o=W132D$' "$root/etc/apt/preferences.d/w132d-kernel"
+          test -s "$root/usr/share/keyrings/w132d-archive-keyring.gpg"
+          echo "✅ W132D apt 源、签名公钥和内核锁已加入 fnOS rootfs"
+
       - name: 下载 fnOS 官方 Rockchip 基础镜像
         id: fnos_base
         env:

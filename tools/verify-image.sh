@@ -158,9 +158,15 @@ if mount -o ro "${LOOP}p2" /mnt/vp3 2>/dev/null; then
   [ -e /mnt/vp3/usr/local/sbin/w132d-btattach ] && bad "w132d-btattach 还在（蓝牙由内核驱动注册 hci0，不需要它）" || ok "没有用户态 attach 工具"
   [ -e /mnt/vp3/usr/bin/gcc ] && bad "gcc 留在镜像里" || ok "镜像里没有编译器"
 
-  # 内核包与 Armbian 官方同名：没有这条 pin，官方版本号追上来的那天 apt upgrade 把设备打死
-  grep -q 'Pin: origin apt.armbian.com' /mnt/vp3/etc/apt/preferences.d/w132d-kernel 2>/dev/null \
-    && ok "apt pin：官方源的同名内核包被挡住" || bad "缺 /etc/apt/preferences.d/w132d-kernel —— apt upgrade 会装上官方内核"
+  # 所有外部内核都要封禁（包括发行版的 linux-image-arm64），只允许 Origin: W132D 的板级包。
+  pin=/mnt/vp3/etc/apt/preferences.d/w132d-kernel
+  allow_line=$(grep -n '^Package: linux-image-edge-rockchip64 ' "$pin" 2>/dev/null | cut -d: -f1)
+  deny_line=$(grep -n '^Package: linux-image-\*' "$pin" 2>/dev/null | cut -d: -f1)
+  [ -n "$allow_line" ] && [ -n "$deny_line" ] && [ "$allow_line" -lt "$deny_line" ] \
+    && grep -q '^Pin: version \*$' "$pin" \
+    && grep -q '^Pin: release o=W132D$' "$pin" \
+    && ok "apt pin：所有外部内核被挡住，只放行 W132D 源" \
+    || bad "缺完整的 W132D 内核锁 —— apt upgrade 可能装上不兼容内核"
 
   # getty 必须在 UART0（ttyS0）上，ttyS2 本板没使能
   ls /mnt/vp3/etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service >/dev/null 2>&1 \

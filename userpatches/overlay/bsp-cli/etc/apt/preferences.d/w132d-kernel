@@ -1,9 +1,11 @@
-# 内核包与 Armbian 官方同名（family 共用），官方那份没有本板 DTB 与补丁，装上起不来：
-# 封死 apt.armbian.com 的同名包，只认本项目源（Origin: W132D）。补丁进了 armbian/build 后可删。
-Package: linux-image-edge-rockchip64 linux-dtb-edge-rockchip64 linux-headers-edge-rockchip64
-Pin: origin apt.armbian.com
-Pin-Priority: -1
-
-Package: linux-image-edge-rockchip64 linux-dtb-edge-rockchip64 linux-headers-edge-rockchip64 linux-u-boot-w132d-edge armbian-bsp-cli-w132d-edge
+# W132D 只能启动本项目配套的内核、DTB 与 U-Boot。APT 对同一版本采用第一个匹配的
+# specific-form 规则，因此精确放行必须位于下面的通配封禁之前。
+Package: linux-image-edge-rockchip64 linux-dtb-edge-rockchip64 linux-headers-edge-rockchip64 linux-libc-dev-edge-rockchip64 linux-u-boot-w132d-edge armbian-bsp-cli-w132d-edge
 Pin: release o=W132D
 Pin-Priority: 1001
+
+# 封禁任何其它来源的相关包，包括 fnOS 自带的 linux-image-arm64 元包及 Debian/Armbian
+# 后续新增的内核。已安装的旧内核保留在磁盘上，但 apt 不会升级或安装这些外部版本。
+Package: linux-image-* linux-dtb-* linux-headers-* linux-modules-* linux-u-boot-*
+Pin: version *
+Pin-Priority: -1
