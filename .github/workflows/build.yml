@@ -2,7 +2,7 @@
 #
 # push 到 main：出 deb，签名后整体替换到 Release `apt` 的附件（设备的 apt 源）。
 # 打 v* 标签：再出整盘镜像与 fnOS 镜像，校验后连刷写脚本打成发布包，建正式 Release；deb 同样发到 apt 源。
-# 手动触发：勾 publish 才发 apt；勾 build_fnos 单独构建 fnOS 镜像。
+# 手动触发：勾 publish 才发 apt；勾 build_fnos 构建 fnOS 镜像，可指定历史 run 复用 deb、跳过 packages。
 # 版本号追加 日期.运行序号 才能让 apt 看到升级（Armbian 的 VERSION 是固定串）。
 name: build
 
@@ -20,6 +20,10 @@ on:
         description: "构建 fnOS 镜像"
         type: boolean
         default: false
+      reuse_debs_run_id:
+        description: "复用历史 run 的 w132d-debs artifact（留空则重新构建 packages）"
+        type: string
+        default: ""
   push:
     branches: [main]
     tags: ["v*"]
@@ -37,6 +41,7 @@ jobs:
   packages:
     # 公共仓库可免费用 GitHub 托管的 arm64 runner，本机架构编译不用交叉工具链。
     # 私有仓库没有这个 label，换成 ubuntu-24.04（x86，Armbian 自动交叉编译）即可。
+    if: github.event_name != 'workflow_dispatch' || inputs.reuse_debs_run_id == ''
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 300
     permissions:
@@ -199,20 +204,36 @@ jobs:
     # 用 ophub/fnnas 把官方 fnOS Rockchip ARM64 镜像重新打包：替换内核与 DTB 为本项目构建的版本。
     # 打 v* 标签或手动勾选 build_fnos 时才跑。
     needs: packages
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.build_fnos == true
+    if: >-
+      always() &&
+      (startsWith(github.ref, 'refs/tags/v') || inputs.build_fnos == true) &&
+      (needs.packages.result == 'success' || inputs.reuse_debs_run_id != '')
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 240
     permissions:
+      actions: read
       contents: write
     steps:
       - name: 取本仓库
         uses: actions/checkout@v7
 
-      - name: 下载内核 deb
+      - name: 下载本次构建的 deb
+        if: inputs.reuse_debs_run_id == ''
         uses: actions/download-artifact@v7
         with:
           name: ${{ needs.packages.outputs.debs_artifact }}
           path: debs/
+
+      - name: 下载历史 run 的 deb
+        if: inputs.reuse_debs_run_id != ''
+        uses: actions/download-artifact@v7
+        with:
+          pattern: w132d-debs-*
+          path: debs/
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.reuse_debs_run_id }}
 
       - name: 取 ophub/fnnas
         uses: actions/checkout@v7
@@ -263,6 +284,14 @@ jobs:
           kernel_release="${module_dirs[0]}"
           kernel_version="${kernel_release%%-*}"
           [ -n "$kernel_version" ] || { echo "❌ 无法确定内核版本"; exit 1; }
+          package_revision=$(dpkg-deb -f "$image_deb" Version)
+          [ -n "$package_revision" ] || { echo "❌ 无法确定 deb 版本"; exit 1; }
+          for deb in "$dtb_deb" "$headers_deb" "$uboot_deb"; do
+            [ "$(dpkg-deb -f "$deb" Version)" = "$package_revision" ] || {
+              echo "❌ $(basename "$deb") 与 linux-image 版本不一致"
+              exit 1
+            }
+          done
 
           deb_dest="fnnas-build/fnnas-debs/rockchip"
           mkdir -p "$deb_dest"
@@ -278,6 +307,7 @@ jobs:
           done
           echo "kernel_release=$kernel_release" >> "$GITHUB_OUTPUT"
           echo "kernel_version=$kernel_version" >> "$GITHUB_OUTPUT"
+          echo "package_revision=$package_revision" >> "$GITHUB_OUTPUT"
           echo "内核版本: $kernel_release（renas 版本目录: $kernel_version）"
           ls -l "$deb_dest/"
           ls -l "$dest/"
@@ -382,7 +412,7 @@ jobs:
       - name: 上传 fnOS 镜像
         uses: actions/upload-artifact@v7
         with:
-          name: w132d-fnos-${{ needs.packages.outputs.revision }}
+          name: w132d-fnos-${{ steps.kernel_input.outputs.package_revision }}
           path: fnnas-build/fnnas/out/
           if-no-files-found: error
           retention-days: 30
