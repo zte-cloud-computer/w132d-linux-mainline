@@ -7,6 +7,7 @@
 Armbian 补丁栈（rk3576-0014）引入了通用的 struct rockchip_emmc_data 结构。
 RK3528 沿用该架构提供专属的 rk3528_emmc_data 与 rk3528_pdata，并注册 of_match 条目。
 """
+import re
 import sys
 
 
@@ -29,6 +30,20 @@ def main():
     path = sys.argv[1]
     with open(path, encoding="utf-8") as f:
         s = f.read()
+
+    # 若检测到旧版 mainline pdata（包含 .hs400_tx_tap = ），先清理旧定义以便重新按 Armbian 架构注入
+    if ".hs400_tx_tap =" in s:
+        s = re.sub(
+            r"static const struct rockchip_pltfm_data sdhci_dwcmshc_rk3528_pdata = \{.*?^};\n+",
+            "",
+            s,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        s = re.sub(
+            r"\t\{\n\t\t\.compatible = \"rockchip,rk3528-dwcmshc\",\n\t\t\.data = &sdhci_dwcmshc_rk3528_pdata,\n\t\},\n?",
+            "",
+            s,
+        )
 
     data_present = RK3528_DATA in s
     pdata_present = RK3528_PDATA in s

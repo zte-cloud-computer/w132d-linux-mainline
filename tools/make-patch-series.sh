@@ -12,9 +12,12 @@
 #   rk3528-w132d.dts   板级 DTS 源文件，由本脚本做成最后一个提交 —— Armbian 补丁目录只应用 *.patch，
 #                      裸 .dts 放进去是静默无效的
 #   NNNN-*.msg         板级 DTS 那个提交的提交信息（编号最大）
-#
-# 两个基线不能共用一份 diff：我们的 mmc 补丁（0002）与 Armbian 的 rk3576-0013-mmc-sdhci-dwcmshc 补丁改同一处，
-# 所以 --on-armbian 下 0002 不走 git am，由 tools/rebase-mmc-onto-armbian.py 按新上下文重做。
+# 两个基线不能共用一份 diff：
+#   - 我们的 mmc 补丁（0002）与 Armbian 的 rk3576-0014 改同一处（引入 rockchip_emmc_data 架构），
+#     由 tools/rebase-mmc-onto-armbian.py 重做
+#   - 我们的 vop2 补丁（0008）与 Armbian 的 rk3562-0010 改同一处（引入 rk3562-vop），
+#     由 tools/rebase-vop-onto-armbian.py 重做
+# 所以 --on-armbian 下 0002 和 0008 不走普通 git am，由重锚脚本按新上下文重做。
 # 产物可复现：format-patch 带 --zero-commit --no-signature、作者日期取自源补丁，输入不变则逐字节不变。
 # Armbian 目录里两类文件：w132d-0NNN-* 由本脚本生成勿手改（w132d- 前缀让它排在 rk3576-* 之后应用）；
 # w132d-armbian-NNNN-* 只针对 Armbian 补丁栈里的树外驱动、主线没有那些文件，手工维护，本脚本不清理。
@@ -106,18 +109,38 @@ n=0
 for f in "$PATCHES"/[0-9][0-9][0-9][0-9]-*.patch; do
   name=$(basename "$f" .patch)
   if [ "$ON_ARMBIAN" = 1 ] && [[ "$name" == 0002-mmc-* ]]; then
-    # patch --forward 先把两种基线上都能打的 hunk（rk3528 pdata 与 of_match 条目）落地，
-    # 打不上的（struct 与 HS400 分支）留 .rej 删掉，由重锚脚本按新上下文重做
-    patch -d "$TREE" -p1 --forward --batch < "$f" >/dev/null 2>&1 || true
-    find "$TREE" -name '*.rej' -delete; find "$TREE" -name '*.orig' -delete
+    # 纯净版 0002 与 Armbian 的 rockchip_emmc_data 架构不兼容，跳过 patch 部分应用，
+    # 由重锚脚本按新上下文注入 rk3528_emmc_data 与 pdata
     python3 "$W/tools/rebase-mmc-onto-armbian.py" \
       "$TREE/drivers/mmc/host/sdhci-of-dwcmshc.c" || exit 1
     git -C "$TREE" add -A
     commit_with_patch_message "$f"
     printf '  ✅ %-12s %s（重锚到 Armbian 基线）\n' "${name:0:12}" "$(git -C "$TREE" log -1 --format=%s)"
+  elif [ "$ON_ARMBIAN" = 1 ] && [[ "$name" == 0008-drm-rockchip-vop2-* ]]; then
+    # 纯净版 0008 与 Armbian 的 RK3562 VOP2 上下文冲突，
+    # 由重锚脚本（或已适配的 Armbian 补丁）按新上下文重做
+    if [ -f "$W/tools/rebase-vop-onto-armbian.py" ]; then
+      python3 "$W/tools/rebase-vop-onto-armbian.py" "$TREE" || exit 1
+      git -C "$TREE" add -A
+      commit_with_patch_message "$f"
+    elif [ -f "$ARMBIAN_DIR/w132d-$name.patch" ]; then
+      git -C "$TREE" am -q "$ARMBIAN_DIR/w132d-$name.patch" || exit 1
+    else
+      die "$name 缺少 Armbian 重锚脚本或适配补丁"
+    fi
+    printf '  ✅ %-12s %s（重锚到 Armbian 基线）\n' "${name:0:12}" "$(git -C "$TREE" log -1 --format=%s)"
   else
     # git am 不做 fuzz：上下文对不齐就是失败，这正是要的 —— 源补丁打不上就该重新锚定
     if ! out=$(git -C "$TREE" am -q "$f" 2>&1); then
+      # 若在 --on-armbian 下且有对应的 w132d-*.patch 适配补丁，则尝试使用适配补丁
+      if [ "$ON_ARMBIAN" = 1 ] && [ -f "$ARMBIAN_DIR/w132d-$name.patch" ]; then
+        git -C "$TREE" am --abort 2>/dev/null || true
+        if git -C "$TREE" am -q "$ARMBIAN_DIR/w132d-$name.patch" 2>/dev/null; then
+          printf '  ✅ %-12s %s（使用已适配的 Armbian 源补丁）\n' "${name:0:12}" "$(git -C "$TREE" log -1 --format=%s)"
+          n=$((n+1))
+          continue
+        fi
+      fi
       echo "  ❌ $name 打不上（内核 $KVER 已漂）"
       sed 's/^/     /' <<<"$out" | head -20
       git -C "$TREE" am --abort 2>/dev/null || true
