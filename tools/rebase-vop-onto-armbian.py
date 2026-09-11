@@ -170,33 +170,39 @@ static const struct vop2_data rk3528_vop = {
 
 def rebase_vop(h_path, c_path):
     with open(h_path, encoding="utf-8") as f:
-        h = f.read()
+        orig_h = f.read()
 
-    # 1. rockchip_drm_vop2.h
+    with open(c_path, encoding="utf-8") as f:
+        orig_c = f.read()
+
+    # 1. 内存中变换 rockchip_drm_vop2.h
+    new_h = orig_h
     h_already_ok = (
-        "VOP_VERSION_RK3528\tVOP2_VERSION(0x50, 0x17, 0x4334)" in h
-        and "RK3528_OVL_SYS_PORT_SEL_IMD" in h
-        and "RK3568_DSP_IF_POL__HDMI_DCLK_POL" in h
-        and "RK3528_OVL_SYS_PORT_SEL_IMD__ESMART0" in h
+        "VOP_VERSION_RK3528\tVOP2_VERSION(0x50, 0x17, 0x4334)" in new_h
+        and "RK3528_OVL_SYS_PORT_SEL_IMD" in new_h
+        and "RK3568_DSP_IF_POL__HDMI_DCLK_POL" in new_h
+        and "RK3528_OVL_SYS_PORT_SEL_IMD__ESMART0" in new_h
     )
 
     if not h_already_ok:
         # 版本号：若带有旧版 0x1263 则更新为硬件读数 0x4334，否则注入
-        if "#define VOP_VERSION_RK3528\tVOP2_VERSION(0x50, 0x17, 0x1263)" in h:
-            h = h.replace(
+        if "#define VOP_VERSION_RK3528\tVOP2_VERSION(0x50, 0x17, 0x1263)" in new_h:
+            new_h = new_h.replace(
                 "#define VOP_VERSION_RK3528\tVOP2_VERSION(0x50, 0x17, 0x1263)",
                 "#define VOP_VERSION_RK3528\tVOP2_VERSION(0x50, 0x17, 0x4334)",
             )
-        elif "#define VOP_VERSION_RK3528\tVOP2_VERSION(0x50, 0x17, 0x4334)" not in h:
-            anchor = "#define VOP_VERSION_RK3562\tVOP2_VERSION(0x50, 0x17, 0x4350)"
-            if anchor in h:
-                h = sub(h, anchor, "#define VOP_VERSION_RK3528\tVOP2_VERSION(0x50, 0x17, 0x4334)\n" + anchor, "注入 VOP_VERSION_RK3528")
+        elif "#define VOP_VERSION_RK3528\tVOP2_VERSION(0x50, 0x17, 0x4334)" not in new_h:
+            anchor_3562 = "#define VOP_VERSION_RK3562\tVOP2_VERSION(0x50, 0x17, 0x4350)"
+            anchor_mainline = "#define VOP_VERSION_RK3576\tVOP2_VERSION(0x50, 0x19, 0x9765)"
+            if anchor_3562 in new_h:
+                new_h = sub(new_h, anchor_3562, "#define VOP_VERSION_RK3528\tVOP2_VERSION(0x50, 0x17, 0x4334)\n" + anchor_3562, "注入 VOP_VERSION_RK3528")
+            elif anchor_mainline in new_h:
+                new_h = sub(new_h, anchor_mainline, "#define VOP_VERSION_RK3528\tVOP2_VERSION(0x50, 0x17, 0x4334)\n" + anchor_mainline, "注入 VOP_VERSION_RK3528")
             else:
-                anchor_mainline = "#define VOP_VERSION_RK3576\tVOP2_VERSION(0x50, 0x19, 0x9765)"
-                h = sub(h, anchor_mainline, "#define VOP_VERSION_RK3528\tVOP2_VERSION(0x50, 0x17, 0x4334)\n" + anchor_mainline, "注入 VOP_VERSION_RK3528")
+                sys.exit("❌ 注入 VOP_VERSION_RK3528 失败：未找到 RK3562 或 RK3576 版本宏锚点")
 
         # 寄存器定义
-        if "#define RK3528_OVL_SYS_PORT_SEL_IMD" not in h:
+        if "#define RK3528_OVL_SYS_PORT_SEL_IMD" not in new_h:
             old_reg = "#define RK3576_SYS_EXTRA_ALPHA_CTRL\t\t0x500\n"
             new_reg = (
                 old_reg +
@@ -204,16 +210,16 @@ def rebase_vop(h_path, c_path):
                 "#define RK3528_OVL_SYS_CLUSTER0_CTRL\t\t0x510\n"
                 "#define RK3528_OVL_SYS_ESMART0_CTRL\t\t0x520\n"
             )
-            h = sub(h, old_reg, new_reg, "注入 RK3528 OVL_SYS 寄存器宏")
+            new_h = sub(new_h, old_reg, new_reg, "注入 RK3528 OVL_SYS 寄存器宏")
 
         # HDMI DCLK 极性定义
-        if "#define RK3568_DSP_IF_POL__HDMI_DCLK_POL" not in h:
+        if "#define RK3568_DSP_IF_POL__HDMI_DCLK_POL" not in new_h:
             old_pol = "#define RK3568_DSP_IF_POL__HDMI_PIN_POL\t\t\tGENMASK(7, 4)\n"
             new_pol = old_pol + "#define RK3568_DSP_IF_POL__HDMI_DCLK_POL\t\tBIT(7)\n"
-            h = sub(h, old_pol, new_pol, "注入 HDMI_DCLK_POL 宏")
+            new_h = sub(new_h, old_pol, new_pol, "注入 HDMI_DCLK_POL 宏")
 
         # 位域定义
-        if "#define RK3528_OVL_SYS_PORT_SEL_IMD__ESMART0" not in h:
+        if "#define RK3528_OVL_SYS_PORT_SEL_IMD__ESMART0" not in new_h:
             old_inv = "#define POLFLAG_DCLK_INV\tBIT(3)\n"
             new_inv = (
                 old_inv + "\n"
@@ -222,55 +228,44 @@ def rebase_vop(h_path, c_path):
                 "#define RK3528_OVL_SYS_CLUSTER0_CTRL__DLY_NUM\t\tGENMASK(15, 0)\n"
                 "#define RK3528_OVL_SYS_ESMART0_CTRL__DLY_NUM\t\tGENMASK(7, 0)\n"
             )
-            h = sub(h, old_inv, new_inv, "注入 RK3528 OVL_SYS 位域宏")
+            new_h = sub(new_h, old_inv, new_inv, "注入 RK3528 OVL_SYS 位域宏")
 
-        with open(h_path, "w", encoding="utf-8") as f:
-            f.write(h)
-
-    # 2. rockchip_vop2_reg.c
-    with open(c_path, encoding="utf-8") as f:
-        c = f.read()
-
-    ops_present = "rk3528_vop_ops" in c
-    match_present = "rockchip,rk3528-vop" in c
-
-    if ops_present and match_present:
-        print("  ✅ vop2：RK3528 驱动代码与 compatible 条目均已在位")
-        return
+    # 2. 内存中变换 rockchip_vop2_reg.c
+    new_c = orig_c
+    ops_present = "rk3528_vop_ops" in new_c
+    match_present = "rockchip,rk3528-vop" in new_c
 
     if not ops_present:
         anchor_ops = """static const struct vop2_ops rk3588_vop_ops = {
-	.setup_intf_mux = rk3588_set_intf_mux,
-	.setup_bg_dly = rk3568_vop2_setup_bg_dly,
-	.setup_overlay = rk3568_vop2_setup_overlay,
+\t.setup_intf_mux = rk3588_set_intf_mux,
+\t.setup_bg_dly = rk3568_vop2_setup_bg_dly,
+\t.setup_overlay = rk3568_vop2_setup_overlay,
 };
 """
-        c = sub(c, anchor_ops, anchor_ops + VOP2_CODE, "注入 rk3528 VOP2 函数及结构体")
+        new_c = sub(new_c, anchor_ops, anchor_ops + VOP2_CODE, "注入 rk3528 VOP2 函数及结构体")
 
     if not match_present:
-        anchor_match_3562 = """\t{
-\t\t.compatible = "rockchip,rk3562-vop",
-\t\t.data = &rk3562_vop,
-\t},"""
-        anchor_match_3566 = """\t{
-\t\t.compatible = "rockchip,rk3566-vop",
-\t\t.data = &rk3566_vop,
-\t},"""
-        if anchor_match_3562 in c:
-            replacement_match = """\t{
-\t\t.compatible = "rockchip,rk3528-vop",
-\t\t.data = &rk3528_vop,
-\t}, {\n""" + anchor_match_3562.lstrip()
-            c = sub(c, anchor_match_3562, replacement_match, "注入 rockchip,rk3528-vop compatible 条目")
+        anchor_match_3562 = '\t{\n\t\t.compatible = "rockchip,rk3562-vop",'
+        anchor_match_3566 = '\t{\n\t\t.compatible = "rockchip,rk3566-vop",'
+        replacement_entry = '\t{\n\t\t.compatible = "rockchip,rk3528-vop",\n\t\t.data = &rk3528_vop,\n\t}, {\n'
+        if anchor_match_3562 in new_c:
+            new_c = sub(new_c, anchor_match_3562, replacement_entry + '\t\t.compatible = "rockchip,rk3562-vop",', "注入 rockchip,rk3528-vop compatible 条目")
+        elif anchor_match_3566 in new_c:
+            new_c = sub(new_c, anchor_match_3566, replacement_entry + '\t\t.compatible = "rockchip,rk3566-vop",', "注入 rockchip,rk3528-vop compatible 条目（主线基线）")
         else:
-            replacement_match = """\t{
-\t\t.compatible = "rockchip,rk3528-vop",
-\t\t.data = &rk3528_vop,
-\t}, {\n""" + anchor_match_3566.lstrip()
-            c = sub(c, anchor_match_3566, replacement_match, "注入 rockchip,rk3528-vop compatible 条目（主线基线）")
+            sys.exit("❌ 注入 rockchip,rk3528-vop compatible 条目失败：未找到 RK3562 或 RK3566 of_device_id 锚点")
 
-    with open(c_path, "w", encoding="utf-8") as f:
-        f.write(c)
+    # 3. 校验并统一写回（保证原子性，任何前序失败绝不写入磁盘）
+    if new_h == orig_h and new_c == orig_c:
+        print("  ✅ vop2：RK3528 驱动代码与 compatible 条目均已在位")
+        return
+
+    if new_h != orig_h:
+        with open(h_path, "w", encoding="utf-8") as f:
+            f.write(new_h)
+    if new_c != orig_c:
+        with open(c_path, "w", encoding="utf-8") as f:
+            f.write(new_c)
 
     print("  ✅ vop2：改动已叠到 Armbian 补丁栈之上")
 

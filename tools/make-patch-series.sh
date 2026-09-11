@@ -110,25 +110,53 @@ for f in "$PATCHES"/[0-9][0-9][0-9][0-9]-*.patch; do
   name=$(basename "$f" .patch)
   if [ "$ON_ARMBIAN" = 1 ] && [[ "$name" == 0002-mmc-* ]]; then
     # 纯净版 0002 与 Armbian 的 rockchip_emmc_data 架构不兼容，跳过 patch 部分应用，
-    # 由重锚脚本按新上下文注入 rk3528_emmc_data 与 pdata
-    python3 "$W/tools/rebase-mmc-onto-armbian.py" \
-      "$TREE/drivers/mmc/host/sdhci-of-dwcmshc.c" || exit 1
-    git -C "$TREE" add -A
-    commit_with_patch_message "$f"
-    printf '  ✅ %-12s %s（重锚到 Armbian 基线）\n' "${name:0:12}" "$(git -C "$TREE" log -1 --format=%s)"
+    # 优先由重锚脚本按新上下文注入；若重锚脚本失败，则回退到已适配的 Armbian 补丁
+    rebased=0
+    if [ -f "$W/tools/rebase-mmc-onto-armbian.py" ]; then
+      if python3 "$W/tools/rebase-mmc-onto-armbian.py" \
+        "$TREE/drivers/mmc/host/sdhci-of-dwcmshc.c"; then
+        git -C "$TREE" add -A
+        commit_with_patch_message "$f"
+        rebased=1
+        printf '  ✅ %-12s %s（重锚到 Armbian 基线）\n' "${name:0:12}" "$(git -C "$TREE" log -1 --format=%s)"
+      else
+        echo "  ⚠️  $name 重锚脚本失败，尝试回退使用已适配的 Armbian 补丁..."
+        git -C "$TREE" am --abort 2>/dev/null || true
+        git -C "$TREE" checkout -- .
+      fi
+    fi
+    if [ "$rebased" = 0 ]; then
+      if [ -f "$ARMBIAN_DIR/w132d-$name.patch" ] && git -C "$TREE" am -q "$ARMBIAN_DIR/w132d-$name.patch"; then
+        printf '  ✅ %-12s %s（使用已适配的 Armbian 源补丁）\n' "${name:0:12}" "$(git -C "$TREE" log -1 --format=%s)"
+      else
+        git -C "$TREE" am --abort 2>/dev/null || true
+        die "$name 缺少可用的 Armbian 重锚方案或适配补丁应用失败"
+      fi
+    fi
   elif [ "$ON_ARMBIAN" = 1 ] && [[ "$name" == 0008-drm-rockchip-vop2-* ]]; then
     # 纯净版 0008 与 Armbian 的 RK3562 VOP2 上下文冲突，
-    # 由重锚脚本（或已适配的 Armbian 补丁）按新上下文重做
+    # 优先由重锚脚本按新上下文重做；若脚本执行失败，则回退到已适配的 Armbian 补丁
+    rebased=0
     if [ -f "$W/tools/rebase-vop-onto-armbian.py" ]; then
-      python3 "$W/tools/rebase-vop-onto-armbian.py" "$TREE" || exit 1
-      git -C "$TREE" add -A
-      commit_with_patch_message "$f"
-    elif [ -f "$ARMBIAN_DIR/w132d-$name.patch" ]; then
-      git -C "$TREE" am -q "$ARMBIAN_DIR/w132d-$name.patch" || exit 1
-    else
-      die "$name 缺少 Armbian 重锚脚本或适配补丁"
+      if python3 "$W/tools/rebase-vop-onto-armbian.py" "$TREE"; then
+        git -C "$TREE" add -A
+        commit_with_patch_message "$f"
+        rebased=1
+        printf '  ✅ %-12s %s（重锚到 Armbian 基线）\n' "${name:0:12}" "$(git -C "$TREE" log -1 --format=%s)"
+      else
+        echo "  ⚠️  $name 重锚脚本失败，尝试回退使用已适配的 Armbian 补丁..."
+        git -C "$TREE" am --abort 2>/dev/null || true
+        git -C "$TREE" checkout -- .
+      fi
     fi
-    printf '  ✅ %-12s %s（重锚到 Armbian 基线）\n' "${name:0:12}" "$(git -C "$TREE" log -1 --format=%s)"
+    if [ "$rebased" = 0 ]; then
+      if [ -f "$ARMBIAN_DIR/w132d-$name.patch" ] && git -C "$TREE" am -q "$ARMBIAN_DIR/w132d-$name.patch"; then
+        printf '  ✅ %-12s %s（使用已适配的 Armbian 源补丁）\n' "${name:0:12}" "$(git -C "$TREE" log -1 --format=%s)"
+      else
+        git -C "$TREE" am --abort 2>/dev/null || true
+        die "$name 缺少可用的 Armbian 重锚方案或适配补丁应用失败"
+      fi
+    fi
   else
     # git am 不做 fuzz：上下文对不齐就是失败，这正是要的 —— 源补丁打不上就该重新锚定
     if ! out=$(git -C "$TREE" am -q "$f" 2>&1); then
