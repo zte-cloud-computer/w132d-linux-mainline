@@ -4,12 +4,8 @@
 
 用法: rebase-mmc-onto-armbian.py <sdhci-of-dwcmshc.c>
 
-Armbian 的 rk3576-0013-mmc-sdhci-dwcmshc-rk3576-dll-tap-calibration 与 0002 改同一处：都在
-`int revision;` 后往 struct 插字段、都重写 dwcmshc_rk3568_set_clock() 的 HS400 分支，纯净基线的
-diff 打不上。Armbian 把 HS400 分支改成了二选一（needs_hs400_dll_calibration：rk3576 标定 tap；
-else：rk3588 等固定 tap），RK3528 属于后者但要用自己的 tap 值（6/6/3，来自 GPL-2.0 的 Rockchip BSP），
-所以只让 else 分支支持覆盖，rk3576 与 rk3588 的行为不动。
-每处改动都断言锚点唯一命中：Armbian 那个补丁将来变了会立刻失败，而不是产出打了一半的树。
+Armbian 补丁栈（rk3576-0014）引入了通用的 struct rockchip_emmc_data 结构。
+RK3528 沿用该架构提供专属的 rk3528_emmc_data 与 rk3528_pdata，并注册 of_match 条目。
 """
 import sys
 
@@ -28,56 +24,61 @@ def main():
     with open(path, encoding="utf-8") as f:
         s = f.read()
 
-    # 1) 三个 tap 覆盖字段，插在 Armbian 那个字段之后（而不是抢它的位置）
-    s = sub(s, """	bool needs_hs400_dll_calibration;
-};""",
-"""	bool needs_hs400_dll_calibration;
-	/*
-	 * Optional HS400 DLL tap overrides for revision-1 SoCs that do not use
-	 * the calibration above.  Ported from the GPL-2.0 Rockchip BSP.  Zero
-	 * keeps the generic values, so existing SoCs are unaffected.
-	 */
-	u8 hs400_tx_tap;
-	u8 hs400_cmd_tap;
-	u8 hs400_strbin_tap;
-};""", "struct 加三个 tap 覆盖字段")
+    if "rk3528_emmc_data" in s:
+        print("  ✅ mmc：rk3528_emmc_data 已在位（基于上游 rockchip_emmc_data 架构）")
+        return
 
-    # 2) else 分支（rk3588 等）支持覆盖；rk3576 那一支不动
-    s = sub(s, """			/* rk3588 and other revision-1 SoCs: original fixed taps */
-			txclk_tapnum = DLL_TXCLK_TAPNUM_90_DEGREES;
+    # 若尚未落地，基于上游 rk3562_emmc_data 上下文注入
+    s = sub(s, """/* RK3562 DLL settings from the Rockchip vendor driver. */""",
+"""/* RK3528 DLL settings from the Rockchip vendor driver. */
+static const struct rockchip_emmc_data rk3528_emmc_data = {
+	.hs200_tx_tapnum = 12,
+	.hs400_tx_tapnum = 6,
+	.hs400_cmd_tapnum = 6,
+	.hs400_strbin_tapnum = 3,
+	.ddr50_strbin_delay_num = 10,
+	.dll_cmd_out = true,
+	.tap_value_sel = true,
+	.allow_low_clock = true,
+};
 
-			extra = DLL_CMDOUT_SRC_CLK_NEG |
-				DLL_CMDOUT_EN_SRC_CLK_NEG |
-				DWCMSHC_EMMC_DLL_DLYENA |
-				DLL_CMDOUT_TAPNUM_90_DEGREES |
-				DLL_CMDOUT_TAPNUM_FROM_SW;""",
-"""			/*
-			 * rk3588 and other revision-1 SoCs: fixed taps, with
-			 * optional per-SoC overrides (rk3528 needs 6/6/3).
-			 */
-			txclk_tapnum = rockchip_pdata->hs400_tx_tap ?:
-				       DLL_TXCLK_TAPNUM_90_DEGREES;
+static const struct rockchip_pltfm_data sdhci_dwcmshc_rk3528_pdata = {
+	.dwcmshc_pdata = {
+		.pdata = {
+			.ops = &sdhci_dwcmshc_rk35xx_ops,
+			.quirks = SDHCI_QUIRK_CAP_CLOCK_BASE_BROKEN |
+				  SDHCI_QUIRK_BROKEN_TIMEOUT_VAL,
+			.quirks2 = SDHCI_QUIRK2_PRESET_VALUE_BROKEN |
+				   SDHCI_QUIRK2_CLOCK_DIV_ZERO_BROKEN,
+		},
+		.cqhci_host_ops = &rk35xx_cqhci_ops,
+		.init = dwcmshc_rk35xx_init,
+		.postinit = dwcmshc_rk35xx_postinit,
+	},
+	.revision = 1,
+	.emmc_data = &rk3528_emmc_data,
+};
 
-			extra = DLL_CMDOUT_SRC_CLK_NEG |
-				DLL_CMDOUT_EN_SRC_CLK_NEG |
-				DWCMSHC_EMMC_DLL_DLYENA |
-				(rockchip_pdata->hs400_cmd_tap ?:
-				 DLL_CMDOUT_TAPNUM_90_DEGREES) |
-				DLL_CMDOUT_TAPNUM_FROM_SW;""",
-        "HS400 else 分支支持 tap 覆盖")
+/* RK3562 DLL settings from the Rockchip vendor driver. */""", "注入 rk3528_emmc_data 与 pdata")
 
-    # 3) STRBIN 同理：只动非标定那一支
-    s = sub(s, """	else
-		extra |= DLL_STRBIN_TAPNUM_DEFAULT;""",
-"""	else
-		extra |= rockchip_pdata->hs400_strbin_tap ?:
-			 DLL_STRBIN_TAPNUM_DEFAULT;""",
-        "STRBIN 支持 tap 覆盖")
+    s = sub(s, """	{
+		.compatible = "rockchip,rk3562-dwcmshc",
+		.data = &sdhci_dwcmshc_rk3562_pdata,
+	},""",
+"""	{
+		.compatible = "rockchip,rk3528-dwcmshc",
+		.data = &sdhci_dwcmshc_rk3528_pdata,
+	},
+	{
+		.compatible = "rockchip,rk3562-dwcmshc",
+		.data = &sdhci_dwcmshc_rk3562_pdata,
+	},""", "注入 rockchip,rk3528-dwcmshc compatible 条目")
 
     with open(path, "w", encoding="utf-8") as f:
         f.write(s)
-    print("  ✅ mmc：三处改动已叠到 Armbian 补丁栈之上")
+    print("  ✅ mmc：改动已叠到 Armbian 补丁栈之上")
 
 
 if __name__ == "__main__":
     main()
+

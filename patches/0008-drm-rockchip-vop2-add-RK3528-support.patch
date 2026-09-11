@@ -17,7 +17,12 @@ reports.
 
 Signed-off-by: wenziwanka <tech@wenziwanka.com>
 ---
+ drivers/gpu/drm/rockchip/rockchip_drm_vop2.h |  11 +-
+ drivers/gpu/drm/rockchip/rockchip_vop2_reg.c | 147 +++++++++++++++++++
+ 2 files changed, 157 insertions(+), 1 deletion(-)
 
+diff --git a/drivers/gpu/drm/rockchip/rockchip_drm_vop2.h b/drivers/gpu/drm/rockchip/rockchip_drm_vop2.h
+index b7f1525..7aea395 100644
 --- a/drivers/gpu/drm/rockchip/rockchip_drm_vop2.h
 +++ b/drivers/gpu/drm/rockchip/rockchip_drm_vop2.h
 @@ -18,7 +18,7 @@
@@ -29,7 +34,7 @@ Signed-off-by: wenziwanka <tech@wenziwanka.com>
  #define VOP_VERSION_RK3562	VOP2_VERSION(0x50, 0x17, 0x4350)
  #define VOP_VERSION_RK3576	VOP2_VERSION(0x50, 0x19, 0x9765)
  
-@@ -446,6 +446,9 @@
+@@ -452,6 +452,9 @@ enum dst_factor_mode {
  
  /* Extra OVL register definition */
  #define RK3576_SYS_EXTRA_ALPHA_CTRL		0x500
@@ -39,15 +44,15 @@ Signed-off-by: wenziwanka <tech@wenziwanka.com>
  #define RK3576_CLUSTER0_MIX_SRC_COLOR_CTRL	0x530
  #define RK3576_CLUSTER0_MIX_DST_COLOR_CTRL	0x534
  #define RK3576_CLUSTER0_MIX_SRC_ALPHA_CTRL	0x538
-@@ -706,6 +709,7 @@
+@@ -727,6 +730,7 @@ enum dst_factor_mode {
  #define RK3568_DSP_IF_POL__MIPI_PIN_POL			GENMASK(19, 16)
  #define RK3568_DSP_IF_POL__EDP_PIN_POL			GENMASK(15, 12)
  #define RK3568_DSP_IF_POL__HDMI_PIN_POL			GENMASK(7, 4)
 +#define RK3568_DSP_IF_POL__HDMI_DCLK_POL		BIT(7)
  #define RK3568_DSP_IF_POL__RGB_LVDS_PIN_POL		GENMASK(3, 0)
  
- #define RK3588_DSP_IF_POL__DP1_PIN_POL			GENMASK(14, 12)
-@@ -773,6 +777,11 @@
+ /* RK3562 uses separate pin and clock polarity fields for these outputs. */
+@@ -800,6 +804,11 @@ enum dst_factor_mode {
  
  #define POLFLAG_DCLK_INV	BIT(3)
  
@@ -59,13 +64,14 @@ Signed-off-by: wenziwanka <tech@wenziwanka.com>
  #define RK3576_OVL_CTRL__YUV_MODE			BIT(0)
  #define RK3576_OVL_BG_MIX_CTRL__BG_DLY			GENMASK(31, 24)
  
+diff --git a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
+index 445fdd1..23f8784 100644
 --- a/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
 +++ b/drivers/gpu/drm/rockchip/rockchip_vop2_reg.c
-@@ -2502,7 +2502,151 @@
- 	.setup_bg_dly = rk3568_vop2_setup_bg_dly,
+@@ -2849,6 +2849,150 @@ static const struct vop2_ops rk3588_vop_ops = {
  	.setup_overlay = rk3568_vop2_setup_overlay,
  };
-+
+ 
 +static unsigned long rk3528_set_intf_mux(struct vop2_video_port *vp, int id, u32 polflags)
 +{
 +	struct vop2 *vop2 = vp->vop2;
@@ -85,7 +91,7 @@ Signed-off-by: wenziwanka <tech@wenziwanka.com>
 +
 +	return clock;
 +}
- 
++
 +/*
 + * The overlay of the RK3528 is laid out like the RK3576 one, but the
 + * port assignment and the delay of the windows live in the OVL_SYS block
@@ -210,16 +216,16 @@ Signed-off-by: wenziwanka <tech@wenziwanka.com>
 +	.soc_id = 3528,
 +};
 +
- static const struct vop2_data rk3566_vop = {
- 	.version = VOP_VERSION_RK3568,
- 	.feature = VOP2_FEATURE_HAS_SYS_GRF,
-@@ -2582,6 +2726,9 @@
+ /* RK3562 is a single-VP VOP with ESMART-only windows. */
+ static const struct vop2_data rk3562_vop = {
+ 	.version = VOP_VERSION_RK3562,
+@@ -2946,6 +3090,9 @@ static const struct vop2_data rk3588_vop = {
  
  static const struct of_device_id vop2_dt_match[] = {
  	{
 +		.compatible = "rockchip,rk3528-vop",
 +		.data = &rk3528_vop,
 +	}, {
- 		.compatible = "rockchip,rk3566-vop",
- 		.data = &rk3566_vop,
+ 		.compatible = "rockchip,rk3562-vop",
+ 		.data = &rk3562_vop,
  	}, {
