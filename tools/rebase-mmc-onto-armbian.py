@@ -17,6 +17,12 @@ def sub(text, old, new, what):
     return text.replace(old, new)
 
 
+RK3528_DATA = "static const struct rockchip_emmc_data rk3528_emmc_data = {"
+RK3528_PDATA = "static const struct rockchip_pltfm_data sdhci_dwcmshc_rk3528_pdata = {"
+RK3528_MATCH = """\t\t.compatible = "rockchip,rk3528-dwcmshc",
+\t\t.data = &sdhci_dwcmshc_rk3528_pdata,"""
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit(f"用法: {sys.argv[0]} <sdhci-of-dwcmshc.c>")
@@ -24,8 +30,33 @@ def main():
     with open(path, encoding="utf-8") as f:
         s = f.read()
 
-    if "rk3528_emmc_data" in s:
-        print("  ✅ mmc：rk3528_emmc_data 已在位（基于上游 rockchip_emmc_data 架构）")
+    data_present = RK3528_DATA in s
+    pdata_present = RK3528_PDATA in s
+    match_present = RK3528_MATCH in s
+
+    if data_present or pdata_present or match_present:
+        if not (data_present and pdata_present):
+            sys.exit("❌ mmc：检测到 RK3528 改动不完整，拒绝继续生成补丁")
+        if match_present:
+            print("  ✅ mmc：RK3528 数据与 compatible 条目均已在位")
+            return
+
+        # patch 可能已经成功落下数据 hunk，但 compatible hunk 发生漂移。
+        s = sub(s, """\t{
+\t\t.compatible = "rockchip,rk3562-dwcmshc",
+\t\t.data = &sdhci_dwcmshc_rk3562_pdata,
+\t},""",
+        """\t{
+\t\t.compatible = "rockchip,rk3528-dwcmshc",
+\t\t.data = &sdhci_dwcmshc_rk3528_pdata,
+\t},
+\t{
+\t\t.compatible = "rockchip,rk3562-dwcmshc",
+\t\t.data = &sdhci_dwcmshc_rk3562_pdata,
+\t},""", "补齐 rockchip,rk3528-dwcmshc compatible 条目")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(s)
+        print("  ✅ mmc：已补齐 RK3528 compatible 条目")
         return
 
     # 若尚未落地，基于上游 rk3562_emmc_data 上下文注入
@@ -81,4 +112,3 @@ static const struct rockchip_pltfm_data sdhci_dwcmshc_rk3528_pdata = {
 
 if __name__ == "__main__":
     main()
-
