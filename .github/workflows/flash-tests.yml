@@ -1,0 +1,22 @@
+name: Flash launcher checks
+on:
+  pull_request:
+    paths: ['flash/**', 'tests/test_flash.py', '.github/workflows/flash-tests.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  launchers:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Test launchers and device failure paths
+        run: python -m unittest discover -s tests -p test_flash.py -v

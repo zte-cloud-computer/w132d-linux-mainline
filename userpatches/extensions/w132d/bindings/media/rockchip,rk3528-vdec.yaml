@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/rockchip,rk3528-vdec.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+title: Rockchip Video Decoder (VDec)
+maintainers:
+  - W132D maintainers <tech@wenziwanka.com>
+description: |-
+  Rockchip SoCs have variants of the same stateless Video Decoder that can
+  decodes H.264, HEVC, VP9 and AV1 streams, depending on the variant.
+properties:
+  compatible:
+    const: rockchip,rk3528-vdec
+  reg:
+    maxItems: 2
+  reg-names:
+    items:
+      - const: link
+      - const: function
+  interrupts:
+    maxItems: 1
+  clocks:
+    maxItems: 3
+  clock-names:
+    items:
+      - const: axi
+      - const: ahb
+      - const: hevc_cabac
+  assigned-clocks: true
+  assigned-clock-rates: true
+  resets:
+    items:
+      - description: The Video Decoder AXI interface reset
+      - description: The Video Decoder AHB interface reset
+      - description: The Video Decoded CABAC reset
+      - description: The Video Decoder core reset
+      - description: The Video decoder HEVC CABAC reset
+  reset-names:
+    items:
+      - const: axi
+      - const: ahb
+      - const: cabac
+      - const: core
+      - const: hevc_cabac
+  power-domains:
+    maxItems: 1
+  iommus:
+    maxItems: 1
+  sram:
+    maxItems: 1
+    description: Some SoCs, like rk3588 provide on-chip SRAM to store temporary buffers during decoding.
+required:
+  - compatible
+  - reg
+  - interrupts
+  - clocks
+  - clock-names
+additionalProperties: false
+...

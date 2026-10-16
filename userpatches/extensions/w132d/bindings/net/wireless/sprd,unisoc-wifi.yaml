@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+maintainers:
+  - W132D maintainers <tech@wenziwanka.com>
+$id: http://devicetree.org/schemas/net/wireless/sprd,unisoc-wifi.yaml#
+title: W132D Unisoc WiFi platform device
+properties:
+  compatible:
+    const: sprd,unisoc-wifi
+required:
+  - compatible
+unevaluatedProperties: false
+...

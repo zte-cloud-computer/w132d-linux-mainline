@@ -1,0 +1,81 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Open a remote pairing window matching the original 600-second timeout.
+# Usage: w132d-ble-pair [--force] [minutes, default 10]
+#
+# Bonded remotes normally reconnect without scanning. Pairing mode can erase
+# the remote key, requiring a matching local reset to avoid PIN or Key Missing.
+# An existing LTK is preserved unless --force is specified. Repeated calls
+# attach logs without replacing the session or invalidating Pair callbacks.
+set -euo pipefail
+
+PAIR_FLAG=/run/w132d-ble-pair-until
+PAIR_LOCK=/run/w132d-ble-pair.lock
+FORCE=0
+MIN=10
+SEEN_MIN=0
+
+usage() {
+  echo "Usage: w132d-ble-pair [--force] [minutes: 1-60, default 10]" >&2
+}
+
+for arg in "$@"; do
+  case "$arg" in
+    --force) FORCE=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *)
+      if [ "$SEEN_MIN" = 1 ]; then usage; exit 2; fi
+      MIN=$arg
+      SEEN_MIN=1
+      ;;
+  esac
+done
+
+if ! [[ "$MIN" =~ ^[0-9]+$ ]] || (( MIN < 1 || MIN > 60 )); then
+  usage
+  exit 2
+fi
+
+# Lock only the session update; release before following logs.
+exec 9>"$PAIR_LOCK"
+flock -x 9
+
+NOW=$(date +%s)
+if [ -r "$PAIR_FLAG" ]; then
+  read -r ACTIVE_END _ACTIVE_TOKEN < "$PAIR_FLAG" || true
+  if [[ "${ACTIVE_END:-}" =~ ^[0-9]+$ ]] && (( ACTIVE_END > NOW )); then
+    echo "A pairing window is already active (until $(date -d "@$ACTIVE_END" '+%H:%M:%S'))."
+    echo "Attaching to live logs without removing existing bonds."
+    flock -u 9
+    exec journalctl -u w132d-ble-remote -f -o cat -n 0
+  fi
+fi
+
+shopt -s nullglob
+for INFO in /var/lib/bluetooth/*/*/info; do
+  NAME=$(sed -n 's/^Name=//p' "$INFO" | head -n 1)
+  if [[ "$NAME" =~ ^(CMCC_Voice|IFLY|YYYKQ|电信) ]] &&
+     grep -Eq '^\[(LongTermKey|PeripheralLongTermKey)\]$' "$INFO"; then
+    if [ "$FORCE" = 0 ]; then
+      ADDR=$(basename "$(dirname "$INFO")")
+      echo "Remote $NAME ($ADDR) already has a bonding key. Existing bonds were preserved."
+      echo "To explicitly replace the bond, run: w132d-ble-pair --force $MIN"
+      exit 0
+    fi
+  fi
+done
+
+TOKEN=$(cat /proc/sys/kernel/random/uuid)
+END=$(( NOW + MIN * 60 ))
+umask 022
+PAIR_TMP=${PAIR_FLAG}.$$
+trap 'rm -f "$PAIR_TMP"' EXIT
+printf '%s %s fresh\n' "$END" "$TOKEN" > "$PAIR_TMP"
+mv "$PAIR_TMP" "$PAIR_FLAG"
+trap - EXIT
+flock -u 9
+echo "Pairing window opened for ${MIN} minutes (until $(date -d "@$END" '+%H:%M:%S'), session ${TOKEN%%-*})"
+echo "Hold the remote pairing keys for about 5 seconds until its LED flashes rapidly."
+echo
+echo "Live logs (Ctrl-C detaches without stopping pairing):"
+exec journalctl -u w132d-ble-remote -f -o cat -n 0

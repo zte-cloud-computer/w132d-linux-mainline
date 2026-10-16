@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/phy/rockchip,rk3528-hdmi-phy.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+title: Rockchip HDMI PHY with Innosilicon IP block
+maintainers:
+  - W132D maintainers <tech@wenziwanka.com>
+properties:
+  compatible:
+    const: rockchip,rk3528-hdmi-phy
+  reg:
+    maxItems: 1
+  clocks:
+    maxItems: 2
+  clock-names:
+    items:
+      - const: sysclk
+      - const: refoclk
+  clock-output-names:
+    description: The hdmiphy output clock name, that gets fed back to the CRU.
+  '#clock-cells':
+    const: 0
+  interrupts:
+    maxItems: 1
+  nvmem-cells:
+    maxItems: 1
+    description: A phandle + nvmem specifier for the cpu-version efuse for adjustment to some frequency
+      settings, depending on cpu-version
+  nvmem-cell-names:
+    items:
+      - const: cpu-version
+  '#phy-cells':
+    const: 0
+  power-domains:
+    maxItems: 1
+required:
+  - compatible
+  - reg
+  - clocks
+  - clock-names
+  - clock-output-names
+  - '#clock-cells'
+  - '#phy-cells'
+additionalProperties: false
+...

@@ -1,0 +1,17 @@
+# The helper skips CEC and DPMS when no HDMI connector is present.
+[Unit]
+Description=W132D IR/BLE power-key software standby
+After=w132d-ir-keymap.service
+Wants=w132d-ir-keymap.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/w132d/soft-standby --daemon
+Restart=always
+RestartSec=2
+RuntimeDirectory=w132d-soft-standby
+RuntimeDirectoryPreserve=restart
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

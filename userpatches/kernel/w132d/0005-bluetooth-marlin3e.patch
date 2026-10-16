@@ -1,0 +1,29 @@
+From: W132D maintainers <tech@wenziwanka.com>
+Subject: [PATCH] Bluetooth: scope the broken Park policy quirk to Marlin3E
+
+diff --git a/include/net/bluetooth/hci.h b/include/net/bluetooth/hci.h
+--- a/include/net/bluetooth/hci.h
++++ b/include/net/bluetooth/hci.h
+@@ -69,6 +69,9 @@
+ 
+ /* HCI device quirks */
+ enum {
++	/* Marlin3E advertises Park but rejects it in the default policy. */
++	HCI_QUIRK_BROKEN_PARK_LINK_POLICY,
++
+ 	/* When this quirk is set, the HCI Reset command is send when
+ 	 * closing the transport instead of when opening it.
+ 	 *
+diff --git a/net/bluetooth/hci_sync.c b/net/bluetooth/hci_sync.c
+--- a/net/bluetooth/hci_sync.c
++++ b/net/bluetooth/hci_sync.c
+@@ -4355,7 +4355,8 @@
+ 		link_policy |= HCI_LP_HOLD;
+ 	if (lmp_sniff_capable(hdev))
+ 		link_policy |= HCI_LP_SNIFF;
+-	if (lmp_park_capable(hdev))
++	if (lmp_park_capable(hdev) &&
++	    !hci_test_quirk(hdev, HCI_QUIRK_BROKEN_PARK_LINK_POLICY))
+ 		link_policy |= HCI_LP_PARK;
+ 
+ 	cp.policy = cpu_to_le16(link_policy);

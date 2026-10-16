@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config SND_SOC_RK3528
+	tristate "Rockchip RK3528 internal codec"
+	depends on ARCH_ROCKCHIP && OF
+	select REGMAP_MMIO
+config SND_SOC_ES7202
+	tristate "Everest ES7202 PDM ADC for W132D"
+	depends on I2C
+	select REGMAP_I2C
+
+config SND_SOC_ES7202_MIC_MAX_CHANNELS
+	int
+	default 2
+	depends on SND_SOC_ES7202

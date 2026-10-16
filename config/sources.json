@@ -1,0 +1,110 @@
+{
+  "linux": {
+    "repository": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git",
+    "tag": "v7.2.10",
+    "commit": "7b20d05fd38de8e0be168956f6fd241d750c7d69",
+    "url": "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.10.tar.xz",
+    "sha256": "2feaa70453e91f541be6a5c9078d8168e081af45a3d9718054850538cff2ebf3"
+  },
+  "armbian": {
+    "repository": "https://github.com/armbian/build.git",
+    "tag": "v26.5.1",
+    "commit": "8de11a017f7f05a82c77850f8322928cb6a3b70c"
+  },
+  "uboot": {
+    "repository": "https://github.com/u-boot/u-boot.git",
+    "tag": "v2026.07",
+    "commit": "ece349ade2973e220f524ce59e59711cc919263f"
+  },
+  "blobs": {
+    "ddr": {
+      "url": "https://raw.githubusercontent.com/rockchip-linux/rkbin/91c1edbad9ae17bc876110f5de876eb8bad165ba/bin/rk35/rk3528_ddr_1056MHz_v1.13.bin",
+      "path": "bin/rk35/rk3528_ddr_1056MHz_v1.13.bin",
+      "commit": "91c1edbad9ae17bc876110f5de876eb8bad165ba",
+      "sha256": "ab88df0d98a882a5ebb50b82f4481a2506448a2ce6e0e6efaf759e4438cc372e"
+    },
+    "bl31": {
+      "url": "https://raw.githubusercontent.com/rockchip-linux/rkbin/3e288fe814e059dd06833495f845cab04ac20a5c/bin/rk35/rk3528_bl31_v1.21.elf",
+      "path": "bin/rk35/rk3528_bl31_v1.21.elf",
+      "commit": "3e288fe814e059dd06833495f845cab04ac20a5c",
+      "sha256": "ab0b30d59e81b8a14ec6f45316d1dd9befc23fae02372a989ec63c90a4790bab"
+    },
+    "loader_ddr": {
+      "url": "https://raw.githubusercontent.com/rockchip-linux/rkbin/3e288fe814e059dd06833495f845cab04ac20a5c/bin/rk35/rk3528_ddr_1056MHz_v1.14.bin",
+      "path": "bin/rk35/rk3528_ddr_1056MHz_v1.14.bin",
+      "commit": "3e288fe814e059dd06833495f845cab04ac20a5c",
+      "sha256": "a4a6d866f789d0c063334e4863ac7b4ed11bcdc735ea48fe3c0200575592edf8"
+    },
+    "usbplug": {
+      "url": "https://raw.githubusercontent.com/rockchip-linux/rkbin/3e288fe814e059dd06833495f845cab04ac20a5c/bin/rk35/rk3528_usbplug_v1.04.bin",
+      "path": "bin/rk35/rk3528_usbplug_v1.04.bin",
+      "commit": "3e288fe814e059dd06833495f845cab04ac20a5c",
+      "sha256": "ffae138454dae4883472859ad3f202520a3fa5a02b594579556120abb3c885a4"
+    },
+    "spl": {
+      "url": "https://raw.githubusercontent.com/rockchip-linux/rkbin/3e288fe814e059dd06833495f845cab04ac20a5c/bin/rk35/rk3528_spl_v1.07.bin",
+      "path": "bin/rk35/rk3528_spl_v1.07.bin",
+      "commit": "3e288fe814e059dd06833495f845cab04ac20a5c",
+      "sha256": "c3b23c2abde14e6d28f1c506430c36fa4d6dd96a2a71944faac57cc7a24d83ca"
+    },
+    "loader_config": {
+      "url": "https://raw.githubusercontent.com/rockchip-linux/rkbin/3e288fe814e059dd06833495f845cab04ac20a5c/RKBOOT/RK3528MINIALL.ini",
+      "path": "RKBOOT/RK3528MINIALL.ini",
+      "commit": "3e288fe814e059dd06833495f845cab04ac20a5c",
+      "sha256": "f2ce30cf8bba828b39c77d533f0f35a4a4711a7f02b33d705655ae49321e5830"
+    },
+    "boot_merger": {
+      "url": "https://raw.githubusercontent.com/rockchip-linux/rkbin/3e288fe814e059dd06833495f845cab04ac20a5c/tools/boot_merger",
+      "path": "tools/boot_merger",
+      "commit": "3e288fe814e059dd06833495f845cab04ac20a5c",
+      "sha256": "f8e1a2d01bc475e9571ab0aec00e4cca3d85bbd4587f3873970560443a237d0c"
+    },
+    "rkbin_license": {
+      "url": "https://raw.githubusercontent.com/rockchip-linux/rkbin/3e288fe814e059dd06833495f845cab04ac20a5c/LICENSE",
+      "path": "LICENSE",
+      "commit": "3e288fe814e059dd06833495f845cab04ac20a5c",
+      "sha256": "1b3cfbd212ef0e645b34aa6beee07343ce954a4f512338f12317ab297a9c9829"
+    },
+    "wcn": {
+      "url": "https://raw.githubusercontent.com/CoreELEC/uwe5631-aml/82f0b4a1b842c3f41f49ec870b7ec8f5899a8895/BSP/fw/wcnmodem.bin",
+      "commit": "82f0b4a1b842c3f41f49ec870b7ec8f5899a8895",
+      "sha256": "d84724b2e442a79d3999c630e5a13a418ef3f1b0a5ecafcf1ce031b3ede758cb",
+      "license_status": "No standalone LICENSE, COPYING or copyright file was present in the pinned upstream firmware tree; upstream licensing terms were not recorded.",
+      "source_repository": "https://github.com/CoreELEC/uwe5631-aml"
+    }
+  },
+  "build": {
+    "board": "w132d",
+    "branch": "edge",
+    "release": "trixie",
+    "minimal": true,
+    "default_apt_channel": "stable",
+    "kernel_git": "full",
+    "kernel_btf": true,
+    "kernel_configure": false,
+    "install_headers": true,
+    "build_kernel_source": true,
+    "image_partition_table": "gpt",
+    "boot_filesystem": "fat",
+    "keep_original_os_release": true,
+    "install_armbian_firmware": false
+  },
+  "layout": {
+    "sector_size": 512,
+    "idbloader_sector": 64,
+    "uboot_sector": 16384,
+    "reserved_start_sector": 7168,
+    "reserved_end_sector": 10240,
+    "partition_offset_mib": 16,
+    "boot_size_mib": 512
+  },
+  "repository": "https://zte-cloud-computer.github.io/w132d-linux-mainline",
+  "fnos": {
+    "repository": "https://github.com/ophub/fnnas.git",
+    "commit": "2c34125dbc681dc24626399f5e74ca465309fc85"
+  },
+  "fnos_resources": {
+    "repository": "https://github.com/ophub/amlogic-s9xxx-armbian.git",
+    "commit": "556c02f3f30ae1f17ae5a025033a735936f5d8cf"
+  }
+}

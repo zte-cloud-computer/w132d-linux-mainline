@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/rockchip-linux/rkdeveloptool.git",
+  "commit": "304f073752fd25c854e1bcf05d8e7f925b1f4e14",
+  "license": "GPL-2.0-or-later",
+  "changes": [
+    "Replace hardcoded macOS library paths with pkg-config and portable CMake.",
+    "Use constant sector buffer bounds for modern GCC and Clang.",
+    "Report the local W132D tool version.",
+    "Handle help and version before USB initialization.",
+    "Return success for a valid empty device listing so callers can poll."
+  ]
+}

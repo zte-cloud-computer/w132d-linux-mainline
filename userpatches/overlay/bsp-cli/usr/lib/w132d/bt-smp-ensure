@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Power the adapter through BlueZ's management path and wait for readiness."""
+import sys
+import time
+import dbus
+
+adapter = sys.argv[1] if len(sys.argv) > 1 else "hci0"
+if not adapter.startswith("hci") or not adapter[3:].isdigit():
+    raise SystemExit("Invalid Bluetooth adapter name")
+error = "Adapter not available"
+for attempt in range(30):
+    try:
+        bus = dbus.SystemBus()
+        props = dbus.Interface(bus.get_object("org.bluez", "/org/bluez/" + adapter),
+                               "org.freedesktop.DBus.Properties")
+        props.Set("org.bluez.Adapter1", "Powered", dbus.Boolean(True))
+        if bool(props.Get("org.bluez.Adapter1", "Powered")):
+            print("Bluetooth adapter powered through BlueZ management")
+            sys.exit(0)
+    except dbus.DBusException as exc:
+        error = exc.get_dbus_name()
+    time.sleep(1)
+raise SystemExit("Bluetooth adapter did not become ready: " + error)

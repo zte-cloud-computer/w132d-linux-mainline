@@ -1,26 +1,15 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: wenziwanka <tech@wenziwanka.com>
-Date: Fri, 4 Sep 2026 23:14:20 +0800
-Subject: [PATCH] arm: dts: rockchip: add ZTE Cloud Computer W132D (RK3528)
+Subject: [PATCH] rockchip: support W132D and its SARADC download key
 
-Minimal U-Boot device tree for the W132D TV box: eMMC (HS200), UART0
-console and the SARADC download key, which is the Reset pinhole next to
-the HDMI port (channel 1). Linux boots its own DTB via extlinux.
-
-The saradc node is re-created as saradc@ffae0000: rockchip_dnl_key_pressed()
-matches ADC devices by the "saradc" name prefix, and the upstream
-rk3528.dtsi calls the node adc@ffae0000, which makes the key invisible.
----
- arch/arm/dts/rk3528-w132d.dts | 76 +++++++++++++++++++++++++++++++++++
- 1 file changed, 76 insertions(+)
- create mode 100644 arch/arm/dts/rk3528-w132d.dts
+Use a minimal U-Boot board tree for eMMC, UART and the download key.
+Match the RK3528 ADC by compatible so the native adc node can be reused.
+Linux receives its own separately maintained DTB through extlinux.
 
 diff --git a/arch/arm/dts/rk3528-w132d.dts b/arch/arm/dts/rk3528-w132d.dts
 new file mode 100644
-index 0000000..c809cc1
 --- /dev/null
 +++ b/arch/arm/dts/rk3528-w132d.dts
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,55 @@
 +// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 +/*
 + * ZTE Cloud Computer W132D (Rockchip RK3528).
@@ -56,30 +45,9 @@ index 0000000..c809cc1
 +	};
 +};
 +
-+/*
-+ * rockchip_dnl_key_pressed() (arch/arm/mach-rockchip/boot_mode.c) only looks
-+ * at ADC devices whose name starts with "saradc", but the upstream rk3528.dtsi
-+ * names the node adc@ffae0000, so the download key is never seen. Re-create
-+ * the node under the expected name; the properties are the upstream ones.
-+ */
-+/delete-node/ &saradc;
-+
-+/ {
-+	soc {
-+		saradc: saradc@ffae0000 {
-+			compatible = "rockchip,rk3528-saradc";
-+			reg = <0x0 0xffae0000 0x0 0x10000>;
-+			clocks = <&cru CLK_SARADC>, <&cru PCLK_SARADC>;
-+			clock-names = "saradc", "apb_pclk";
-+			interrupts = <GIC_SPI 140 IRQ_TYPE_LEVEL_HIGH>;
-+			power-domains = <&power RK3528_PD_VPU>;
-+			resets = <&cru SRST_P_SARADC>;
-+			reset-names = "saradc-apb";
-+			#io-channel-cells = <1>;
-+			vref-supply = <&vdd_1v8_s3>;
-+			status = "okay";
-+		};
-+	};
++&saradc {
++	vref-supply = <&vdd_1v8_s3>;
++	status = "okay";
 +};
 +
 +&sdhci {
@@ -97,3 +65,16 @@ index 0000000..c809cc1
 +	pinctrl-0 = <&uart0m0_xfer>;
 +	status = "okay";
 +};
+diff --git a/arch/arm/mach-rockchip/boot_mode.c b/arch/arm/mach-rockchip/boot_mode.c
+--- a/arch/arm/mach-rockchip/boot_mode.c
++++ b/arch/arm/mach-rockchip/boot_mode.c
+@@ -51,7 +51,8 @@
+ 
+ 	ret = -ENODEV;
+ 	uclass_foreach_dev(dev, uc) {
+-		if (!strncmp(dev->name, "saradc", 6)) {
++		if (device_is_compatible(dev, "rockchip,rk3528-saradc") ||
++		    !strncmp(dev->name, "saradc", 6)) {
+ 			ret = adc_channel_single_shot(dev->name, 1, &val);
+ 			break;
+ 		}

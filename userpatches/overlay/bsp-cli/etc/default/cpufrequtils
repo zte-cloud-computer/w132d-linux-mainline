@@ -1,0 +1,5 @@
+# armbian-hardware-optimization reads this governor setting. Use the kernel default schedutil.
+ENABLE=false
+MIN_SPEED=408000
+MAX_SPEED=2016000
+GOVERNOR=schedutil

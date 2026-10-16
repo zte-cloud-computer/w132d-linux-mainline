@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+maintainers:
+  - W132D maintainers <tech@wenziwanka.com>
+$id: http://devicetree.org/schemas/net/bluetooth/sprd,mtty.yaml#
+title: W132D Marlin3E HCI transport
+properties:
+  compatible:
+    const: sprd,mtty
+  sprd,name:
+    $ref: /schemas/types.yaml#/definitions/string
+    description: Legacy transport name.
+  local-bd-address:
+    $ref: /schemas/types.yaml#/definitions/uint8-array
+    minItems: 6
+    maxItems: 6
+    description: Optional controller address.
+required:
+  - compatible
+unevaluatedProperties: false
+...

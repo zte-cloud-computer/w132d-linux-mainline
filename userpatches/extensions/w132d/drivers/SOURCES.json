@@ -1,0 +1,35 @@
+{
+  "codecs": {
+    "repository": "https://github.com/zte-cloud-computer/w132d-linux-mainline",
+    "commit": "0eae77166b92fb9397e3c83dc04139942762e373",
+    "path": "patches/0004-ASoC-rockchip-add-the-RK3528-audio-codec-and-the-ES7.patch",
+    "original_source": "armbian/linux-rockchip rk-6.1-rkr5; original import did not record its commit",
+    "license": "GPL-2.0",
+    "changes": [
+      "Directly maintain the four imported codec source files.",
+      "Keep one ES7202 and two microphone channels for W132D.",
+      "Add the everest,es7202 binding and guard the optional I2C ID in OF probing."
+    ]
+  },
+  "uwe5621ds": {
+    "repository": "https://github.com/armbian/uwe5622",
+    "commit": "d6bec7538a0b4b67e35715ad71eaa056555524cb",
+    "license": "GPL-2.0",
+    "adaptation_source": {
+      "repository": "https://github.com/armbian/build",
+      "commit": "8de11a017f7f05a82c77850f8322928cb6a3b70c",
+      "path": "patch/misc/wireless-uwe5622"
+    },
+    "changes": [
+      "W132D native HCI transport and Marlin3E-only Park policy quirk.",
+      "Firmware buffer ownership, DT device registration and rfkill fixes.",
+      "Management key storage and bounds checks.",
+      "Use compile-time firmware response buffer sizes instead of variable-length kernel stack arrays.",
+      "Integrate Linux 6.7 through 7.1 API adaptations; 6.19 changes already present behind version guards.",
+      "Omit unused embedded USB firmware and vendor utility programs.",
+      "Use the UWE5621DS source directory and board Kconfig option; preserve wire identifiers and module ABI."
+    ],
+    "hardware": "UWE5621DS, as identified by the board maintainer",
+    "compatibility": "Preserve verified module ABI and firmware paths: uwe5622_bsp_sdio, sprdwl_ng, sprdbt_tty. The maintained source directory and board option identify UWE5621DS."
+  }
+}

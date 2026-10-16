@@ -1,0 +1,107 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# W132D 3.5mm headphone and microphone hardware test.
+# Playback: left, right, then stereo at 1 kHz.
+# Capture: report levels for 10 seconds and compare peaks to the noise floor.
+# The noise floor varies with PGA and Mic Boost; do not use a fixed threshold.
+# Usage: w132d-audio-test [amplitude: 0-32767, default 12000]
+set -euo pipefail
+if [[ ${1:-} == --help ]]; then
+    echo "Usage: w132d-audio-test [amplitude: 0-32767, default 12000]"
+    exit 0
+fi
+AMP=${1:-12000}
+if [[ ! $AMP =~ ^[0-9]{1,5}$ ]] || (( 10#$AMP > 32767 )); then
+    echo "ERROR: amplitude must be an integer from 0 to 32767" >&2
+    exit 1
+fi
+WORK=$(mktemp -d -t w132d-audio.XXXXXX)
+trap 'rm -rf -- "$WORK"' EXIT
+PLAY=rk3528acodec
+CAP=rockchippdmmica
+echo "Playback card: ${PLAY:-none}   Capture card: ${CAP:-none}"
+echo "Headphone detection: $(amixer -c "$PLAY" cget numid=1 2>/dev/null | sed -n 's/.*values=//p' | head -1 || true)  (on/1=inserted)"
+echo "Microphone bias SARADC ch2: $(cat /sys/bus/iio/devices/iio:device0/in_voltage2_raw 2>/dev/null || true)  (rises during capture only)"
+echo
+
+python3 - "$AMP" "$WORK" <<'PY'
+import wave, struct, math, sys
+from pathlib import Path
+work = Path(sys.argv[2])
+amp = int(sys.argv[1]); sr = 48000
+def seg(n, l, r, f=1000):
+    o = []
+    for i in range(int(sr*n)):
+        v = int(amp*math.sin(2*math.pi*f*i/sr))
+        o.append(struct.pack("<hh", v if l else 0, v if r else 0))
+    return b"".join(o)
+w = wave.open(str(work / "left-right.wav"), "w")
+w.setnchannels(2); w.setsampwidth(2); w.setframerate(sr)
+w.writeframes(seg(0.5,0,0) + seg(1.5,1,0) + seg(0.5,0,0) + seg(1.5,0,1) + seg(0.5,0,0) + seg(1.5,1,1))
+w.close()
+o = []
+for i in range(int(sr*0.25)):
+    v = int(9000*math.sin(2*math.pi*1760*i/sr)); o.append(struct.pack("<hh", v, v))
+w = wave.open(str(work / "beep.wav"), "w")
+w.setnchannels(2); w.setsampwidth(2); w.setframerate(sr)
+w.writeframes(b"".join(o)); w.close()
+PY
+
+echo "Playback for 6 seconds: silence / left 1.5s / silence / right 1.5s / silence / stereo 1.5s"
+aplay -D default -q "$WORK/left-right.wav"
+sleep 1                    # The codec has one substream; allow it to close to avoid EBUSY.
+echo
+
+echo "Recording starts after a 3-second countdown and a beep. Speak continuously into the headset microphone."
+for i in 3 2 1; do echo "   $i..."; sleep 1; done
+aplay -D default -q "$WORK/beep.wav"
+sleep 1
+echo "   Speak now"
+arecord -D default -f S16_LE -r 16000 -c 2 -d 10 "$WORK/mic.wav"
+echo "   Recording finished"
+echo
+
+python3 - "$WORK/mic.wav" <<'PY'
+import wave, struct, math, sys
+w = wave.open(sys.argv[1]); sr = w.getframerate()
+d = w.readframes(w.getnframes())
+s = struct.unpack("<%dh" % (len(d)//2), d)
+db = lambda x: 20*math.log10(x/32768 + 1e-12)
+
+# Use 100 ms windows, skipping the ES7202 power-on transient in the first second.
+env = {0: [], 1: []}
+for c in (0, 1):
+    v = s[c::2]
+    for j in range(10, 100):
+        seg = v[int(j*0.1*sr):int((j+1)*0.1*sr)]
+        if not seg:
+            break
+        env[c].append(db(math.sqrt(sum(x*x for x in seg)/len(seg))))
+
+print("Levels per second (dBFS):")
+print("   s :   ch0     ch1")
+for t in range(1, 10):
+    row = []
+    for c in (0, 1):
+        seg = s[t*sr*2 + c:(t+1)*sr*2:2]
+        row.append(db(math.sqrt(sum(x*x for x in seg)/len(seg))))
+    print("  %2d : %6.1f  %6.1f" % (t, row[0], row[1]))
+print()
+for c in (0, 1):
+    e = sorted(env[c])
+    floor = e[len(e)//4]          # Use the lower quartile as the noise floor.
+    peak = e[-2]                  # Use the second-highest sample to reject isolated spikes.
+    print("  ch%d: noise floor %.1f dBFS  peak %.1f dBFS  SNR %+.1f dB  %s"
+          % (c, floor, peak, peak - floor,
+             "signal detected" if peak - floor > 10 else "noise floor only"))
+print()
+print("A mono headset usually uses ch0. The unconnected ch1 normally contains amplifier noise.")
+PY
+echo
+echo "Capture gain: ES7202 analog PGA (0-12, 3dB steps):  amixer -c $CAP cset numid=1 12"
+echo "          Digital softvol (-20~+20dB, 40=0dB):  amixer -c $CAP sset 'Mic Boost' 52"
+echo "Playback volume: analog LINEOUT (0-30, 1.5dB steps, 26=0dB, hardware maximum 30=+6dB):"
+echo "                                             amixer -c $PLAY sset 'DAC LEFT LINEOUT' 30"
+echo "          Digital gain (0-255, 0.5dB steps, 225=0dB, 255=+15dB, large signals may clip):"
+echo "                                             amixer -c $PLAY sset 'DAC Digital' 245"
+echo "Save the settings:                                     alsactl store"
