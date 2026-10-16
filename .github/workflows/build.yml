@@ -87,7 +87,7 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.commit }}
           persist-credentials: false
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: input-lock
           path: out
@@ -117,7 +117,7 @@ jobs:
           ref: ${{ needs.prepare.outputs.commit }}
           persist-credentials: false
       - uses: ./.github/actions/prepare-build-host
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: input-lock
           path: out
@@ -169,15 +169,15 @@ jobs:
           ref: ${{ needs.prepare.outputs.commit }}
           persist-credentials: false
       - uses: ./.github/actions/prepare-build-host
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: build-output
           path: out/candidate
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: patch-report
           path: out/candidate
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         if: needs.prepare.outputs.target == 'image'
         with:
           pattern: rkdeveloptool-*
@@ -213,7 +213,7 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.commit }}
           persist-credentials: false
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: verified-candidate
           path: out/candidate
