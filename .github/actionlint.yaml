@@ -1,5 +1,6 @@
 self-hosted-runner:
-  # actionlint does not yet know this GitHub-hosted ARM64 label.
+  # actionlint does not yet know this GitHub-hosted label.
   labels:
     - ubuntu-26.04
     - ubuntu-26.04-arm
+    - macos-26
