@@ -72,6 +72,12 @@ def strict_apply(tree, patches):
     require((Path(tree) / ".git").exists(), "Patch verification needs an isolated Git root")
     for patch in patches:
         run(["git", "apply", "--check", patch], cwd=tree)
+        # Armbian applies patches with GNU patch, whose context matching
+        # differs from git apply. Require both engines before changing files.
+        result = subprocess.run(["patch", "--batch", "-p1", "-N", "--fuzz=0", "--dry-run",
+                                 "--reject-file=-", "--quoting-style=c"],
+                                cwd=tree, input=Path(patch).read_text(), capture_output=True, text=True)
+        require(result.returncode == 0, f"GNU patch rejected {Path(patch).name}:\n" + result.stdout + result.stderr)
         result = run(["git", "apply", "--verbose", patch], cwd=tree, capture_output=True, text=True)
         require("Skipped patch" not in result.stderr, "Git skipped a required patch")
 

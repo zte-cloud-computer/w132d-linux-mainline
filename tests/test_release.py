@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 """Exercise release selection, immutable publication and package boundaries."""
 import copy
+import difflib
 import importlib.util
 import json
 from datetime import datetime, timezone
@@ -149,6 +150,32 @@ class Inputs(unittest.TestCase):
             self.assertEqual((root / 'file').read_text(), 'after\n')
             with self.assertRaises(subprocess.CalledProcessError):
                 verification.strict_apply(root, [patchfile])
+
+    @unittest.skipUnless(shutil.which('patch'), 'GNU patch is required')
+    def test_patch_gate_checks_armbian_context_matching(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            run(['git', 'init', '-q', root])
+            source = root / 'file'
+            original = 'before\ncontext1\ncontext2\ncontext3\ncontext4\nold\nsuffix\nafter\nlast\n'
+            source.write_text(original)
+            patchfile = root / 'change.patch'
+            # Git accepts asymmetric context in the middle of a file; GNU
+            # patch interprets the shorter suffix as an end-of-file anchor.
+            patchfile.write_text('--- a/file\n+++ b/file\n@@ -2,6 +2,6 @@\n'
+                                 ' context1\n context2\n context3\n context4\n-old\n+new\n suffix\n')
+            run(['git', 'apply', '--check', patchfile], cwd=root)
+            with self.assertRaisesRegex(ValueError, 'GNU patch rejected change.patch'):
+                verification.strict_apply(root, [patchfile])
+            self.assertEqual(source.read_text(), original)
+            self.assertFalse(list(root.glob('*.rej')) + list(root.glob('*.orig')))
+
+            expected = original.replace('old\n', 'new\n')
+            patchfile.write_text(''.join(difflib.unified_diff(original.splitlines(keepends=True),
+                                                            expected.splitlines(keepends=True),
+                                                            fromfile='a/file', tofile='b/file')))
+            verification.strict_apply(root, [patchfile])
+            self.assertEqual(source.read_text(), expected)
 
 
 @unittest.skipUnless(shutil.which('dpkg-deb'), 'Debian package tools are required')

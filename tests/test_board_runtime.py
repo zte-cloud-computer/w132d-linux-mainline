@@ -101,6 +101,7 @@ class LinkPolicy(unittest.TestCase):
         patch_text = (ROOT / 'userpatches/kernel/w132d/0005-bluetooth-marlin3e.patch').read_text()
         section = patch_text.split('+++ b/net/bluetooth/hci_sync.c\n', 1)[1]
         function = '\n'.join(line[1:] for line in section.splitlines() if line.startswith((' ', '+')))
+        function = function.split('\n}', 1)[0] + '\n}'
         harness = r'''
 #include <assert.h>
 #include <stdbool.h>
