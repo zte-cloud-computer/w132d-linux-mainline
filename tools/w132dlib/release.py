@@ -17,7 +17,9 @@ from .inputs import fetch, validate_lock
 
 def source_archive(dest, lock):
     files = fetch(lock)
-    with tempfile.TemporaryDirectory(dir=ROOT / "cache", prefix="release-source-") as temporary:
+    cache = ROOT / "cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=cache, prefix="release-source-") as temporary:
         work = Path(temporary)
         for name in ("uboot", "armbian", "project"):
             if name == "project":
@@ -70,7 +72,9 @@ def flash_bundle(dest, lock, binaries):
     require(sha256(image) == report["sha256"], "Image changed after verification")
     low, high = lock["layout"]["reserved_start_sector"], lock["layout"]["reserved_end_sector"]
     require(image.stat().st_size > high * 512, "Image is too small")
-    with tempfile.TemporaryDirectory(dir=ROOT / "cache", prefix="flash-bundle-") as temporary:
+    cache = ROOT / "cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=cache, prefix="flash-bundle-") as temporary:
         work = Path(temporary)
         boot = work / "rkbin"
         boot.mkdir()

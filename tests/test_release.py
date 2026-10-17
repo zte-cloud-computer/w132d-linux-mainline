@@ -10,14 +10,16 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 from urllib.error import HTTPError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 from w132dlib import build, inputs, packages, repository, release, verification
-from w132dlib.common import ROOT, PACKAGES, digest_tree, read_json, run, sha256, write_json
+from w132dlib.common import ROOT, PACKAGES, digest_tree, output, read_json, run, sha256, write_json
 
 
 def make_deb(directory, name, version, filename='opaque.deb', payload=None):
@@ -204,6 +206,98 @@ class Packages(unittest.TestCase):
             packages.finalize(first, 1000)
             self.assertEqual(before, sha256(first))
             self.assertEqual(packages.metadata(first)['Depends'], f'{PACKAGES[1]} (= 20261015.1.1)')
+
+
+class ReleasePackaging(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='w132d-packaging-')
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.dest = self.root / 'out/candidate'
+        self.dest.mkdir(parents=True)
+        root_patch = patch.object(release, 'ROOT', self.root)
+        root_patch.start()
+        self.addCleanup(root_patch.stop)
+
+    def test_flash_bundle_creates_cache_on_a_fresh_runner(self):
+        from test_flash import fixture
+        manifest = fixture(self.dest)
+        image = self.dest / 'w132d.img'
+        image.write_bytes((self.dest / 'head.bin').read_bytes() + bytes(1024) +
+                          (self.dest / 'system.bin').read_bytes())
+        write_json(self.dest / 'image-verification.json', {'sha256': sha256(image),
+                                                         'boot_components': manifest['boot_components']})
+        current = lock()
+        current['layout'] = dict(manifest['layout'], reserved_start_sector=2, reserved_end_sector=4)
+        shutil.copytree(ROOT / 'flash', self.root / 'flash')
+        source = self.root / 'vendor/rkdeveloptool'
+        source.mkdir(parents=True)
+        (source / 'fixture.c').write_text('/* Flashing tool source fixture. */\n')
+        platforms = read_json(ROOT / 'config/flash-tools.json')['platforms']
+        write_json(self.root / 'config/flash-tools.json', {'platforms': platforms})
+        binaries = self.root / 'out/flash-tools'
+        for platform in platforms:
+            directory = self.root / 'tool-inputs' / platform
+            directory.mkdir(parents=True)
+            executable = directory / 'rkdeveloptool'
+            executable.write_text('#!/bin/sh\nexit 1\n')
+            executable.chmod(0o755)
+            write_json(directory / 'build.json', {'platform': platform, 'source_sha256': digest_tree(source),
+                                                  'sha256': sha256(executable)})
+            binaries.mkdir(exist_ok=True)
+            with tarfile.open(binaries / f'rkdeveloptool-{platform}.tar.gz', 'w:gz') as archive:
+                archive.add(directory, arcname=platform)
+
+        def loader(current, work):
+            (work / 'LICENSE').write_text('Loader license fixture\n')
+            binary = work / 'loader.bin'
+            binary.write_bytes(b'USB loader fixture')
+            return binary
+
+        self.assertFalse((self.root / 'cache').exists())
+        with patch.object(release, 'loader', side_effect=loader):
+            release.flash_bundle(self.dest, current, binaries)
+        extracted = self.dest / 'extracted'
+        with zipfile.ZipFile(self.dest / 'w132d-flash.zip') as archive:
+            archive.extractall(extracted)
+        result = run([sys.executable, extracted / 'flash.py', extracted, '--dry-run'],
+                     capture_output=True, text=True)
+        self.assertIn('FLASH_DRY_RUN_OK', result.stdout)
+        self.assertEqual((extracted / 'image-head.bin').read_bytes(), image.read_bytes()[:1024])
+        self.assertEqual((extracted / 'image-system.bin').read_bytes(), image.read_bytes()[2048:])
+        for platform in platforms:
+            self.assertTrue((extracted / 'tools' / platform / 'rkdeveloptool').is_file())
+            with tarfile.open(self.dest / f'rkdeveloptool-{platform}.tar.gz') as archive:
+                self.assertTrue(archive.getmember(platform + '/rkdeveloptool').mode & 0o111)
+        self.assertFalse(list((self.root / 'cache').glob('flash-bundle-*')))
+
+    def test_source_archive_creates_cache_on_a_fresh_runner(self):
+        (self.root / 'README.md').write_text('Project source fixture\n')
+        run(['git', 'init', '-q', self.root])
+        run(['git', '-C', self.root, 'add', 'README.md'])
+        run(['git', '-C', self.root, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+             '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture'])
+        commit = output(['git', '-C', self.root, 'rev-parse', 'HEAD'])
+        current = lock()
+        current['project_commit'] = commit
+        for name in ('uboot', 'armbian'):
+            current[name]['commit'] = commit
+        write_json(self.dest / 'manifest.json', current)
+        linux = self.dest / 'linux.tar.xz'
+        with tarfile.open(linux, 'w:xz') as archive:
+            archive.add(self.root / 'README.md', arcname='linux/README')
+        self.assertFalse((self.root / 'cache').exists())
+        with patch.object(release, 'fetch', return_value={'linux': linux}), \
+                patch.object(release, 'checkout', return_value=self.root):
+            release.source_archive(self.dest, current)
+        with tarfile.open(self.dest / 'sources.tar.gz') as archive:
+            self.assertEqual(set(archive.getnames()), {'linux.tar.xz', 'project.tar', 'uboot.tar',
+                                                      'armbian.tar', 'manifest.json'})
+            self.assertEqual(json.load(archive.extractfile('manifest.json')), current)
+            for name, prefix in (('project', 'w132d'), ('uboot', 'uboot'), ('armbian', 'armbian')):
+                with tarfile.open(fileobj=archive.extractfile(name + '.tar')) as sources:
+                    self.assertIn(prefix + '/README.md', sources.getnames())
+        self.assertFalse(list((self.root / 'cache').glob('release-source-*')))
 
 
 class Publication(unittest.TestCase):
