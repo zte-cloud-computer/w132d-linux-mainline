@@ -124,7 +124,7 @@ def patches(lock, jobs=4):
         archive.extractall(uboot, filter="data")
     archive_path.unlink()
     run(["git", "init", "-q", uboot])
-    strict_apply(uboot, sorted((ROOT / "userpatches/u-boot/v2026.07").glob("*.patch")))
+    strict_apply(uboot, sorted((ROOT / "userpatches/u-boot/w132d").glob("*.patch")))
     dest = ROOT / "out" / lock["version"]
     write_json(dest / "patch-verification.json", {"linux": lock["linux"], "inputs": lock["inputs"],
                                                  "dtb_schema": "passed", "patches": "passed", "uboot_patches": "passed"})

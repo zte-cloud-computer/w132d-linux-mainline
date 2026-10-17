@@ -1,24 +1,54 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Power the adapter through BlueZ's management path and wait for readiness."""
+"""Require the SMP fixed channel before starting the BLE bridge."""
+from pathlib import Path
 import sys
 import time
 import dbus
 
-adapter = sys.argv[1] if len(sys.argv) > 1 else "hci0"
-if not adapter.startswith("hci") or not adapter[3:].isdigit():
-    raise SystemExit("Invalid Bluetooth adapter name")
-error = "Adapter not available"
-for attempt in range(30):
+
+def smp_registered(path=Path("/sys/kernel/debug/bluetooth/l2cap")):
     try:
-        bus = dbus.SystemBus()
-        props = dbus.Interface(bus.get_object("org.bluez", "/org/bluez/" + adapter),
-                               "org.freedesktop.DBus.Properties")
-        props.Set("org.bluez.Adapter1", "Powered", dbus.Boolean(True))
-        if bool(props.Get("org.bluez.Adapter1", "Powered")):
-            print("Bluetooth adapter powered through BlueZ management")
-            sys.exit(0)
-    except dbus.DBusException as exc:
-        error = exc.get_dbus_name()
-    time.sleep(1)
-raise SystemExit("Bluetooth adapter did not become ready: " + error)
+        rows = path.read_text().splitlines()
+    except OSError as exc:
+        raise RuntimeError("Cannot verify the SMP fixed channel: " + str(path)) from exc
+    return any(len(fields := row.split()) > 6 and fields[6] == "0x0006" for row in rows)
+
+
+def ensure(adapter="hci0"):
+    if not adapter.startswith("hci") or not adapter[3:].isdigit():
+        raise ValueError("Invalid Bluetooth adapter name")
+    error = "Adapter not available"
+    for _ in range(30):
+        try:
+            bus = dbus.SystemBus()
+            props = dbus.Interface(bus.get_object("org.bluez", "/org/bluez/" + adapter),
+                                   "org.freedesktop.DBus.Properties")
+            props.Set("org.bluez.Adapter1", "Powered", dbus.Boolean(True), timeout=25)
+            if bool(props.Get("org.bluez.Adapter1", "Powered")):
+                break
+        except dbus.DBusException as exc:
+            error = exc.get_dbus_name()
+        time.sleep(1)
+    else:
+        raise RuntimeError("Bluetooth adapter did not become ready: " + error)
+
+    if smp_registered():
+        print("Bluetooth SMP fixed channel (CID 0x0006) is registered")
+        return
+    # Preserve main's one-shot recovery, using BlueZ management throughout.
+    print("SMP fixed channel is missing; cycling Bluetooth power once")
+    props.Set("org.bluez.Adapter1", "Powered", dbus.Boolean(False), timeout=15)
+    time.sleep(2)
+    props.Set("org.bluez.Adapter1", "Powered", dbus.Boolean(True), timeout=25)
+    time.sleep(3)
+    if not smp_registered():
+        raise RuntimeError("SMP fixed channel is still missing; refusing to start the BLE bridge")
+    print("Bluetooth SMP fixed channel recovered")
+
+
+if __name__ == "__main__":
+    try:
+        ensure(sys.argv[1] if len(sys.argv) > 1 else "hci0")
+    except (ValueError, RuntimeError, dbus.DBusException) as exc:
+        raise SystemExit(str(exc)) from exc

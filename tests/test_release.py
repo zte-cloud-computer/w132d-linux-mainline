@@ -2,6 +2,7 @@
 """Exercise release selection, immutable publication and package boundaries."""
 import copy
 import importlib.util
+import json
 from datetime import datetime, timezone
 import os
 from pathlib import Path
@@ -41,7 +42,8 @@ def make_deb(directory, name, version, filename='opaque.deb', payload=None):
 
 def lock(version='20261015.100.1', channel='stable'):
     return {'schema': 1, 'version': version, 'channel': channel, 'project_commit': 'a' * 40,
-            'linux': {'tag': 'v7.2.10'}, 'armbian': {'tag': 'v26.5.1'}, 'repository': 'https://example.invalid'}
+            'linux': {'tag': 'v7.2.10'}, 'armbian': {'tag': 'v26.5.1'},
+            'uboot': {'tag': 'v2026.10'}, 'repository': 'https://example.invalid'}
 
 
 class Inputs(unittest.TestCase):
@@ -73,23 +75,43 @@ class Inputs(unittest.TestCase):
             if 'kernel.org' in url:
                 return {'releases': [{'moniker': 'stable', 'version': '7.3'}, {'moniker': 'stable', 'version': '7.2.12'},
                                      {'moniker': 'mainline', 'version': '7.4-rc1'}]}
+            if '/u-boot/' in url:
+                return [{'name': name} for name in ('v2026.07', 'v2026.10', 'v2027.01-rc1', 'c2027.01')]
             return [{'tag_name': 'v26.8.1', 'draft': False, 'prerelease': False}]
         with patch.object(inputs, 'api', side_effect=api), patch.object(inputs, 'resolve_tag', return_value='b' * 40):
             result = inputs.upstreams()
         self.assertEqual(result['linux']['tag'], 'v7.3')
         self.assertEqual(result['armbian']['tag'], 'v26.8.1')
+        self.assertEqual(result['uboot']['tag'], 'v2026.10')
 
     def test_no_change_skips_but_detection_errors_fail(self):
         current = lock()
-        with patch.object(repository, 'remote_state', return_value={'channels': {'stable': [current]}}):
+        current.update(inputs={'driver.c': 'source-hash'}, blobs={'loader': {'sha256': 'blob-hash'}})
+        state = repository.next_state({}, current, [])
+        with patch.object(repository, 'remote_state', return_value=state):
             self.assertFalse(inputs.changed(current))
             newer = copy.deepcopy(current)
             newer['linux']['tag'] = 'v7.3'
             self.assertTrue(inputs.changed(newer))
+            for name in ('inputs', 'blobs'):
+                with self.subTest(changed=name):
+                    newer = copy.deepcopy(current)
+                    newer[name]['new-input'] = 'changed'
+                    self.assertTrue(inputs.changed(newer))
+            newer = copy.deepcopy(current)
+            newer.update(version='20261016.101.1', project_commit='b' * 40)
+            self.assertFalse(inputs.changed(newer))
         error = HTTPError('https://example.invalid', 503, 'Unavailable', None, None)
         with patch.object(repository, 'api', side_effect=error):
             with self.assertRaises(HTTPError):
                 repository.remote_state('https://example.invalid')
+
+    def test_missing_history_or_digest_requires_publication(self):
+        current = lock()
+        current['inputs'] = {'driver.c': 'source-hash'}
+        for state in ({'channels': {}}, {'channels': {'stable': [current]}}):
+            with self.subTest(state=state), patch.object(repository, 'remote_state', return_value=state):
+                self.assertTrue(inputs.changed(current))
 
     @unittest.skipUnless(shutil.which('dpkg'), 'dpkg version comparison is required')
     def test_shanghai_version_and_experimental_order(self):
@@ -237,6 +259,106 @@ class Publication(unittest.TestCase):
         self.assertLess(archive, sign)
         self.assertLess(sign, deploy)
         self.assertLess(deploy, latest)
+
+
+class ImmutablePublication(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.current = lock()
+        self.repo = 'owner/repo'
+        self.assets = {}
+        self.commands = []
+        self.existing = {'tag_name': 'v' + self.current['version'],
+                         'target_commitish': self.current['project_commit'],
+                         'draft': False, 'prerelease': False}
+        write_json(self.root / 'manifest.json', self.current)
+        write_json(self.root / 'debs/packages.json', [])
+        (self.root / 'debs/kernel.deb').write_bytes(b'sealed package')
+        (self.root / 'release-notes.md').write_text('release notes')
+        candidate = {'files': {name: {} for name in
+                              ('manifest.json', 'debs/packages.json', 'debs/kernel.deb', 'release-notes.md')}}
+        write_json(self.root / 'candidate.json', candidate)
+        (self.root / 'SHA256SUMS').write_text(release.publication_sums(self.root, candidate))
+        self.files = {path.name: path.read_bytes() for path in release.publication_files(self.root, candidate)}
+        for target, name, options in (
+                (release, 'verify', {'return_value': self.current}),
+                (repository, 'remote_state', {'return_value': {'channels': {}}}),
+                (release, 'run', {'side_effect': self.gh}),
+                (release, 'output', {'side_effect': lambda args: self.gh(args).stdout.strip()})):
+            mock = patch.object(target, name, **options)
+            mock.start()
+            self.addCleanup(mock.stop)
+
+    def gh(self, args, **kwargs):
+        args = [str(arg) for arg in args]
+        self.commands.append(args)
+        if args == ['gh', 'api', f'repos/{self.repo}/releases?per_page=100']:
+            result = json.dumps([self.existing] if self.existing else [])
+        elif args[:2] == ['gh', 'api'] and args[2].startswith(f'repos/{self.repo}/commits/'):
+            result = self.current['project_commit']
+        elif args[:3] == ['gh', 'release', 'view']:
+            result = json.dumps({'assets': [{'name': name} for name in self.assets]})
+        elif args[:3] == ['gh', 'release', 'create']:
+            self.existing = {'tag_name': args[3], 'target_commitish': self.current['project_commit'],
+                             'draft': False, 'prerelease': True}
+            result = ''
+        elif args[:3] == ['gh', 'release', 'download']:
+            name = args[args.index('--pattern') + 1]
+            (Path(args[args.index('--dir') + 1]) / name).write_bytes(self.assets[name])
+            result = ''
+        elif args[:3] == ['gh', 'release', 'upload']:
+            path = Path(args[-1])
+            self.assertNotIn(path.name, self.assets)
+            self.assets[path.name] = path.read_bytes()
+            result = ''
+        else:
+            self.fail(f'Unexpected command: {args}')
+        return subprocess.CompletedProcess(args, 0, stdout=result)
+
+    def test_new_stable_release_starts_as_prerelease(self):
+        self.existing = None
+        release.immutable(self.root, self.repo)
+        self.assertEqual(self.assets, self.files)
+        create = next(cmd for cmd in self.commands if cmd[:3] == ['gh', 'release', 'create'])
+        self.assertIn('--prerelease', create)
+        self.assertIn('--latest=false', create)
+
+    def test_retries_reuse_complete_or_partial_assets_in_each_channel(self):
+        for channel, prerelease in (('stable', True), ('stable', False), ('experimental', True)):
+            for count in (0, 1, len(self.files)):
+                with self.subTest(channel=channel, prerelease=prerelease, assets=count):
+                    self.current['channel'] = channel
+                    self.current['version'] = '20261015.100.1' + ('~experimental' if channel == 'experimental' else '')
+                    self.existing['tag_name'] = 'v' + self.current['version'].replace('~', '-')
+                    self.existing['prerelease'] = prerelease
+                    self.assets = dict(list(self.files.items())[:count])
+                    self.commands.clear()
+                    release.immutable(self.root, self.repo)
+                    self.assertEqual(self.assets, self.files)
+                    self.assertFalse(any(cmd[:3] in (['gh', 'release', 'create'], ['gh', 'release', 'edit'])
+                                         for cmd in self.commands))
+                    uploads = [cmd for cmd in self.commands if cmd[:3] == ['gh', 'release', 'upload']]
+                    self.assertEqual(len(uploads), len(self.files) - count)
+
+    def test_experimental_release_cannot_be_promoted(self):
+        self.current['channel'] = 'experimental'
+        self.current['version'] += '~experimental'
+        self.existing['tag_name'] = 'v' + self.current['version'].replace('~', '-')
+        with self.assertRaisesRegex(ValueError, 'channel mismatch'):
+            release.immutable(self.root, self.repo)
+
+    def test_retry_rejects_unexpected_assets(self):
+        self.assets['unexpected.txt'] = b'unexpected'
+        with self.assertRaisesRegex(ValueError, 'unexpected assets'):
+            release.immutable(self.root, self.repo)
+
+    def test_retry_rejects_changed_asset_bytes(self):
+        self.assets = dict(self.files)
+        self.assets['kernel.deb'] = b'different package'
+        with self.assertRaisesRegex(ValueError, 'Immutable release asset mismatch: kernel.deb'):
+            release.immutable(self.root, self.repo)
 
 
 if __name__ == '__main__':

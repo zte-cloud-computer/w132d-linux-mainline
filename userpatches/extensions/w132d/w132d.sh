@@ -9,15 +9,17 @@ source "${W132D_EXT}/cache.sh"
 
 function post_family_config__w132d() {
 	declare -g KERNELSOURCE="https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
-	declare -g KERNELBRANCH="tag:${W132D_LINUX_TAG}"
+	declare -g KERNELBRANCH="commit:${W132D_LINUX_SHA}"
 	declare -g KERNEL_MAJOR_MINOR="${W132D_KERNEL_SERIES}"
 	declare -g KERNELPATCHDIR="w132d"
 	declare -g LINUXFAMILY="rockchip64" EXTRAWIFI="no" KEEP_ORIGINAL_OS_RELEASE="yes"
 	declare -g INSTALL_ARMBIAN_FIRMWARE="no"
+	# Let Armbian generate cpufrequtils once during image customization.
+	declare -g CPUMIN=408000 CPUMAX=2016000 GOVERNOR=schedutil CPUFREQUTILS_ENABLE=false
 	declare -g OFFSET=16 BOOTSIZE=512 BOOTFS_TYPE=fat IMAGE_PARTITION_TABLE=gpt
 	declare -g BOOTSOURCE="https://github.com/u-boot/u-boot.git"
 	declare -g BOOTBRANCH="commit:${W132D_UBOOT_SHA}"
-	declare -g BOOTPATCHDIR="v2026.07" BOOTDIR="u-boot-w132d" BOOTDELAY=1
+	declare -g BOOTPATCHDIR="w132d" BOOTDIR="u-boot-w132d" BOOTDELAY=1
 	declare -g UBOOT_TARGET_MAP="BL31=${W132D_EXT}/inputs/bl31 ROCKCHIP_TPL=${W132D_EXT}/inputs/ddr;;idbloader.img u-boot.itb"
 	# Only the manifest-verified blobs are used by this board.
 	unset -f uboot_custom_postprocess write_uboot_platform_mtd
@@ -34,7 +36,8 @@ function kernel_copy_extra_sources__w132d() {
 	# Armbian resets to kernel_git_revision during patching. Commit only this
 	# temporary source overlay so the supported source hook survives that reset.
 	git -C "${kernel_work_dir}" add drivers/net/wireless sound/soc/codecs arch/arm64/boot/dts/rockchip Documentation/devicetree/bindings
-	git -C "${kernel_work_dir}" -c user.name=W132D -c user.email=build@w132d.invalid -c commit.gpgsign=false commit -qm "build(w132d): Install maintained sources"
+	GIT_AUTHOR_DATE="@${SOURCE_DATE_EPOCH} +0000" GIT_COMMITTER_DATE="@${SOURCE_DATE_EPOCH} +0000" \
+		git -C "${kernel_work_dir}" -c user.name=W132D -c user.email=build@w132d.invalid -c commit.gpgsign=false commit -qm "build(w132d): Install maintained sources"
 	kernel_git_revision="$(git -C "${kernel_work_dir}" rev-parse HEAD)"
 	git -C "${kernel_work_dir}" apply --check "${USERPATCHES_PATH}"/kernel/w132d/*.patch
 }
@@ -48,7 +51,7 @@ function custom_kernel_config__w132d() {
 }
 
 function pre_config_uboot_target__w132d() {
-	git apply --reverse --check "${USERPATCHES_PATH}"/u-boot/v2026.07/*.patch
+	git apply --reverse --check "${USERPATCHES_PATH}"/u-boot/w132d/*.patch
 }
 
 function post_config_uboot_target__w132d() {
@@ -70,8 +73,9 @@ function post_create_partitions__w132d() {
 function post_family_tweaks_bsp__w132d() {
 	rsync -a --exclude=__pycache__ --exclude=.DS_Store "${USERPATCHES_PATH}/overlay/bsp-cli/" "${destination}/"
 	install -Dm644 "${W132D_EXT}/inputs/wcn" "${destination}/usr/lib/firmware/uwe5622/wcnmodem-marlin3e.bin"
-	# Dpkg preserves administrator changes during later BSP upgrades.
-	find "${destination}/etc" -type f -printf '/etc/%P\n' >> "${destination}/DEBIAN/conffiles"
+	# Preserve board configuration without taking ownership of framework state
+	# such as armbian-release, which is rewritten during artifact reversioning.
+	find "${USERPATCHES_PATH}/overlay/bsp-cli/etc" -type f -printf '/etc/%P\n' >> "${destination}/DEBIAN/conffiles"
 	LC_ALL=C sort -u -o "${destination}/DEBIAN/conffiles" "${destination}/DEBIAN/conffiles"
 	postinst_functions+=(w132d_board_postinst)
 	postrm_functions+=(w132d_board_postrm)

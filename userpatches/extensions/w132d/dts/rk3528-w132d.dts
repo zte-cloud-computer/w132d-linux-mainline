@@ -620,6 +620,7 @@
 };
 
 &wdt {
+	resets = <&cru SRST_P_WDT_NS>;
 	status = "okay";
 };
 

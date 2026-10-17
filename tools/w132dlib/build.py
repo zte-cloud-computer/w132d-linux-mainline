@@ -68,12 +68,13 @@ def stage(lock, framework, files):
     for name, path in files.items():
         if name != "linux":
             shutil.copy2(path, firmware / name)
-    # BSP caching hashes hook source, not arbitrary overlay contents. Embed the
-    # deterministic content digest in a normal hook, without purging caches.
+    # Artifact caching hashes hook source, not arbitrary files read by hooks.
+    # Include overlays and firmware in both BSP and U-Boot cache identities.
     input_digest = maintained_digest(lock)
-    (extension / "cache.sh").write_text(
-        'function post_family_tweaks_bsp__w132d_content_hash() {\n'
-        f'    : {shlex.quote(input_digest)}\n' + '}\n')
+    (extension / "cache.sh").write_text("".join(
+        f'function {hook}__w132d_content_hash() {{\n'
+        f'    : {shlex.quote(input_digest)}\n' + '}\n'
+        for hook in ("post_family_tweaks_bsp", "pre_config_uboot_target")))
     (extension / "locked.sh").write_text("\n".join(f"{k}={shlex.quote(str(v))}" for k, v in {
         "W132D_LINUX_TAG": lock["linux"]["tag"], "W132D_LINUX_SHA": lock["linux"]["commit"],
         "W132D_KERNEL_SERIES": ".".join(lock["linux"]["tag"][1:].split(".")[:2]),

@@ -120,7 +120,7 @@ def notes(lock, full):
                else "Experimental kernel, DTB, headers and libc-dev packages.\n")
             + "New images default to the stable APT channel. Experimental kernel updates require explicit opt-in.\n"
             "SHA256SUMS, manifest.json and corresponding sources accompany this release.\n"
-            "Automated validation does not establish hardware coverage; see docs/hardware.md in the source archive.\n")
+            "Hardware support and limitations: docs/hardware.md in the source archive.\n")
 
 
 def publication_files(dest, candidate):
@@ -207,6 +207,7 @@ def immutable(directory, repository):
     dest = Path(directory)
     lock = verify(dest)
     require(bool(repository), "GitHub repository is required")
+    files = publication_files(dest, read_json(dest / "candidate.json"))
     from .repository import next_state, remote_state
     records = read_json(dest / "debs/packages.json")
     for item in records:
@@ -219,18 +220,18 @@ def immutable(directory, repository):
     if existing is None:
         run(["gh", "release", "create", tag, "--repo", repository, "--target", lock["project_commit"],
              "--prerelease", "--latest=false", "--title", "W132D " + lock["version"], "--notes-file", dest / "release-notes.md"])
-    else:
+    assets = json.loads(output(["gh", "release", "view", tag, "--repo", repository, "--json", "assets"]))["assets"]
+    if existing is not None:
         require(existing["target_commitish"] == lock["project_commit"], "Release points to another project commit")
         require(not existing["draft"], "Existing GitHub release is still a draft")
-        require(existing["prerelease"] == (lock["channel"] != "stable"), "Existing release channel mismatch")
+        # Stable candidates remain prereleases until APT deployment succeeds.
+        require(lock["channel"] == "stable" or existing["prerelease"], "Existing release channel mismatch")
         require({asset["name"] for asset in assets} <= {p.name for p in files},
                 "Existing GitHub release has unexpected assets")
     # Resolve the tag itself, including annotated tags. target_commitish alone
     # does not establish where a previously existing Git tag points.
     commit = output(["gh", "api", f"repos/{repository}/commits/{tag}", "--jq", ".sha"])
     require(commit == lock["project_commit"], "Release tag points to another project commit")
-    files = publication_files(dest, read_json(dest / "candidate.json"))
-    assets = json.loads(output(["gh", "release", "view", tag, "--repo", repository, "--json", "assets"]))["assets"]
     with tempfile.TemporaryDirectory(prefix="w132d-assets-") as tmp:
         for path in files:
             if any(a["name"] == path.name for a in assets):

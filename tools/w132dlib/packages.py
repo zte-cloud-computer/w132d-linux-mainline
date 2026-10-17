@@ -94,6 +94,9 @@ def check_dtb(path):
         ("/soc/vop@ff840000", "compatible"): "rockchip,rk3528-vop",
         ("/soc/hdmi@ff8d0000", "compatible"): "rockchip,rk3528-dw-hdmi",
         ("/soc/phy@ffe00000", "compatible"): "rockchip,rk3528-hdmi-phy",
+        ("/soc/video-codec@ff740000", "compatible"): "rockchip,rk3528-vdec",
+        ("/soc/tsadc@ffad0000", "status"): "okay",
+        ("/soc/watchdog@ffac0000", "status"): "okay",
         ("/uwe-bsp", "unisoc,btwf-file-name"): "/lib/firmware/uwe5622/wcnmodem-marlin3e.bin",
     }
     for (node, prop), value in expected.items():
@@ -101,14 +104,35 @@ def check_dtb(path):
     for node, prop in (("/soc/mmc@ffbf0000", "mmc-hs400-1_8v"),
                        ("/soc/mmc@ffbf0000", "mmc-hs400-enhanced-strobe"),
                        ("/regulator-vdd-cpu", "pwm-dutycycle-range"),
+                       ("/regulator-vdd-logic", "pwm-dutycycle-range"),
+                       ("/cpus/cpu@0", "cpu-supply"),
+                       ("/soc/gpu@ff700000", "mali-supply"),
                        ("/soc/watchdog@ffac0000", "compatible"),
-                       ("/soc/tsadc@ffad0000", "status"),
+                       ("/soc/watchdog@ffac0000", "resets"),
+                       ("/soc/sai@ffb70000", "compatible"),
                        ("/soc/hdmi@ff8d0000", "hpd-gpios"),
+                       ("/ir-receiver", "compatible"),
+                       ("/leds", "compatible"),
+                       ("/firmware/optee", "compatible"),
                        ("/reserved-memory/ramoops@110000", "reg")):
         output(["fdtget", path, node, prop])
     for node, prop in (("/soc/vop@ff840000", "iommus"), ("/ir-receiver", "wakeup-source")):
         probe = subprocess.run(["fdtget", str(path), node, prop], capture_output=True)
         require(probe.returncode != 0, f"Unexpected DTB property: {node} {prop}")
+
+
+def check_board_overlay(tree):
+    overlay = ROOT / "userpatches/overlay/bsp-cli"
+    for source in overlay.rglob("*"):
+        if source.name == ".DS_Store" or "__pycache__" in source.parts:
+            continue
+        if not source.is_file() and not source.is_symlink():
+            continue
+        relative = source.relative_to(overlay)
+        target = Path(tree) / relative
+        require(target.is_file(), "Missing board file or broken symlink: " + str(relative))
+        if source.stat().st_mode & 0o111:
+            require(target.stat().st_mode & 0o111, "Board helper is not executable: " + str(relative))
 
 
 def verify(directory, lock, full=False):
@@ -124,7 +148,9 @@ def verify(directory, lock, full=False):
         require(len(configs) == 1, "Expected one kernel configuration")
         config = configs[0].read_text()
         for setting in ("CONFIG_RK_WIFI_DEVICE_UWE5621DS=y", "CONFIG_WLAN_UWE5621DS=m", "CONFIG_PSTORE_CONSOLE=y", "CONFIG_PSTORE_RAM=y", "CONFIG_TTY_OVERY_SDIO_HCI=y",
-                        "CONFIG_ROCKCHIP_VOP2=y", "CONFIG_ROCKCHIP_DW_HDMI=y"):
+                        "CONFIG_ROCKCHIP_VOP2=y", "CONFIG_ROCKCHIP_DW_HDMI=y", "CONFIG_DEBUG_FS=y",
+                        "CONFIG_SND_SOC_RK3528=m", "CONFIG_SND_SOC_ES7202=m",
+                        "CONFIG_PHY_ROCKCHIP_INNO_HDMI=m", "CONFIG_SND_SOC_ROCKCHIP_SAI=m"):
             require(setting in config.splitlines(), "Missing kernel setting: " + setting)
         for setting in ("CONFIG_RK_WIFI_DEVICE_UWE5621=y", "CONFIG_WLAN_UWE5621=y", "CONFIG_WLAN_UWE5622=y", "CONFIG_WCN_BSP_DRIVER_BUILDIN=y"):
             require(setting not in config.splitlines(), "Unexpected legacy wireless setting: " + setting)
@@ -135,6 +161,7 @@ def verify(directory, lock, full=False):
         m = metadata(selected[PACKAGES[0]])
         require(f"{PACKAGES[1]} (= {lock['version']})" in m["Depends"], "Image must depend on matching DTB")
         if full:
+            check_board_overlay(tree)
             firmware = tree / "usr/lib/firmware/uwe5622/wcnmodem-marlin3e.bin"
             require(firmware.exists() and sha256(firmware) == lock["blobs"]["wcn"]["sha256"], "Invalid WCN firmware")
             bootdir = tree / "usr/lib/linux-u-boot-edge-w132d"

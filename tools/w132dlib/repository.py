@@ -50,14 +50,16 @@ def next_state(previous, lock, records):
         current_task = tuple(map(int, current["version"].split("~", 1)[0].split(".")[1:]))
         require(task > current_task, "Refusing stale publication task")
         if channel == "stable":
-            for name in ("linux", "armbian"):
+            for name in ("linux", "armbian", "uboot"):
+                if name == "uboot" and name not in current:
+                    continue  # Older repository state did not record U-Boot.
                 candidate_tag = tuple(map(int, lock[name]["tag"].removeprefix("v").split(".")))
                 current_tag = tuple(map(int, current[name]["tag"].removeprefix("v").split(".")))
                 require(candidate_tag >= current_tag, "Refusing an upstream version regression: " + name)
-            require(candidate_tag != current_tag or lock[name].get("commit") == current[name].get("commit"),
-                    "Upstream tag points to a different commit: " + name)
+                require(candidate_tag != current_tag or lock[name].get("commit") == current[name].get("commit"),
+                        "Upstream tag points to a different commit: " + name)
     entry = {"version": lock["version"], "project_commit": lock["project_commit"],
-             "linux": lock["linux"], "armbian": lock["armbian"], "packages": records}
+             "linux": lock["linux"], "armbian": lock["armbian"], "uboot": lock["uboot"], "packages": records}
     entry["inputs_digest"] = maintained_digest(lock)
     state["channels"][channel] = ([entry] + history)[:RETENTION[channel]]
     return state

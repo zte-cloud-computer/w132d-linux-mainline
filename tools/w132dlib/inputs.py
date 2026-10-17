@@ -52,9 +52,20 @@ def upstreams():
             break
     require(bool(releases), "No official Armbian release found")
     armbian = max(releases, key=lambda r: tuple(map(int, r["tag_name"][1:].split("."))))["tag_name"]
+    # U-Boot publishes signed Git tags rather than GitHub Releases. Include
+    # maintenance releases, but exclude RC, concept and vendor tags.
+    tags = []
+    for page in range(1, 101):
+        batch = api(f"https://api.github.com/repos/u-boot/u-boot/tags?per_page=100&page={page}")
+        tags.extend(t["name"] for t in batch if re.fullmatch(r"v\d{4}\.\d{2}(?:\.\d+)?", t["name"]))
+        if len(batch) < 100:
+            break
+    require(bool(tags), "No official U-Boot release found")
+    uboot = max(tags, key=lambda tag: tuple(map(int, tag[1:].split("."))))
     return {
         "linux": {"tag": "v" + kernel, "commit": resolve_tag("gregkh/linux", "v" + kernel)},
         "armbian": {"tag": armbian, "commit": resolve_tag("armbian/build", armbian)},
+        "uboot": {"tag": uboot, "commit": resolve_tag("u-boot/u-boot", uboot)},
     }
 
 
@@ -128,6 +139,7 @@ def validate_lock(lock):
         require(re.fullmatch(r"[0-9a-f]{40}", lock[name]["commit"]), f"Unpinned {name} source")
     require(re.fullmatch(r"v\d+\.\d+(?:\.\d+)?", lock["linux"]["tag"]), "RC kernels are not allowed")
     require(re.fullmatch(r"v\d+\.\d+\.\d+", lock["armbian"]["tag"]), "Only official Armbian releases are allowed")
+    require(re.fullmatch(r"v\d{4}\.\d{2}(?:\.\d+)?", lock["uboot"]["tag"]), "Only official U-Boot releases are allowed")
 
 
 def changed(lock):
@@ -135,10 +147,9 @@ def changed(lock):
     history = remote_state(lock["repository"], lock.get("initialize_repository", False)).get("channels", {}).get("stable", [])
     if not history:
         return True
-    if any(lock[name] != history[0][name] for name in ("linux", "armbian")):
+    if any(lock[name] != history[0].get(name) for name in ("linux", "armbian", "uboot")):
         return True
-    current = history[0].get("inputs_digest")
-    return bool(current) and bool(lock.get("inputs")) and lock["inputs"] != current
+    return maintained_digest(lock) != history[0].get("inputs_digest")
 
 
 def fetch(lock):

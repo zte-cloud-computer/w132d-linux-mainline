@@ -35,8 +35,8 @@ RPT_VOICE_CTL = 0xFB               # Recording control output report ID
 RPT_KEYEVENT = 0xF8               # Vendor key-event channel
 RPT_IFLY = 0xF9                   # IFLY vendor channel
 VOICE_KEY = 3                      # Measured voice-key subcode on this remote
-ICODEC = "/usr/lib/w132d/icodec"
-ICOLIB = "/usr/lib/w132d/libicocodec.patched.so"
+ICODEC = "/usr/local/bin/icodec"
+ICOLIB = "/usr/local/lib/w132d/libicocodec.patched.so"
 VOICE_WAV_DIR = "/run"
 VOICE_WAV_KEEP = 20
 VOICE_RAW_MAX = 16 * 1024 * 1024
@@ -606,7 +606,7 @@ def prune_voice_wavs():
                  for name in os.listdir(VOICE_WAV_DIR)
                  if name.startswith("w132d-voice-") and name.endswith(".wav")]
         files.sort(key=os.path.getmtime)
-        for path in files[:max(0, len(files) - VOICE_WAV_KEEP)]:
+        for path in files[:max(0, len(files) - VOICE_WAV_KEEP + 1)]:
             os.unlink(path)
     except OSError as e:
         log("Voice: failed to clean old WAV files: %s" % e)
