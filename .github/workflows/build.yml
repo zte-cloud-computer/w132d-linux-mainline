@@ -35,7 +35,7 @@ concurrency:
 
 jobs:
   prepare:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       changed: ${{ steps.lock.outputs.changed }}
       version: ${{ steps.lock.outputs.version }}
@@ -161,7 +161,7 @@ jobs:
       always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
       needs.checks.result == 'success' && needs.compile.result == 'success' &&
       (needs.flash-tools.result == 'success' || needs.flash-tools.result == 'skipped')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
@@ -198,7 +198,7 @@ jobs:
 
   publish:
     needs: [prepare, seal]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     environment:
       name: github-pages
