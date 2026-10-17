@@ -15,8 +15,8 @@ from unittest.mock import patch
 
 from test_release import make_deb, lock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-from w132dlib import repository
-from w132dlib.common import ROOT, PACKAGES, output, run, sha256, write_json
+from w132dlib import build, images, repository
+from w132dlib.common import ROOT, PACKAGES, output, read_json, run, sha256, write_json
 
 loader = importlib.machinery.SourceFileLoader('channel', str(ROOT / 'userpatches/overlay/bsp-cli/usr/bin/w132d-channel'))
 spec = importlib.util.spec_from_loader('channel', loader)
@@ -127,6 +127,65 @@ class Apt(unittest.TestCase):
             channel.switch(self.apt, 'experimental')
         self.assertEqual(source.read_bytes(), previous)
         self.assertEqual(pin.read_text(), '# Administrator supplied configuration\n')
+
+    def test_image_build_does_not_require_a_published_project_repository(self):
+        distro = self.root / 'distro'
+        distro_version = '20261015.1.1'
+        repository.build(self.package_set(distro_version), distro, lock(distro_version), self.key)
+        sources = self.apt / 'etc/apt/sources.list.d'
+        distro_source = sources / 'distro.sources'
+        distro_text = (f'Types: deb\nURIs: {distro.as_uri()}\nSuites: stable\nComponents: main\n'
+                       f'Architectures: arm64\nSigned-By: {self.keyring}\n')
+        distro_source.write_text(distro_text)
+        project = self.root / 'not-yet-published'
+        packaged = {}
+        for name in ('w132d.sources', 'w132d-experimental.sources'):
+            source = sources / name
+            source.write_text(source.read_text().replace('https://zte-cloud-computer.github.io/w132d-linux-mainline',
+                                                        project.as_uri()).replace('/usr/share/keyrings/w132d-archive-keyring.gpg',
+                                                                                 str(self.keyring)))
+            packaged[name] = source.read_bytes()
+        # Reproduce the image build's failure before the first publication.
+        result = subprocess.run(['apt-get', *self.options, 'update'], capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+
+        candidate = read_json(ROOT / 'config/sources.json')
+        candidate.update(version='20261017.100.1', source_date_epoch=1000, inputs={'test': 'digest'})
+        framework = self.root / 'framework'
+        framework.mkdir()
+        userpatches = build.stage(candidate, framework, {})
+
+        def hook(name):
+            run(['bash', '-e', '-o', 'pipefail', '-c',
+                 'exit_with_error() { echo "$*" >&2; exit 1; }; '
+                 'source "$USERPATCHES_PATH/extensions/w132d/w132d.sh"; '
+                 'chroot_sdcard() { :; }; ' + name],
+                env=dict(os.environ, USERPATCHES_PATH=str(userpatches), SDCARD=str(self.apt)))
+
+        hook('post_family_tweaks__w132d')
+        self.update()
+        self.assertEqual(distro_source.read_text(), distro_text)
+        for name, contents in packaged.items():
+            self.assertFalse((sources / name).exists())
+            self.assertEqual((sources / (name + '.disabled')).read_bytes(), contents)
+        with self.assertRaisesRegex(ValueError, 'Build-only APT source'):
+            images.check_apt_sources(self.apt, project.as_uri())
+
+        # Unrelated repository failures must still stop the build.
+        distro_source.write_text(distro_text.replace(distro.as_uri(), (self.root / 'missing-distro').as_uri()))
+        result = subprocess.run(['apt-get', *self.options, 'update'], capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        distro_source.write_text(distro_text)
+
+        hook('post_post_debootstrap_tweaks__w132d')
+        images.check_apt_sources(self.apt, project.as_uri())
+        for name, contents in packaged.items():
+            self.assertEqual((sources / name).read_bytes(), contents)
+        self.assertFalse(list(sources.glob('w132d*.sources.disabled')))
+        project_version = '20261015.2.1'
+        repository.build(self.package_set(project_version), project, lock(project_version), self.key)
+        self.update()
+        self.assertEqual(self.candidate(), project_version)
 
     def test_signing_failure_does_not_mutate_previous_state(self):
         previous = {'schema': 1, 'channels': {}}

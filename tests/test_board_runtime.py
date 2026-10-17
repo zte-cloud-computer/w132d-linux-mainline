@@ -162,6 +162,20 @@ class ImageChecks(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
 
+    def test_image_requires_active_stable_and_no_build_only_sources(self):
+        shutil.copytree(ROOT / 'userpatches/overlay/bsp-cli/etc/apt', self.root / 'etc/apt')
+        repository = read_json(ROOT / 'config/sources.json')['repository']
+        images.check_apt_sources(self.root, repository)
+        source = self.root / 'etc/apt/sources.list.d/w132d.sources'
+        original = source.read_text()
+        source.write_text('Enabled: no\n' + original)
+        with self.assertRaisesRegex(ValueError, 'Stable APT must be enabled'):
+            images.check_apt_sources(self.root, repository)
+        source.write_text(original)
+        source.with_suffix('.sources.disabled').write_text(original)
+        with self.assertRaisesRegex(ValueError, 'Build-only APT source'):
+            images.check_apt_sources(self.root, repository)
+
     @unittest.skipUnless(shutil.which('sgdisk') and shutil.which('sfdisk'), 'GPT tools are required')
     def test_native_gpt_requires_boot_flag_and_empty_reserved_storage(self):
         image = self.root / 'native.img'

@@ -86,6 +86,18 @@ def check_board_runtime(root):
     require(not (getty / "serial-getty@ttyS2.service").is_symlink(), "Unexpected UART2 serial getty")
 
 
+def check_apt_sources(root, repository):
+    sources = Path(root) / "etc/apt/sources.list.d"
+    require(not list(sources.glob("w132d*.sources.disabled")), "Build-only APT source files remain in the image")
+    source = (sources / "w132d.sources").read_text()
+    require("Suites: stable" in source and repository in source, "Image must default to stable APT")
+    require(not re.search(r"(?im)^Enabled:\s*no\s*$", source), "Stable APT must be enabled in new images")
+    experimental = (sources / "w132d-experimental.sources").read_text()
+    require("Enabled: no" in experimental, "Experimental APT must be disabled in new images")
+    pin = (Path(root) / "etc/apt/preferences.d/w132d-kernel").read_text()
+    require("Pin: release o=W132D,a=experimental\nPin-Priority: -1" in pin, "Experimental pin is not disabled")
+
+
 def verify_image(path, lock, destination):
     path = Path(path)
     dest = Path(destination)
@@ -109,12 +121,7 @@ def verify_image(path, lock, destination):
         for name in (PACKAGES[0], PACKAGES[1], PACKAGES[4], PACKAGES[5]):
             require(versions.get(name) == lock["version"], "Image package version mismatch: " + name)
         (dest / "userspace-packages.tsv").write_text("\n".join("\t".join(r) for r in rows if r[3] == "installed") + "\n")
-        source = (root / "etc/apt/sources.list.d/w132d.sources").read_text()
-        require("Suites: stable" in source and lock["repository"] in source, "Image must default to stable APT")
-        experimental = (root / "etc/apt/sources.list.d/w132d-experimental.sources").read_text()
-        require("Enabled: no" in experimental, "Experimental APT must be disabled in new images")
-        pin = (root / "etc/apt/preferences.d/w132d-kernel").read_text()
-        require("Pin: release o=W132D,a=experimental\nPin-Priority: -1" in pin, "Experimental pin is not disabled")
+        check_apt_sources(root, lock["repository"])
         firmware = root / "lib/firmware/uwe5622/wcnmodem-marlin3e.bin"
         require(sha256(firmware) == lock["blobs"]["wcn"]["sha256"], "Image firmware mismatch")
         for unit in ("w132d-wireless", "w132d-ble-remote", "w132d-ir-keymap", "w132d-led-status", "w132d-soft-standby"):

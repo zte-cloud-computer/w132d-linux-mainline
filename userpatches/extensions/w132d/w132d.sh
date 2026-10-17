@@ -132,6 +132,21 @@ PY
 }
 
 function post_family_tweaks__w132d() {
+	# The first stable repository is published only after this image is built.
+	# Keep project sources out of all build-time APT updates without changing
+	# their packaged contents or the installed system's default channel.
+	local source
+	for source in w132d.sources w132d-experimental.sources; do
+		mv "${SDCARD}/etc/apt/sources.list.d/${source}" "${SDCARD}/etc/apt/sources.list.d/${source}.disabled"
+	done
 	chroot_sdcard systemctl enable w132d-wireless w132d-ble-remote w132d-ir-keymap w132d-led-status w132d-soft-standby
 	chroot_sdcard systemctl mask serial-getty@ttyFIQ0.service
+}
+
+function post_post_debootstrap_tweaks__w132d() {
+	# This hook runs after the final APT update, before copying the rootfs.
+	local source
+	for source in w132d.sources w132d-experimental.sources; do
+		mv "${SDCARD}/etc/apt/sources.list.d/${source}.disabled" "${SDCARD}/etc/apt/sources.list.d/${source}"
+	done
 }
