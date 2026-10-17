@@ -1,5 +1,7 @@
-# 本板自建包的 apt 源：GitHub Release `apt` 的附件（扁平仓库），CI 发布时整体替换
+# Stable is the default, including on experimental images.
 Types: deb
-URIs: https://github.com/zte-cloud-computer/w132d-linux-mainline/releases/download/apt
-Suites: ./
+URIs: https://zte-cloud-computer.github.io/w132d-linux-mainline
+Suites: stable
+Components: main
+Architectures: arm64
 Signed-By: /usr/share/keyrings/w132d-archive-keyring.gpg

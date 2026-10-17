@@ -1,454 +1,246 @@
-# 在 GitHub Actions 上用 armbian/build 构建本板的 deb 包（内核、U-Boot、bsp）与整盘镜像。
-#
-# push 到 main：出 deb，签名后整体替换到 Release `apt` 的附件（设备的 apt 源）。
-# 打 v* 标签：再出整盘镜像与 fnOS 镜像，校验后连刷写脚本打成发布包，建正式 Release；deb 同样发到 apt 源。
-# 手动触发：勾 publish 才发 apt；勾 build_fnos 构建 fnOS 镜像，可指定历史 run 复用 deb、跳过 packages。
-# 版本号追加 日期.运行序号 才能让 apt 看到升级（Armbian 的 VERSION 是固定串）。
-name: build
+name: W132D build and release
 
 on:
-  workflow_dispatch:
-    inputs:
-      armbian_ref:
-        description: "armbian/build 的分支或提交（默认 main）"
-        default: main
-      publish:
-        description: "发到 apt 源（Release apt）"
-        type: boolean
-        default: false
-      build_fnos:
-        description: "构建 fnOS 镜像"
-        type: boolean
-        default: false
-      reuse_debs_run_id:
-        description: "复用历史 run 的 w132d-debs artifact（留空则重新构建 packages）"
-        type: string
-        default: ""
+  pull_request:
   push:
     branches: [main]
-    tags: ["v*"]
-    paths:
-      - "userpatches/**"
-      - "patches/**"
-      - "tools/**"
-      - ".github/workflows/build.yml"
+  schedule:
+    - cron: '17 */6 * * *'
+    - cron: '43 2 * * *'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Build target (stable always builds an image)
+        type: choice
+        options: [kernel, image]
+        default: kernel
+      channel:
+        description: Publication channel
+        type: choice
+        options: [experimental, stable]
+        default: experimental
+      initialize_repository:
+        description: Allow missing Pages state for the first stable publication
+        type: boolean
+        default: false
 
+permissions:
+  contents: read
+
+# Serialize detection and promotion too, so both upstream updates form one
+# candidate and no second deployment can race a successful Pages switch.
 concurrency:
-  group: build
+  group: w132d-${{ github.event_name == 'pull_request' && github.ref || 'publication' }}
   cancel-in-progress: false
 
 jobs:
-  packages:
-    # 公共仓库可免费用 GitHub 托管的 arm64 runner，本机架构编译不用交叉工具链。
-    # 私有仓库没有这个 label，换成 ubuntu-24.04（x86，Armbian 自动交叉编译）即可。
-    if: github.event_name != 'workflow_dispatch' || inputs.reuse_debs_run_id == ''
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 300
-    permissions:
-      contents: write   # 更新 apt Release 的附件要写权限
+  prepare:
+    runs-on: ubuntu-24.04
     outputs:
-      revision: ${{ steps.ver.outputs.revision }}
-      debs_artifact: w132d-debs-${{ steps.ver.outputs.revision }}
+      changed: ${{ steps.lock.outputs.changed }}
+      version: ${{ steps.lock.outputs.version }}
+      commit: ${{ steps.lock.outputs.commit }}
+      channel: ${{ steps.lock.outputs.channel }}
+      target: ${{ steps.lock.outputs.target }}
     steps:
-      - name: 取本仓库
-        uses: actions/checkout@v7
-
-      - name: 取 armbian/build
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
-          repository: armbian/build
-          ref: ${{ inputs.armbian_ref || 'main' }}
-          path: armbian-build
-          fetch-depth: 1
-
-      - name: userpatches 交给 Armbian
-        # Armbian 只认 ${SRC}/userpatches（硬编码）。复制而不软链：compile.sh 会把这个
-        # 目录 bind 进它自己起的 Docker 容器，软链在那一层不可靠。
+          persist-credentials: false
+      - name: Resolve and lock official inputs
+        id: lock
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          CHANNEL: ${{ inputs.channel || 'experimental' }}
+          TARGET: ${{ inputs.target || 'kernel' }}
+          REF: ${{ github.ref }}
+          INITIALIZE: ${{ inputs.initialize_repository || false }}
         run: |
-          rm -rf armbian-build/userpatches
-          cp -a userpatches armbian-build/userpatches
-
-      - name: 版本号
-        id: ver
-        run: |
-          rev="$(cat armbian-build/VERSION).$(date -u +%Y%m%d).${GITHUB_RUN_NUMBER}"
-          echo "revision=$rev" >> "$GITHUB_OUTPUT"
-          echo "REVISION=$rev  (armbian/build $(git -C armbian-build rev-parse --short HEAD))"
-
-      - name: 恢复 ccache
-        # key 带 run_id：每次存新的一份，恢复最近一份
-        uses: actions/cache/restore@v6
+          options=()
+          if [[ "$INITIALIZE" == true ]]; then
+            [[ "$EVENT" == workflow_dispatch && "$CHANNEL" == stable ]] || { echo 'Initialization requires a manual stable build'; exit 1; }
+            options+=(--initialize)
+          fi
+          if [[ "$EVENT" == schedule ]]; then
+            CHANNEL=stable
+            options+=(--detect)
+          fi
+          if [[ "$CHANNEL" == stable ]]; then
+            [[ "$REF" == refs/heads/main ]] || { echo 'Stable requires main'; exit 1; }
+            TARGET=image
+          fi
+          tools/w132d fetch --latest --channel "$CHANNEL" --outputs "$GITHUB_OUTPUT" "${options[@]}"
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v7
         with:
-          path: armbian-build/cache/ccache
-          key: ccache-${{ runner.arch }}-${{ github.run_id }}
+          name: input-lock
+          path: out/manifest.json
+          if-no-files-found: error
+
+  checks:
+    needs: prepare
+    if: needs.prepare.outputs.changed == 'true'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: input-lock
+          path: out
+      - name: Prepare validation tools
+        run: |
+          GOBIN="$PWD/cache/check-tools/bin" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          docker build -t w132d-check -f tools/docker/Dockerfile .
+      - name: Static checks and behavioral tests
+        run: |
+          docker run --rm -e CI=true -v "$PWD:/work" -v "$PWD/cache/check-tools/bin/actionlint:/usr/local/bin/actionlint:ro" w132d-check tools/w132d verify static
+          docker run --rm -v "$PWD:/work" w132d-check tools/w132d verify tests
+      - name: Strict patches, DTB and schema gate
+        run: docker run --rm -v "$PWD:/work" w132d-check tools/w132d verify patches --jobs 4
+      - uses: actions/upload-artifact@v7
+        with:
+          name: patch-report
+          path: out/${{ needs.prepare.outputs.version }}/patch-verification.json
+          if-no-files-found: error
+
+  compile:
+    needs: [prepare, checks]
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - uses: ./.github/actions/prepare-build-host
+      - uses: actions/download-artifact@v8
+        with:
+          name: input-lock
+          path: out
+      - name: Install verification dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y device-tree-compiler gdisk fdisk
+      - name: Require a native ARM64 runner
+        run: |
+          if [[ "$RUNNER_ARCH" != "ARM64" ]]; then
+            echo 'ERROR: Kernel and image builds require a native ARM64 runner'
+            exit 1
+          fi
+      - uses: actions/cache@v6
+        with:
+          path: cache/armbian/*/cache/ccache
+          key: ccache-${{ runner.arch }}-${{ needs.prepare.outputs.version }}
           restore-keys: ccache-${{ runner.arch }}-
-
-      - name: 内核（linux-image / dtb / headers）
-        working-directory: armbian-build
-        run: |
-          ./compile.sh kernel \
-            BOARD=w132d BRANCH=edge \
-            REVISION=${{ steps.ver.outputs.revision }} \
-            USE_CCACHE=yes PRIVATE_CCACHE=yes \
-            KERNEL_CONFIGURE=no SHARE_LOG=no
-          sudo ccache -d cache/ccache -s 2>/dev/null || true
-
-      - name: U-Boot（linux-u-boot-w132d-edge：rkbin DDR/BL31 blob + 主线 U-Boot 2026.07）
-        working-directory: armbian-build
-        run: |
-          ./compile.sh uboot \
-            BOARD=w132d BRANCH=edge \
-            REVISION=${{ steps.ver.outputs.revision }} \
-            USE_CCACHE=yes PRIVATE_CCACHE=yes \
-            KERNEL_CONFIGURE=no SHARE_LOG=no
-
-      - name: bsp（armbian-bsp-cli-w132d-edge：unit、脚本、keymap、apt pin）
-        working-directory: armbian-build
-        run: |
-          ./compile.sh artifact WHAT=armbian-bsp-cli \
-            BOARD=w132d BRANCH=edge RELEASE=trixie \
-            REVISION=${{ steps.ver.outputs.revision }} \
-            KERNEL_CONFIGURE=no SHARE_LOG=no
-
-      - name: 整盘镜像（公开：仓库里没有 customize-image.sh）
-        if: startsWith(github.ref, 'refs/tags/v')
-        working-directory: armbian-build
-        run: |
-          ./compile.sh build \
-            BOARD=w132d BRANCH=edge RELEASE=trixie \
-            BUILD_MINIMAL=yes BUILD_DESKTOP=no KERNEL_CONFIGURE=no \
-            REVISION=${{ steps.ver.outputs.revision }} \
-            USE_CCACHE=yes PRIVATE_CCACHE=yes SHARE_LOG=no
-          ls -la output/images/; df -h / | tail -1
-
-      - name: 保存 ccache
-        if: always()
-        run: sudo chown -R "$(id -u):$(id -g)" armbian-build/cache/ccache 2>/dev/null || true
-
-      - uses: actions/cache/save@v6
-        if: always()
+      - name: Build locked packages or complete image
+        env:
+          TARGET: ${{ needs.prepare.outputs.target }}
+        run: tools/w132d build "$TARGET"
+      - uses: actions/upload-artifact@v7
         with:
-          path: armbian-build/cache/ccache
-          key: ccache-${{ runner.arch }}-${{ github.run_id }}
-
-      - name: 收集并校验
-        # 不只看有没有产出：DTB 必须在、板级模块必须在、pstore console 必须开、
-        # bsp 里必须有 cookie 服务与 apt pin、U-Boot 里必须有针孔键 —— 和本机 verify-image 一个思路。
-        # verify-dtb 要 fdtget（device-tree-compiler），runner 上默认没有
-        run: |
-          sudo apt-get -qq update && sudo apt-get -qq install -y device-tree-compiler
-          mkdir -p out/debs
-          # 只收本板那六个包；镜像构建还会顺带出 armbian-firmware/armbian-config 等通用包，不能进 apt 源
-          for p in linux-image-edge-rockchip64 linux-dtb-edge-rockchip64 linux-headers-edge-rockchip64 \
-                   linux-libc-dev-edge-rockchip64 linux-u-boot-w132d-edge armbian-bsp-cli-w132d-edge; do
-            cp armbian-build/output/debs/${p}_${{ steps.ver.outputs.revision }}_*.deb out/debs/
-          done
-          (cd out/debs && sha256sum *.deb > SHA256SUMS && cat SHA256SUMS)
-          bash tools/verify-debs.sh out/debs
-
-      - name: 上传构建产物
-        uses: actions/upload-artifact@v7
-        with:
-          name: w132d-debs-${{ steps.ver.outputs.revision }}
-          path: out/debs/
+          name: build-output
+          path: out/${{ needs.prepare.outputs.version }}/
+          compression-level: 0
           if-no-files-found: error
           retention-days: 30
 
-      - name: 校验镜像并打发布包
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          W132D_ROOT: ${{ github.workspace }}
-        run: |
-          sudo apt-get -qq install -y gdisk qemu-user-static
-          bash tools/fetch-inputs.sh --loader-only
-          img=$(ls -t armbian-build/output/images/*.img | head -1)
-          sudo -E bash tools/verify-image.sh "$img"
-          W132D_RELEASE_STAMP=${GITHUB_REF_NAME#v} bash tools/make-release.sh "$img" out/release
-          ls -la out/release/
+  flash-tools:
+    needs: prepare
+    if: needs.prepare.outputs.changed == 'true' && needs.prepare.outputs.target == 'image'
+    uses: ./.github/workflows/flash-tools.yml
+    with:
+      commit: ${{ needs.prepare.outputs.commit }}
 
-      - name: 发布镜像 Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tag=${GITHUB_REF_NAME}
-          notes="整盘镜像 + 刷写脚本（macOS/Linux、Windows）+ loader，刷写步骤见包内 README.md。
-          内核 linux-7.2.y HEAD，armbian/build \`${{ inputs.armbian_ref || 'main' }}\`，包版本 ${{ steps.ver.outputs.revision }}。
-          刷好后 \`apt update && apt full-upgrade\` 即可跟进后续内核更新。"
-          gh release create "$tag" --title "W132D Armbian $tag" --notes "$notes" out/release/*.zip out/release/SHA256SUMS
-
-      - name: 发布 apt 源（Release `apt` 的附件整体替换）
-        if: github.event_name == 'push' || inputs.publish == true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
-          REPO: ${{ github.repository }}
-        run: |
-          [ -n "$APT_SIGNING_KEY" ] || { echo "缺 secret APT_SIGNING_KEY"; exit 1; }
-          sudo apt-get -qq install -y apt-utils gnupg
-          export GNUPGHOME="$(mktemp -d)"
-          printf '%s\n' "$APT_SIGNING_KEY" | gpg --batch --quiet --import
-          bash tools/apt-repo.sh out/debs out/apt
-          gpgv --keyring "$PWD/userpatches/overlay/bsp-cli/usr/share/keyrings/w132d-archive-keyring.gpg" out/apt/InRelease
-          gh release view apt -R "$REPO" >/dev/null 2>&1 || \
-            gh release create apt -R "$REPO" --prerelease --latest=false --title "apt 源（滚动更新，附件由 CI 整体替换）" \
-              --notes "设备上的 /etc/apt/sources.list.d/w132d.sources 指向这里，不要手动改附件。"
-          gh release upload apt -R "$REPO" --clobber out/debs/*.deb out/apt/Packages out/apt/Packages.gz out/apt/Release out/apt/InRelease out/apt/Release.gpg
-          keep=" $(cd out/debs && ls *.deb | tr '\n' ' ') Packages Packages.gz Release InRelease Release.gpg "
-          for a in $(gh release view apt -R "$REPO" --json assets -q '.assets[].name'); do
-            case "$keep" in *" $a "*) ;; *) gh release delete-asset apt "$a" -R "$REPO" -y ;; esac
-          done
-          gh release edit apt -R "$REPO" --prerelease --notes "设备上的 /etc/apt/sources.list.d/w132d.sources 指向这里，不要手动改附件；设备上 \`apt update && apt full-upgrade\` 即可。当前包版本 ${{ steps.ver.outputs.revision }}（armbian/build \`${{ inputs.armbian_ref || 'main' }}\`，内核 linux-7.2.y HEAD，$(date -u +%FT%TZ)）。手动安装顺序：dtb → image → bsp。"
-
-  fnos:
-    # 用 ophub/fnnas 把官方 fnOS Rockchip ARM64 镜像重新打包：替换内核与 DTB 为本项目构建的版本。
-    # 打 v* 标签或手动勾选 build_fnos 时才跑。
-    needs: packages
+  seal:
+    needs: [prepare, checks, compile, flash-tools]
     if: >-
-      always() &&
-      (startsWith(github.ref, 'refs/tags/v') || inputs.build_fnos == true) &&
-      (needs.packages.result == 'success' || inputs.reuse_debs_run_id != '')
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 240
-    permissions:
-      actions: read
-      contents: write
+      always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' &&
+      needs.checks.result == 'success' && needs.compile.result == 'success' &&
+      (needs.flash-tools.result == 'success' || needs.flash-tools.result == 'skipped')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     steps:
-      - name: 取本仓库
-        uses: actions/checkout@v7
-
-      - name: 下载本次构建的 deb
-        if: inputs.reuse_debs_run_id == ''
-        uses: actions/download-artifact@v7
+      - uses: actions/checkout@v7
         with:
-          name: ${{ needs.packages.outputs.debs_artifact }}
-          path: debs/
-
-      - name: 下载历史 run 的 deb
-        if: inputs.reuse_debs_run_id != ''
-        uses: actions/download-artifact@v7
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - uses: ./.github/actions/prepare-build-host
+      - uses: actions/download-artifact@v8
         with:
-          pattern: w132d-debs-*
-          path: debs/
+          name: build-output
+          path: out/candidate
+      - uses: actions/download-artifact@v8
+        with:
+          name: patch-report
+          path: out/candidate
+      - uses: actions/download-artifact@v8
+        if: needs.prepare.outputs.target == 'image'
+        with:
+          pattern: rkdeveloptool-*
+          path: out/flash-tools
           merge-multiple: true
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ inputs.reuse_debs_run_id }}
-
-      - name: 取 ophub/fnnas
-        uses: actions/checkout@v7
+      - name: Verify and seal immutable candidate
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y device-tree-compiler gdisk fdisk
+          tools/w132d release prepare --directory out/candidate
+      - uses: actions/upload-artifact@v7
         with:
-          repository: ophub/fnnas
-          # rekernel/renas 是本 job 的构建接口；固定版本避免上游 main 漂移导致无人审核的发布变化。
-          ref: 2c34125dbc681dc24626399f5e74ca465309fc85
-          path: fnnas-build
-
-      - name: 安装构建依赖
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          sudo apt-get -qq update
-          sudo apt-get -qq install -y $(< fnnas-build/make-fnnas/scripts/ubuntu2404-make-fnnas-depends)
-
-      - name: 校验并注入 W132D deb
-        id: kernel_input
-        # rekernel 在 fnOS 根文件系统中安装这些 deb，并由 update-initramfs 生成匹配的 uInitrd。
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-
-          exact_one() {
-            local pattern="$1"
-            local files=(debs/$pattern)
-            if [ "${#files[@]}" -ne 1 ]; then
-              echo "❌ $pattern 应恰好匹配一个文件，实际为 ${#files[@]} 个" >&2
-              printf '  %s\n' "${files[@]}" >&2
-              return 1
-            fi
-            printf '%s\n' "${files[0]}"
-          }
-
-          image_deb=$(exact_one 'linux-image-edge-rockchip64_*.deb')
-          dtb_deb=$(exact_one 'linux-dtb-edge-rockchip64_*.deb')
-          headers_deb=$(exact_one 'linux-headers-edge-rockchip64_*.deb')
-          uboot_deb=$(exact_one 'linux-u-boot-w132d-edge_*.deb')
-
-          tmp=$(mktemp -d)
-          trap 'rm -rf "$tmp"' EXIT
-          dpkg-deb -x "$image_deb" "$tmp/image"
-          mapfile -t module_dirs < <(find "$tmp/image/lib/modules" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
-          [ "${#module_dirs[@]}" -eq 1 ] || {
-            echo "❌ linux-image 中的内核模块目录应恰好为一个，实际为 ${#module_dirs[@]} 个"
-            exit 1
-          }
-          kernel_release="${module_dirs[0]}"
-          kernel_version="${kernel_release%%-*}"
-          [ -n "$kernel_version" ] || { echo "❌ 无法确定内核版本"; exit 1; }
-          package_revision=$(dpkg-deb -f "$image_deb" Version)
-          [ -n "$package_revision" ] || { echo "❌ 无法确定 deb 版本"; exit 1; }
-          for deb in "$dtb_deb" "$headers_deb" "$uboot_deb"; do
-            [ "$(dpkg-deb -f "$deb" Version)" = "$package_revision" ] || {
-              echo "❌ $(basename "$deb") 与 linux-image 版本不一致"
-              exit 1
-            }
-          done
-
-          deb_dest="fnnas-build/fnnas-debs/rockchip"
-          mkdir -p "$deb_dest"
-          install -m 0644 "$image_deb" "$dtb_deb" "$headers_deb" "$deb_dest/"
-
-          dpkg-deb -x "$uboot_deb" "$tmp"
-          src="$tmp/usr/lib/linux-u-boot-edge-w132d"
-          dest="fnnas-build/make-fnnas/u-boot/rockchip/w132d"
-          mkdir -p "$dest"
-          for f in idbloader.img u-boot.itb; do
-            [ -s "$src/$f" ] || { echo "❌ U-Boot deb 缺少 $f"; exit 1; }
-            install -D -m 0644 "$src/$f" "$dest/$f"
-          done
-          echo "kernel_release=$kernel_release" >> "$GITHUB_OUTPUT"
-          echo "kernel_version=$kernel_version" >> "$GITHUB_OUTPUT"
-          echo "package_revision=$package_revision" >> "$GITHUB_OUTPUT"
-          echo "内核版本: $kernel_release（renas 版本目录: $kernel_version）"
-          ls -l "$deb_dest/"
-          ls -l "$dest/"
-
-      - name: 注入 W132D 板级配置
-        # ophub/fnnas 用 model_database.conf 映射板名到 DTB/U-Boot/平台。
-        # W132D 不在上游列表里，追加一行即可；格式与已有 RK3528 条目一致。
-        run: |
-          conf="fnnas-build/make-fnnas/fnnas-files/common-files/etc/model_database.conf"
-          if ! grep -Eq ':w132d[[:space:]]*:' "$conf"; then
-            echo '# ZTE Cloud Computer W132D (added by w132d-linux-mainline CI)' >> "$conf"
-            echo 'r790    :ZTE-W132D                                     :rk3528   :rk3528-w132d.dtb                         :NA                           :u-boot.itb                          :idbloader.img                   :2GB-LPDDR4,32G-eMMC,WiFi,1Gb-Nic           :rockchip/all          :rockchip    :rk3528       :extlinux.conf   :w132d-linux-mainline                                 :w132d                     :yes' >> "$conf"
-            echo "✅ 已追加 W132D 到 model_database.conf"
-            tail -3 "$conf"
-          else
-            echo "W132D 已存在于上游 model_database.conf，跳过追加："
-            grep -nE ':w132d[[:space:]]*:' "$conf"
-          fi
-
-      - name: 注入 W132D apt 源与内核锁
-        # fnOS 不安装 Armbian BSP 包，必须把源、签名公钥和 apt pin 直接放进 renas 的 common-files。
-        # renas 会把 common-files 原样复制到目标 rootfs。
-        run: |
-          set -euo pipefail
-          src="userpatches/overlay/bsp-cli"
-          root="fnnas-build/make-fnnas/fnnas-files/common-files"
-          install -D -m 0644 "$src/etc/apt/sources.list.d/w132d.sources" \
-            "$root/etc/apt/sources.list.d/w132d.sources"
-          install -D -m 0644 "$src/etc/apt/preferences.d/w132d-kernel" \
-            "$root/etc/apt/preferences.d/w132d-kernel"
-          install -D -m 0644 "$src/usr/share/keyrings/w132d-archive-keyring.gpg" \
-            "$root/usr/share/keyrings/w132d-archive-keyring.gpg"
-          grep -q 'releases/download/apt' "$root/etc/apt/sources.list.d/w132d.sources"
-          grep -q '^Package: linux-image-\*' "$root/etc/apt/preferences.d/w132d-kernel"
-          grep -q '^Pin: release o=W132D$' "$root/etc/apt/preferences.d/w132d-kernel"
-          test -s "$root/usr/share/keyrings/w132d-archive-keyring.gpg"
-          echo "✅ W132D apt 源、签名公钥和内核锁已加入 fnOS rootfs"
-
-      - name: 下载 fnOS 官方 Rockchip 基础镜像
-        id: fnos_base
-        env:
-          GH_TOKEN: ${{ github.token }}
-        working-directory: fnnas-build
-        run: |
-          set -euo pipefail
-          mkdir -p fnnas-arm64
-          mapfile -t assets < <(gh release view fnnas_base_image -R ophub/fnnas --json assets -q \
-            '.assets[].name | select(contains("rockchip_1253") and endswith(".img.xz"))')
-          [ "${#assets[@]}" -eq 1 ] || {
-            echo "❌ rockchip_1253 基础镜像应恰好为一个，实际为 ${#assets[@]} 个"
-            printf '  %s\n' "${assets[@]}"
-            exit 1
-          }
-          base="fnnas-arm64/${assets[0]}"
-          echo "下载: ${assets[0]}"
-          gh release download fnnas_base_image -R ophub/fnnas -p "${assets[0]}" -D fnnas-arm64 --clobber
-          [ -s "$base" ] || { echo "❌ 基础镜像下载为空: $base"; exit 1; }
-          unxz -f "$base"
-          [ -s "${base%.xz}" ] || { echo "❌ 解压后没有 .img: ${base%.xz}"; exit 1; }
-          echo "status=success" >> "$GITHUB_OUTPUT"
-
-      - name: 在 fnOS 中生成自定义内核包
-        working-directory: fnnas-build
-        run: |
-          set -euo pipefail
-          expected='[[ "${debs_install}" =~ ^(amlogic|allwinner|rockchip)$ ]] && download_debs'
-          [ "$(sed -n '540p' rekernel)" = "$expected" ] || {
-            echo "❌ 固定版本的 rekernel 下载入口与预期不符"
-            exit 1
-          }
-          # -e rockchip 负责安装已暂存的 W132D deb；禁用其默认的上游官方 deb 下载。
-          sed -i '540s|^|# Local W132D debs are already staged; |' rekernel
-          sudo ./rekernel -e rockchip -t false
-
-      - name: 校验并放置自定义内核
-        working-directory: fnnas-build
-        env:
-          KERNEL_RELEASE: ${{ steps.kernel_input.outputs.kernel_release }}
-          KERNEL_VERSION: ${{ steps.kernel_input.outputs.kernel_version }}
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          bundles=(fnnas/out/*-rockchip.tar.gz)
-          [ "${#bundles[@]}" -eq 1 ] || {
-            echo "❌ rekernel 产物应恰好为一个，实际为 ${#bundles[@]} 个"
-            printf '  %s\n' "${bundles[@]}"
-            exit 1
-          }
-
-          dest="make-fnnas/kernel/$KERNEL_VERSION"
-          kernel_dir="$dest/$KERNEL_VERSION-rockchip"
-          mkdir -p "$dest"
-          tar -xzf "${bundles[0]}" -C "$dest"
-          [ -d "$kernel_dir" ] || { echo "❌ 内核包目录不符合预期: $kernel_dir"; exit 1; }
-          for part in boot dtb modules header; do
-            file="$kernel_dir/$part-rockchip-$KERNEL_RELEASE.tar.gz"
-            [ -s "$file" ] || { echo "❌ 缺少内核归档: $file"; exit 1; }
-          done
-          (cd "$kernel_dir" && sha256sum -c sha256sums)
-
-          tmp=$(mktemp -d)
-          trap 'rm -rf "$tmp"' EXIT
-          tar -xzf "$kernel_dir/boot-rockchip-$KERNEL_RELEASE.tar.gz" -C "$tmp"
-          [ -s "$tmp/uInitrd-$KERNEL_RELEASE" ] || { echo "❌ boot 归档缺少 uInitrd"; exit 1; }
-          mkimage -l "$tmp/uInitrd-$KERNEL_RELEASE"
-          sudo rm -f "${bundles[0]}"
-          echo "✅ 自定义内核已放置到 $kernel_dir"
-          ls -la "$kernel_dir/"
-
-      - name: 构建 fnOS 镜像
-        if: steps.fnos_base.outputs.status == 'success'
-        working-directory: fnnas-build
-        run: |
-          # 关闭自动选取上游内核，强制使用上一步生成并校验过的本项目内核。
-          sudo ./renas \
-            -b w132d \
-            -k ${{ steps.kernel_input.outputs.kernel_version }} \
-            -a false \
-            -n w132d
-
-      - name: 上传 fnOS 镜像
-        uses: actions/upload-artifact@v7
-        with:
-          name: w132d-fnos-${{ steps.kernel_input.outputs.package_revision }}
-          path: fnnas-build/fnnas/out/
+          name: verified-candidate
+          path: out/candidate/
+          compression-level: 0
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 90
 
-      - name: 发布 fnOS 镜像
-        if: startsWith(github.ref, 'refs/tags/v')
+  publish:
+    needs: [prepare, seal]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: verified-candidate
+          path: out/candidate
+      - name: Preserve immutable release assets
         env:
           GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: tools/w132d release immutable --directory out/candidate --repository "$REPOSITORY"
+      - name: Sign retained APT distributions
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+          APT_SIGNING_FINGERPRINT: ${{ vars.APT_SIGNING_FINGERPRINT }}
         run: |
-          tag=${GITHUB_REF_NAME}
-          # fnOS 镜像附加到已有的 Release（packages job 已创建）
-          if gh release view "$tag" > /dev/null 2>&1; then
-            shopt -s nullglob
-            images=(fnnas-build/fnnas/out/*.img.gz)
-            [ "${#images[@]}" -gt 0 ] || { echo "❌ fnOS 没有生成 .img.gz"; exit 1; }
-            gh release upload "$tag" "${images[@]}" --clobber
-          else
-            echo "❌ Release $tag 不存在（Armbian 镜像 Release 应由 packages job 先创建）"
-            exit 1
-          fi
+          test -n "$APT_SIGNING_KEY" && test -n "$APT_SIGNING_FINGERPRINT"
+          export GNUPGHOME
+          GNUPGHOME=$(mktemp -d)
+          trap 'rm -rf "$GNUPGHOME"' EXIT
+          printf '%s\n' "$APT_SIGNING_KEY" | gpg --batch --quiet --import
+          tools/w132d repo --directory out/candidate --output out/pages --key "$APT_SIGNING_FINGERPRINT"
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: out/pages
+      - name: Deploy signed APT repository
+        id: deployment
+        uses: actions/deploy-pages@v5
+      - name: Promote only after the new APT state is visible
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: tools/w132d release latest --directory out/candidate --repository "$REPOSITORY"

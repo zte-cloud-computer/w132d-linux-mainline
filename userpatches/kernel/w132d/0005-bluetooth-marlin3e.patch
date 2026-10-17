@@ -1,0 +1,62 @@
+From: W132D maintainers <tech@wenziwanka.com>
+Subject: [PATCH] Bluetooth: scope the broken Park policy quirk to Marlin3E
+
+diff --git a/include/net/bluetooth/hci.h b/include/net/bluetooth/hci.h
+--- a/include/net/bluetooth/hci.h
++++ b/include/net/bluetooth/hci.h
+@@ -69,6 +69,9 @@
+ 
+ /* HCI device quirks */
+ enum {
++	/* Marlin3E advertises Park but rejects it in the default policy. */
++	HCI_QUIRK_BROKEN_PARK_LINK_POLICY,
++
+ 	/* When this quirk is set, the HCI Reset command is send when
+ 	 * closing the transport instead of when opening it.
+ 	 *
+diff --git a/net/bluetooth/hci_sync.c b/net/bluetooth/hci_sync.c
+--- a/net/bluetooth/hci_sync.c
++++ b/net/bluetooth/hci_sync.c
+@@ -4342,27 +4342,39 @@
+ static int hci_setup_link_policy_sync(struct hci_dev *hdev)
+ {
+ 	struct hci_cp_write_def_link_policy cp;
+ 	u16 link_policy = 0;
++	int err;
+ 
+ 	if (!(hdev->commands[5] & 0x10))
+ 		return 0;
+ 
+ 	memset(&cp, 0, sizeof(cp));
+ 
+ 	if (lmp_rswitch_capable(hdev))
+ 		link_policy |= HCI_LP_RSWITCH;
+ 	if (lmp_hold_capable(hdev))
+ 		link_policy |= HCI_LP_HOLD;
+ 	if (lmp_sniff_capable(hdev))
+ 		link_policy |= HCI_LP_SNIFF;
+-	if (lmp_park_capable(hdev))
++	if (lmp_park_capable(hdev) &&
++	    !hci_test_quirk(hdev, HCI_QUIRK_BROKEN_PARK_LINK_POLICY))
+ 		link_policy |= HCI_LP_PARK;
+ 
+ 	cp.policy = cpu_to_le16(link_policy);
+ 
+-	return __hci_cmd_sync_status(hdev, HCI_OP_WRITE_DEF_LINK_POLICY,
+-				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
++	err = __hci_cmd_sync_status(hdev, HCI_OP_WRITE_DEF_LINK_POLICY,
++				    sizeof(cp), &cp, HCI_CMD_TIMEOUT);
++	/* Marlin3E may reject even the policy without Park. Keep the
++	 * controller default, as on the validated W132D main branch.
++	 */
++	if (err == -EINVAL &&
++	    hci_test_quirk(hdev, HCI_QUIRK_BROKEN_PARK_LINK_POLICY)) {
++		bt_dev_warn(hdev, "Controller rejected default link policy, keeping firmware default");
++		return 0;
++	}
++
++	return err;
+ }
+ 
+ static int hci_read_page_scan_activity_sync(struct hci_dev *hdev)
+ {

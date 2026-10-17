@@ -1,2 +1,4 @@
-# 厂商 RF 配置按字节原样保存：是 CRLF 就保持 CRLF，git 不得做行尾转换
-userpatches/overlay/bsp-cli/lib/firmware/** -text
+# Preserve the vendor RF configuration byte-for-byte, including CRLF.
+userpatches/overlay/bsp-cli/usr/lib/firmware/** -text
+# Unified diff context contains a leading space before upstream indentation.
+*.patch whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab

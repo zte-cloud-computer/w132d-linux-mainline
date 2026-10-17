@@ -1,0 +1,90 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# W132D panel LED service.
+#
+# The panel has one red/green dual-color power LED. The vendor net-red and
+# net-green pins are not connected on this board; keep their controls available.
+#
+# Priority: failed unit, temperature warning, normal operation.
+# Solid red: booting or shutting down.
+# Solid green: normal operation, without blinking.
+# Slow green blink: a systemd unit has failed.
+# Slow red blink: SoC temperature at least 85 C, below the first 95 C throttle.
+# Red plus green: kernel panic; the kernel trigger works without userspace.
+# During a temperature warning the timer trigger replaces the panic trigger.
+# Network state affects only the LAN LED.
+set -euo pipefail
+IFACE="${W132D_LED_IFACE:-end0}"
+L=/sys/class/leds
+PG=$L/green:power
+PR=$L/red:power
+NG=$L/green:lan
+NR=$L/red:lan
+TEMP_WARN="${W132D_LED_TEMP_WARN:-85000}"   # Override this threshold for testing.
+BLINK_MS=1000
+INTERVAL="${W132D_LED_INTERVAL:-2}"
+
+write_led(){
+  local path="$1/$2"
+  if [ -e "$path" ]; then
+    printf '%s\n' "$3" 2>/dev/null > "$path" || true
+  fi
+}
+w(){ write_led "$1" brightness "$2"; }
+trig(){ write_led "$1" trigger "$2"; }
+blink(){
+  trig "$1" timer
+  write_led "$1" delay_on "$BLINK_MS"
+  write_led "$1" delay_off "$BLINK_MS"
+}
+
+# The kernel panic trigger keeps red off until a panic.
+# The order matters; see the state switch below.
+arm_panic(){ trig "$PR" none; w "$PR" 0; trig "$PR" panic; }
+
+# Boot complete: red off, green on, panic trigger armed.
+# Take over red before enabling green to clear the DT default state.
+arm_panic
+w "$PG" 1
+
+cleanup(){
+  # On exit, show red instead of leaving a false healthy state.
+  trig "$PG" none; w "$PG" 0
+  trig "$PR" none; w "$PR" 1
+  w "$NG" 0; w "$NR" 0
+  exit 0
+}
+trap cleanup TERM INT EXIT
+
+state=""   # Write sysfs only when the state changes.
+while :; do
+  failed=$(systemctl list-units --state=failed --no-legend 2>/dev/null | wc -l)
+  temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo 0)
+  link=0
+  if [ "$(cat "/sys/class/net/$IFACE/carrier" 2>/dev/null || echo 0)" = "1" ]; then
+    link=1
+  fi
+
+  if   [ "$failed" -gt 0 ];          then new=fault   # Slow green blink.
+  elif [ "$temp" -ge "$TEMP_WARN" ]; then new=warn    # Slow red blink.
+  else                                    new=ok      # Solid green.
+  fi
+
+  if [ "$new" != "$state" ]; then
+    case "$new" in
+      # Set both LEDs in each branch to avoid carrying the previous state.
+      # Set trigger to none, brightness to zero, then panic: brightness_store()
+      # removes the trigger when zero is written.
+      fault) arm_panic;             blink "$PG" ;;                       # Green blinks; red remains armed for panic.
+      warn)  trig "$PG" none;  w "$PG" 0; blink "$PR" ;;                 # Red blinks; green is off.
+      ok)    trig "$PG" none;  w "$PG" 1; arm_panic ;;                   # Green is solid; red is armed for panic.
+    esac
+    state="$new"
+  fi
+
+  # The LAN LED is unconnected on the current board.
+  w "$NG" "$link"
+  w "$NR" $((1 - link))
+
+  sleep "$INTERVAL"
+done

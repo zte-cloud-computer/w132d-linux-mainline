@@ -1,37 +1,33 @@
-# ZTE W132D 随机遥控器键位表（29 键），NEC 协议、地址 0x22，ir-keytable -t 实测采集。
-# 原厂 Android DTB 里的 9 张 ir_key 表没有一张匹配本遥控器。
+# W132D 29-key remote: measured NEC codes, address 0x22.
+# Additional codes from vendor ir_key8 support the 43-key variant.
+# KEY_SETUP is labeled TV; voice audio travels over Bluetooth.
 [[protocols]]
 name = "w132d"
 protocol = "nec"
 variant = "nec"
 
 [protocols.scancodes]
-# --- 电源 / 信号源 ---
-0x22dc = "KEY_POWER"          # 电源
-0x228d = "KEY_SETUP"          # 设置（原厂 KEY_SETUP/SETTINGS；键面印 TV）
-0x229c = "KEY_MUTE"           # 静音
+0x22dc = "KEY_POWER"
+0x228d = "KEY_SETUP"
+0x229c = "KEY_MUTE"
 
-# --- 方向 / 导航 ---
-0x22ca = "KEY_UP"             # 上
-0x22d2 = "KEY_DOWN"           # 下
-0x2299 = "KEY_LEFT"           # 左
-0x22c1 = "KEY_RIGHT"          # 右
-0x22ce = "KEY_OK"             # 确定
-0x2295 = "KEY_BACK"           # 返回
-0x2288 = "KEY_HOME"           # 主页
-0x2282 = "KEY_MENU"           # 菜单
+0x22ca = "KEY_UP"
+0x22d2 = "KEY_DOWN"
+0x2299 = "KEY_LEFT"
+0x22c1 = "KEY_RIGHT"
+0x22ce = "KEY_OK"
+0x2295 = "KEY_BACK"
+0x2288 = "KEY_HOME"
+0x2282 = "KEY_MENU"
 
-# --- 音量 / 频道 ---
-0x2280 = "KEY_VOLUMEUP"       # 音量+
-0x2281 = "KEY_VOLUMEDOWN"     # 音量-
-0x2285 = "KEY_CHANNELUP"      # 频道+
-0x2286 = "KEY_CHANNELDOWN"    # 频道-
+0x2280 = "KEY_VOLUMEUP"
+0x2281 = "KEY_VOLUMEDOWN"
+0x2285 = "KEY_CHANNELUP"
+0x2286 = "KEY_CHANNELDOWN"
 
-# --- 功能键 ---
-0x22e5 = "KEY_VOICECOMMAND"   # 语音（红外只发按下通知，音频走蓝牙）
-0x22f0 = "KEY_PROG1"          # M（厂商自定义键，可按需改成别的）
+0x22e5 = "KEY_VOICECOMMAND"
+0x22f0 = "KEY_PROG1"
 
-# --- 数字键盘 ---
 0x2292 = "KEY_1"
 0x2293 = "KEY_2"
 0x22cc = "KEY_3"
@@ -45,8 +41,6 @@ variant = "nec"
 0x22da = "KEY_NUMERIC_POUND"  # #
 0x22d0 = "KEY_NUMERIC_STAR"   # *
 
-# --- 以下来自原厂 ir_key8、本机 29 键遥控器上没有物理键 ---
-# 加了不会误触发（永远收不到这些码），换 43 键版遥控器即可用。
 0x228c = "KEY_PAGEDOWN"
 0x22dd = "KEY_PAGEUP"
 0x22cd = "KEY_F6"
@@ -61,4 +55,4 @@ variant = "nec"
 0x2289 = "KEY_BLUE"
 0x2284 = "KEY_YELLOW"
 0x2296 = "KEY_F8"
-0x2298 = "BTN_1"             # 原厂 cmd 0x67 / keycode 257
+0x2298 = "BTN_1"

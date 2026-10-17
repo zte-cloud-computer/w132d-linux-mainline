@@ -1,21 +1,16 @@
-# 上游输入（内核源码、rkbin、签名私钥），tools/fetch-inputs.sh 可重新获取
+# Downloaded build inputs and caches
 /cache/
-
-# 构建产物
+# Generated artifacts
 /out/
-
-# 本地维护笔记，不入库
+# Private local notes and image customization
 /notes/
-
-# Armbian 运行时写进 userpatches 的模板；customize-image.sh 是本机私有内容
+/.vscode/
 /userpatches/config-example.conf
 /userpatches/customize-image.sh
 /userpatches/.tmp/
 /userpatches/overlay/local/
-
-# rkdeveloptool 在当前目录写的日志
+# Flashing tool logs
 /log/
-
 /w132d-armbian-*.zip
 .DS_Store
 ._*

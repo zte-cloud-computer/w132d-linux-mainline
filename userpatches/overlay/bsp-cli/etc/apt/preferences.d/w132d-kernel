@@ -1,11 +1,17 @@
-# W132D 只能启动本项目配套的内核、DTB 与 U-Boot。APT 对同一版本采用第一个匹配的
-# specific-form 规则，因此精确放行必须位于下面的通配封禁之前。
+# Exact project packages precede the foreign-kernel exclusion.
 Package: linux-image-edge-rockchip64 linux-dtb-edge-rockchip64 linux-headers-edge-rockchip64 linux-libc-dev-edge-rockchip64 linux-u-boot-w132d-edge armbian-bsp-cli-w132d-edge
-Pin: release o=W132D
-Pin-Priority: 1001
+Pin: release o=W132D,a=stable
+Pin-Priority: 990
 
-# 封禁任何其它来源的相关包，包括 fnOS 自带的 linux-image-arm64 元包及 Debian/Armbian
-# 后续新增的内核。已安装的旧内核保留在磁盘上，但 apt 不会升级或安装这些外部版本。
-Package: linux-image-* linux-dtb-* linux-headers-* linux-modules-* linux-u-boot-*
+Package: linux-image-edge-rockchip64 linux-dtb-edge-rockchip64 linux-headers-edge-rockchip64 linux-libc-dev-edge-rockchip64 linux-u-boot-w132d-edge armbian-bsp-cli-w132d-edge
+Pin: release o=W132D,a=experimental
+Pin-Priority: -1
+
+# Keep an installed experimental version eligible when its source is disabled.
+Package: linux-image-edge-rockchip64 linux-dtb-edge-rockchip64 linux-headers-edge-rockchip64 linux-libc-dev-edge-rockchip64 linux-u-boot-w132d-edge armbian-bsp-cli-w132d-edge
+Pin: release a=now
+Pin-Priority: 100
+
+Package: linux-image-* linux-dtb-* linux-headers-* linux-modules-* linux-libc-dev-* linux-u-boot-* armbian-bsp-cli-w132d*
 Pin: version *
 Pin-Priority: -1

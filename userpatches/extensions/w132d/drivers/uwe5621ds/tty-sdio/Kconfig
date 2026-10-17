@@ -1,0 +1,15 @@
+config TTY_OVERY_SDIO
+	tristate "Spard TTY Overy SDIO Driver"
+	help
+	  Spard tty overy sdio driver.
+
+config TTY_OVERY_SDIO_HCI
+	bool "Register the Bluetooth channel as an HCI device instead of a tty"
+	depends on TTY_OVERY_SDIO && BT
+	help
+	  Register a Bluetooth HCI device (hci0) directly on the marlin SDIO
+	  channel and do the Marlin3E vendor initialisation (pskey, RF
+	  parameters, enable) in the kernel, like upstream SDIO Bluetooth
+	  drivers do. Without this the channel is exposed as /dev/ttyBT0 and
+	  userspace has to send the vendor commands and attach the H4 line
+	  discipline itself.

@@ -1,0 +1,50 @@
+name: Maintained rkdeveloptool binaries
+
+on:
+  workflow_call:
+    inputs:
+      commit:
+        type: string
+        required: true
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-amd64
+          - runner: ubuntu-26.04-arm
+            platform: linux-arm64
+          - runner: macos-14
+            platform: macos-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.commit || github.sha }}
+          persist-credentials: false
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config autoconf automake libtool
+      - name: Install macOS build dependencies
+        if: runner.os == 'macOS'
+        run: brew install cmake pkg-config autoconf automake libtool
+      - name: Build and inspect the native binary
+        run: tools/w132d build flash-tools
+      - name: Archive executable modes, licenses and corresponding source
+        run: tar -C out/flash-tools -czf out/rkdeveloptool-${{ matrix.platform }}.tar.gz ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rkdeveloptool-${{ matrix.platform }}
+          path: out/rkdeveloptool-${{ matrix.platform }}.tar.gz
+          if-no-files-found: error
+          retention-days: 90

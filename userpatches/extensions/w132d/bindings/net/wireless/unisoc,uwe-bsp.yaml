@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+maintainers:
+  - W132D maintainers <tech@wenziwanka.com>
+$id: http://devicetree.org/schemas/net/wireless/unisoc,uwe-bsp.yaml#
+title: W132D Marlin3E SDIO transport
+properties:
+  compatible:
+    const: unisoc,uwe_bsp
+  sdhci-name:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description: Host SDIO controller.
+  unisoc,btwf-file-name:
+    $ref: /schemas/types.yaml#/definitions/string
+    description: Firmware filename.
+  sdio-ext-int-gpio-gpios:
+    maxItems: 1
+    description: W132D WCN control GPIO.
+  bt-wake-host-gpio-gpios:
+    maxItems: 1
+    description: W132D WCN control GPIO.
+  bt-reg-on-gpios:
+    maxItems: 1
+    description: W132D WCN control GPIO.
+  bt-wake-host:
+    type: boolean
+    description: Enable the corresponding W132D SDIO transport option.
+  data-irq:
+    type: boolean
+    description: Enable the corresponding W132D SDIO transport option.
+  blksz-512:
+    type: boolean
+    description: Enable the corresponding W132D SDIO transport option.
+  keep-power-on:
+    type: boolean
+    description: Enable the corresponding W132D SDIO transport option.
+required:
+  - compatible
+  - sdhci-name
+  - unisoc,btwf-file-name
+unevaluatedProperties: false
+...

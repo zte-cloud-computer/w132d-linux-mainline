@@ -1,0 +1,47 @@
+name: Manual fnOS image
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: Official Rockchip fnOS .img.xz URL
+        required: true
+        type: string
+      base_sha256:
+        description: Trusted SHA256 of the base image
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  fnos:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/prepare-build-host
+      - name: Lock official upstream versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: tools/w132d fetch --latest --channel experimental
+      - name: Download the explicit base image
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+        run: |
+          mkdir -p cache/fnos-base
+          curl --fail --location --proto '=https' --output cache/fnos-base/rockchip_1253.img.xz "$BASE_URL"
+      - name: Build and repack the manual image
+        env:
+          BASE_SHA256: ${{ inputs.base_sha256 }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y device-tree-compiler
+          tools/w132d build fnos --base-image cache/fnos-base/rockchip_1253.img.xz --base-sha256 "$BASE_SHA256"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: w132d-fnos-experimental
+          path: out/*/fnos/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 30
