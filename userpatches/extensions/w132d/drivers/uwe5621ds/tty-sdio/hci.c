@@ -24,6 +24,7 @@
 #include <linux/of.h>
 #include <linux/skbuff.h>
 #include <linux/slab.h>
+#include <linux/spinlock.h>
 #include <net/bluetooth/bluetooth.h>
 #include <net/bluetooth/hci_core.h>
 
@@ -45,10 +46,14 @@ struct sprd_hci {
 	struct sk_buff *rx_skb;
 	unsigned int rx_hdr_len;
 	unsigned int rx_want;
+	bool rx_enabled;
+	bool reset_pending;
 	bdaddr_t bdaddr;
 };
 
 static struct sprd_hci *sprd_hci;
+/* Protect publication, RX reassembly and close/reset against SDIO callbacks. */
+static DEFINE_SPINLOCK(sprd_hci_lock);
 
 /* ---- vendor parameter blocks ------------------------------------------- */
 
@@ -312,6 +317,8 @@ out:
 
 static int sprd_hci_open(struct hci_dev *hdev)
 {
+	struct sprd_hci *sh = hci_get_drvdata(hdev);
+	unsigned long flags;
 	int ret;
 
 	ret = start_marlin(MARLIN_BLUETOOTH);
@@ -321,16 +328,31 @@ static int sprd_hci_open(struct hci_dev *hdev)
 	}
 	/* the vendor userspace waits before the first command after power on */
 	msleep(200);
+	spin_lock_irqsave(&sprd_hci_lock, flags);
+	sh->rx_enabled = true;
+	spin_unlock_irqrestore(&sprd_hci_lock, flags);
 	return 0;
+}
+
+static void sprd_hci_clear_rx(struct sprd_hci *sh)
+{
+	kfree_skb(sh->rx_skb);
+	sh->rx_skb = NULL;
+	sh->rx_hdr_len = 0;
+	sh->rx_want = 0;
 }
 
 static int sprd_hci_close(struct hci_dev *hdev)
 {
 	struct sprd_hci *sh = hci_get_drvdata(hdev);
+	unsigned long flags;
 
+	spin_lock_irqsave(&sprd_hci_lock, flags);
+	sh->rx_enabled = false;
+	sh->reset_pending = false;
+	sprd_hci_clear_rx(sh);
+	spin_unlock_irqrestore(&sprd_hci_lock, flags);
 	stop_marlin(MARLIN_BLUETOOTH);
-	kfree_skb(sh->rx_skb);
-	sh->rx_skb = NULL;
 	return 0;
 }
 
@@ -409,14 +431,17 @@ static unsigned int sprd_hci_payload_len(struct sk_buff *skb)
 
 void sprd_hci_recv(const unsigned char *data, int len)
 {
-	struct sprd_hci *sh = READ_ONCE(sprd_hci);
+	struct sprd_hci *sh;
 	struct hci_dev *hdev;
+	unsigned long flags;
 
-	if (!sh || !sh->hdev)
-		return;
+	spin_lock_irqsave(&sprd_hci_lock, flags);
+	sh = sprd_hci;
+	if (!sh || !sh->rx_enabled)
+		goto out;
 	hdev = sh->hdev;
 	if (!test_bit(HCI_RUNNING, &hdev->flags))
-		return;
+		goto out;
 
 	while (len > 0) {
 		unsigned int n;
@@ -433,7 +458,7 @@ void sprd_hci_recv(const unsigned char *data, int len)
 			sh->rx_skb = bt_skb_alloc(HCI_MAX_FRAME_SIZE, GFP_ATOMIC);
 			if (!sh->rx_skb) {
 				hdev->stat.err_rx++;
-				return;
+				goto out;
 			}
 			hci_skb_pkt_type(sh->rx_skb) = type;
 			sh->rx_want = sh->rx_hdr_len;
@@ -442,9 +467,8 @@ void sprd_hci_recv(const unsigned char *data, int len)
 		n = min_t(unsigned int, len, sh->rx_want - sh->rx_skb->len);
 		if (n > skb_tailroom(sh->rx_skb)) {
 			hdev->stat.err_rx++;
-			kfree_skb(sh->rx_skb);
-			sh->rx_skb = NULL;
-			return;
+			sprd_hci_clear_rx(sh);
+			goto out;
 		}
 		skb_put_data(sh->rx_skb, data, n);
 		data += n;
@@ -459,16 +483,31 @@ void sprd_hci_recv(const unsigned char *data, int len)
 			sh->rx_skb = NULL;
 		}
 	}
+out:
+	spin_unlock_irqrestore(&sprd_hci_lock, flags);
 }
 
-void sprd_hci_reset(void)
+void sprd_hci_reset(bool ready)
 {
-	struct sprd_hci *sh = READ_ONCE(sprd_hci);
+	struct sprd_hci *sh;
+	unsigned long flags;
 
-	if (sh && sh->hdev) {
-		bt_dev_warn(sh->hdev, "CP2 reset, resetting HCI device");
+	spin_lock_irqsave(&sprd_hci_lock, flags);
+	sh = sprd_hci;
+	if (!sh)
+		goto out;
+	if (!ready) {
+		sh->reset_pending = sh->rx_enabled;
+		sh->rx_enabled = false;
+		sprd_hci_clear_rx(sh);
+	} else if (sh->reset_pending) {
+		/* The core may reopen immediately; wait until BSP power-down is over. */
+		sh->reset_pending = false;
+		bt_dev_warn(sh->hdev, "CP2 reset complete, recovering HCI device");
 		hci_reset_dev(sh->hdev);
 	}
+out:
+	spin_unlock_irqrestore(&sprd_hci_lock, flags);
 }
 
 /* ---- registration ------------------------------------------------------ */
@@ -477,6 +516,7 @@ int sprd_hci_register(struct device *dev)
 {
 	struct sprd_hci *sh;
 	struct hci_dev *hdev;
+	unsigned long flags;
 	int ret;
 
 	sh = kzalloc(sizeof(*sh), GFP_KERNEL);
@@ -498,12 +538,18 @@ int sprd_hci_register(struct device *dev)
 	hdev->flush = sprd_hci_flush;
 	hdev->setup = sprd_hci_setup;
 	hdev->send = sprd_hci_send;
+	/* close() powers down CP2; vendor state must be restored on every open. */
+	hci_set_quirk(hdev, HCI_QUIRK_NON_PERSISTENT_SETUP);
 	sh->hdev = hdev;
 
-	WRITE_ONCE(sprd_hci, sh);
+	spin_lock_irqsave(&sprd_hci_lock, flags);
+	sprd_hci = sh;
+	spin_unlock_irqrestore(&sprd_hci_lock, flags);
 	ret = hci_register_dev(hdev);
 	if (ret) {
-		WRITE_ONCE(sprd_hci, NULL);
+		spin_lock_irqsave(&sprd_hci_lock, flags);
+		sprd_hci = NULL;
+		spin_unlock_irqrestore(&sprd_hci_lock, flags);
 		hci_free_dev(hdev);
 		kfree(sh);
 		return ret;
@@ -515,12 +561,16 @@ int sprd_hci_register(struct device *dev)
 void sprd_hci_unregister(void)
 {
 	struct sprd_hci *sh = sprd_hci;
+	unsigned long flags;
 
 	if (!sh)
 		return;
-	WRITE_ONCE(sprd_hci, NULL);
+	/* Leave RX attached until the core finishes closing the transport. */
 	hci_unregister_dev(sh->hdev);
+	spin_lock_irqsave(&sprd_hci_lock, flags);
+	sprd_hci = NULL;
+	sprd_hci_clear_rx(sh);
+	spin_unlock_irqrestore(&sprd_hci_lock, flags);
 	hci_free_dev(sh->hdev);
-	kfree_skb(sh->rx_skb);
 	kfree(sh);
 }

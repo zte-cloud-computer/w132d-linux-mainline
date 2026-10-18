@@ -2,8 +2,8 @@
  * W132D backport note
  *
  * Source: armbian/linux-rockchip @ rk-6.1-rkr5, sound/soc/codecs/es7202.c
- * Changes: Linux 6.1 -> 7.1.10 API adaptation only. Register sequences,
- * timings, and defaults are unchanged.
+ * Changes: current kernel APIs, repeatable component setup and I2C error
+ * propagation. Register sequences, timings, and defaults are unchanged.
  */
 /*
  * ALSA SoC ES7202 pdm adc driver
@@ -48,13 +48,12 @@
 
 //static struct snd_soc_codec *es7202_codec;
 struct i2c_client *i2c_ctl[ADC_DEV_MAXNUM];
-struct snd_soc_component *tron_component1[ADC_DEV_MAXNUM];
-static int es7202_adc_num = 0;
 
 /* codec private data */
 struct es7202_priv {
 	struct regmap *regmap;
 	struct i2c_client *i2c;
+	unsigned int index;
 
 	unsigned int pwr_vdd_voltage;
 	struct regulator *vdd;
@@ -81,18 +80,18 @@ static int es7202_read(u8 reg, u8 * rt_value, struct i2c_client *client)
 	cmd_len = 1;
 
 	if (!client || !client->adapter)
-		return -1;
+		return -ENODEV;
 
 	ret = i2c_master_send(client, read_cmd, cmd_len);
 	if (ret != cmd_len) {
 		printk("es7202_read error1\n");
-		return -1;
+		return ret < 0 ? ret : -EIO;
 	}
 
 	ret = i2c_master_recv(client, rt_value, 1);
 	if (ret != 1) {
 		printk("es7202_read error2, ret = %d.\n", ret);
-		return -1;
+		return ret < 0 ? ret : -EIO;
 	}
 
 	return 0;
@@ -104,7 +103,7 @@ static int es7202_write(u8 reg, unsigned char value, struct i2c_client *client)
 	u8 write_cmd[2] = { 0 };
 
 	if (!client || !client->adapter)
-		return -1;
+		return -ENODEV;
 
 	write_cmd[0] = reg;
 	write_cmd[1] = value;
@@ -113,7 +112,7 @@ static int es7202_write(u8 reg, unsigned char value, struct i2c_client *client)
 	if (ret != 2) {
 		printk("es7202_write error->[REG-0x%02x,val-0x%02x]\n",
 		       reg, value);
-		return -1;
+		return ret < 0 ? ret : -EIO;
 	}
 
 	return 0;
@@ -122,12 +121,15 @@ static int es7202_write(u8 reg, unsigned char value, struct i2c_client *client)
 static int es7202_update_bits(u8 reg, u8 mask, u8 value,
 			      struct i2c_client *client)
 {
-	u8 val_old = 0, val_new = 0;
+	u8 val_old, val_new;
+	int ret;
 
-	es7202_read(reg, &val_old, client);
+	ret = es7202_read(reg, &val_old, client);
+	if (ret)
+		return ret;
 	val_new = (val_old & ~mask) | (value & mask);
 	if (val_new != val_old) {
-		es7202_write(reg, val_new, client);
+		return es7202_write(reg, val_new, client);
 	}
 
 	return 0;
@@ -146,16 +148,17 @@ static int es7202_multi_chips_write(u8 reg, unsigned char value)
 #endif
 static int es7202_multi_chips_update_bits(u8 reg, u8 mask, u8 value)
 {
-	u8 i;
+	int i, ret;
 
 	for (i = 0; i < ADC_DEV_MAXNUM; i++) {
-		es7202_update_bits(reg, mask, value, i2c_ctl[i]);
+		if (!i2c_ctl[i])
+			continue;
+		ret = es7202_update_bits(reg, mask, value, i2c_ctl[i]);
+		if (ret)
+			return ret;
 	}
-
 	return 0;
 }
-
-
 
 static const DECLARE_TLV_DB_SCALE(mic_boost_tlv, 0, 300, 0);
 
@@ -163,17 +166,19 @@ static const DECLARE_TLV_DB_SCALE(mic_boost_tlv, 0, 300, 0);
 static int es7202_micboost1_setting_set(struct snd_kcontrol *kcontrol,
 			struct snd_ctl_elem_value *ucontrol)
 {
-	es7202_update_bits(0x1d, 0x0F,
+	return es7202_update_bits(0x1d, 0x0F,
 		ucontrol->value.integer.value[0] & 0x0f, 
 		i2c_ctl[0]);
-	return 0;
 }
 
 static int es7202_micboost1_setting_get(struct snd_kcontrol *kcontrol,
 			struct snd_ctl_elem_value *ucontrol)
 {
 	u8 val = 0;
-	es7202_read(0x1d, &val, i2c_ctl[0]);
+	int ret = es7202_read(0x1d, &val, i2c_ctl[0]);
+
+	if (ret)
+		return ret;
 	ucontrol->value.integer.value[0] = val & 0x0f;
 	return 0;
 }
@@ -181,17 +186,19 @@ static int es7202_micboost1_setting_get(struct snd_kcontrol *kcontrol,
 static int es7202_micboost2_setting_set(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
-	es7202_update_bits(0x1e,
+	return es7202_update_bits(0x1e,
 			   0x0F,
 			   ucontrol->value.integer.value[0] & 0x0f, i2c_ctl[0]);
-	return 0;
 }
 
 static int es7202_micboost2_setting_get(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	u8 val = 0;
-	es7202_read(0x1e, &val, i2c_ctl[0]);
+	int ret = es7202_read(0x1e, &val, i2c_ctl[0]);
+
+	if (ret)
+		return ret;
 	ucontrol->value.integer.value[0] = val & 0x0f;
 	return 0;
 }
@@ -200,17 +207,19 @@ static int es7202_micboost2_setting_get(struct snd_kcontrol *kcontrol,
 static int es7202_micboost3_setting_set(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
-	es7202_update_bits(0x1d,
+	return es7202_update_bits(0x1d,
 			   0x0F,
 			   ucontrol->value.integer.value[0] & 0x0f, i2c_ctl[1]);
-	return 0;
 }
 
 static int es7202_micboost3_setting_get(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	u8 val = 0;
-	es7202_read(0x1d, &val, i2c_ctl[1]);
+	int ret = es7202_read(0x1d, &val, i2c_ctl[1]);
+
+	if (ret)
+		return ret;
 	ucontrol->value.integer.value[0] = val & 0x0f;
 	return 0;
 }
@@ -218,17 +227,19 @@ static int es7202_micboost3_setting_get(struct snd_kcontrol *kcontrol,
 static int es7202_micboost4_setting_set(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
-	es7202_update_bits(0x1e,
+	return es7202_update_bits(0x1e,
 			   0x0F,
 			   ucontrol->value.integer.value[0] & 0x0f, i2c_ctl[1]);
-	return 0;
 }
 
 static int es7202_micboost4_setting_get(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	u8 val = 0;
-	es7202_read(0x1e, &val, i2c_ctl[1]);
+	int ret = es7202_read(0x1e, &val, i2c_ctl[1]);
+
+	if (ret)
+		return ret;
 	ucontrol->value.integer.value[0] = val & 0x0f;
 	return 0;
 }
@@ -237,17 +248,19 @@ static int es7202_micboost4_setting_get(struct snd_kcontrol *kcontrol,
 static int es7202_micboost5_setting_set(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
-	es7202_update_bits(0x1d,
+	return es7202_update_bits(0x1d,
 			   0x0F,
 			   ucontrol->value.integer.value[0] & 0x0f, i2c_ctl[2]);
-	return 0;
 }
 
 static int es7202_micboost5_setting_get(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	u8 val;
-	es7202_read(0x1d, &val, i2c_ctl[2]);
+	int ret = es7202_read(0x1d, &val, i2c_ctl[2]);
+
+	if (ret)
+		return ret;
 	ucontrol->value.integer.value[0] = val & 0x0f;
 	return 0;
 }
@@ -255,17 +268,19 @@ static int es7202_micboost5_setting_get(struct snd_kcontrol *kcontrol,
 static int es7202_micboost6_setting_set(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
-	es7202_update_bits(0x1e,
+	return es7202_update_bits(0x1e,
 			   0x0F,
 			   ucontrol->value.integer.value[0] & 0x0f, i2c_ctl[2]);
-	return 0;
 }
 
 static int es7202_micboost6_setting_get(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	u8 val;
-	es7202_read(0x1e, &val, i2c_ctl[2]);
+	int ret = es7202_read(0x1e, &val, i2c_ctl[2]);
+
+	if (ret)
+		return ret;
 	ucontrol->value.integer.value[0] = val & 0x0f;
 	return 0;
 }
@@ -275,17 +290,19 @@ static int es7202_micboost6_setting_get(struct snd_kcontrol *kcontrol,
 static int es7202_micboost7_setting_set(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
-	es7202_update_bits(0x1d,
+	return es7202_update_bits(0x1d,
 			   0x0F,
 			   ucontrol->value.integer.value[0] & 0x0f, i2c_ctl[3]);
-	return 0;
 }
 
 static int es7202_micboost7_setting_get(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	u8 val;
-	es7202_read(0x1d, &val, i2c_ctl[3]);
+	int ret = es7202_read(0x1d, &val, i2c_ctl[3]);
+
+	if (ret)
+		return ret;
 	ucontrol->value.integer.value[0] = val & 0x0f;
 	return 0;
 }
@@ -293,17 +310,19 @@ static int es7202_micboost7_setting_get(struct snd_kcontrol *kcontrol,
 static int es7202_micboost8_setting_set(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
-	es7202_update_bits(0x1e,
+	return es7202_update_bits(0x1e,
 			   0x0F,
 			   ucontrol->value.integer.value[0] & 0x0f, i2c_ctl[3]);
-	return 0;
 }
 
 static int es7202_micboost8_setting_get(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	u8 val;
-	es7202_read(0x1e, &val, i2c_ctl[3]);
+	int ret = es7202_read(0x1e, &val, i2c_ctl[3]);
+
+	if (ret)
+		return ret;
 	ucontrol->value.integer.value[0] = val & 0x0f;
 	return 0;
 }
@@ -313,17 +332,19 @@ static int es7202_micboost8_setting_get(struct snd_kcontrol *kcontrol,
 static int es7202_micboost9_setting_set(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
-	es7202_update_bits(0x1d,
+	return es7202_update_bits(0x1d,
 			   0x0F,
 			   ucontrol->value.integer.value[0] & 0x0f, i2c_ctl[4]);
-	return 0;
 }
 
 static int es7202_micboost9_setting_get(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	u8 val;
-	es7202_read(0x1d, &val, i2c_ctl[4]);
+	int ret = es7202_read(0x1d, &val, i2c_ctl[4]);
+
+	if (ret)
+		return ret;
 	ucontrol->value.integer.value[0] = val & 0x0f;
 	return 0;
 }
@@ -331,17 +352,19 @@ static int es7202_micboost9_setting_get(struct snd_kcontrol *kcontrol,
 static int es7202_micboost10_setting_set(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
-	es7202_update_bits(0x1e,
+	return es7202_update_bits(0x1e,
 			   0x0F,
 			   ucontrol->value.integer.value[0] & 0x0f, i2c_ctl[4]);
-	return 0;
 }
 
 static int es7202_micboost10_setting_get(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	u8 val;
-	es7202_read(0x1e, &val, i2c_ctl[4]);
+	int ret = es7202_read(0x1e, &val, i2c_ctl[4]);
+
+	if (ret)
+		return ret;
 	ucontrol->value.integer.value[0] = val & 0x0f;
 	return 0;
 }
@@ -351,17 +374,19 @@ static int es7202_micboost10_setting_get(struct snd_kcontrol *kcontrol,
 static int es7202_micboost11_setting_set(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
-	es7202_update_bits(0x1d,
+	return es7202_update_bits(0x1d,
 			   0x0F,
 			   ucontrol->value.integer.value[0] & 0x0f, i2c_ctl[5]);
-	return 0;
 }
 
 static int es7202_micboost11_setting_get(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	u8 val;
-	es7202_read(0x1d, &val, i2c_ctl[5]);
+	int ret = es7202_read(0x1d, &val, i2c_ctl[5]);
+
+	if (ret)
+		return ret;
 	ucontrol->value.integer.value[0] = val & 0x0f;
 	return 0;
 }
@@ -369,17 +394,19 @@ static int es7202_micboost11_setting_get(struct snd_kcontrol *kcontrol,
 static int es7202_micboost12_setting_set(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
-	es7202_update_bits(0x1e,
+	return es7202_update_bits(0x1e,
 			   0x0F,
 			   ucontrol->value.integer.value[0] & 0x0f, i2c_ctl[5]);
-	return 0;
 }
 
 static int es7202_micboost12_setting_get(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	u8 val;
-	es7202_read(0x1e, &val, i2c_ctl[5]);
+	int ret = es7202_read(0x1e, &val, i2c_ctl[5]);
+
+	if (ret)
+		return ret;
 	ucontrol->value.integer.value[0] = val & 0x0f;
 	return 0;
 }
@@ -389,17 +416,19 @@ static int es7202_micboost12_setting_get(struct snd_kcontrol *kcontrol,
 static int es7202_micboost13_setting_set(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
-	es7202_update_bits(0x1d,
+	return es7202_update_bits(0x1d,
 			   0x0F,
 			   ucontrol->value.integer.value[0] & 0x0f, i2c_ctl[6]);
-	return 0;
 }
 
 static int es7202_micboost13_setting_get(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	u8 val;
-	es7202_read(0x1d, &val, i2c_ctl[6]);
+	int ret = es7202_read(0x1d, &val, i2c_ctl[6]);
+
+	if (ret)
+		return ret;
 	ucontrol->value.integer.value[0] = val & 0x0f;
 	return 0;
 }
@@ -407,17 +436,19 @@ static int es7202_micboost13_setting_get(struct snd_kcontrol *kcontrol,
 static int es7202_micboost14_setting_set(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
-	es7202_update_bits(0x1e,
+	return es7202_update_bits(0x1e,
 			   0x0F,
 			   ucontrol->value.integer.value[0] & 0x0f, i2c_ctl[6]);
-	return 0;
 }
 
 static int es7202_micboost14_setting_get(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	u8 val;
-	es7202_read(0x1e, &val, i2c_ctl[6]);
+	int ret = es7202_read(0x1e, &val, i2c_ctl[6]);
+
+	if (ret)
+		return ret;
 	ucontrol->value.integer.value[0] = val & 0x0f;
 	return 0;
 }
@@ -427,17 +458,19 @@ static int es7202_micboost14_setting_get(struct snd_kcontrol *kcontrol,
 static int es7202_micboost15_setting_set(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
-	es7202_update_bits(0x1d,
+	return es7202_update_bits(0x1d,
 			   0x0F,
 			   ucontrol->value.integer.value[0] & 0x0f, i2c_ctl[7]);
-	return 0;
 }
 
 static int es7202_micboost15_setting_get(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	u8 val;
-	es7202_read(0x1d, &val, i2c_ctl[7]);
+	int ret = es7202_read(0x1d, &val, i2c_ctl[7]);
+
+	if (ret)
+		return ret;
 	ucontrol->value.integer.value[0] = val & 0x0f;
 	return 0;
 }
@@ -445,17 +478,19 @@ static int es7202_micboost15_setting_get(struct snd_kcontrol *kcontrol,
 static int es7202_micboost16_setting_set(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
-	es7202_update_bits(0x1e,
+	return es7202_update_bits(0x1e,
 			   0x0F,
 			   ucontrol->value.integer.value[0] & 0x0f, i2c_ctl[7]);
-	return 0;
 }
 
 static int es7202_micboost16_setting_get(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	u8 val;
-	es7202_read(0x1e, &val, i2c_ctl[7]);
+	int ret = es7202_read(0x1e, &val, i2c_ctl[7]);
+
+	if (ret)
+		return ret;
 	ucontrol->value.integer.value[0] = val & 0x0f;
 	return 0;
 }
@@ -549,13 +584,8 @@ static int es7202_mute(struct snd_soc_dai *dai, int mute, int stream)
 	if (stream == SNDRV_PCM_STREAM_PLAYBACK)
 		return 0;
 
-	if (mute) {
-		es7202_multi_chips_update_bits(ES7202_PDM_INF_CTL_REG07, 0x03,0x03);
-	} else {
-		es7202_multi_chips_update_bits(ES7202_PDM_INF_CTL_REG07, 0x03,0x00);
-	}
-
-	return 0;
+	return es7202_multi_chips_update_bits(ES7202_PDM_INF_CTL_REG07,
+					     0x03, mute ? 0x03 : 0x00);
 }
 
 #define es7202_RATES SNDRV_PCM_RATE_8000_96000
@@ -705,16 +735,16 @@ static struct snd_soc_dai_driver *es7202_dai[] = {
 
 static int es7202_suspend(struct snd_soc_component *component)
 {
-	es7202_multi_chips_update_bits(ES7202_PDM_INF_CTL_REG07, 0x03,0x03);
+	int ret = es7202_multi_chips_update_bits(ES7202_PDM_INF_CTL_REG07, 0x03, 0x03);
+
 	msleep(50);
-	return 0;
+	return ret;
 }
 
 static int es7202_resume(struct snd_soc_component *component)
 {	
 	msleep(50);
-	es7202_multi_chips_update_bits(ES7202_PDM_INF_CTL_REG07, 0x03,0x00);
-	return 0;
+	return es7202_multi_chips_update_bits(ES7202_PDM_INF_CTL_REG07, 0x03, 0x00);
 }
 
 static int es7202_probe(struct snd_soc_component *component)
@@ -723,40 +753,87 @@ static int es7202_probe(struct snd_soc_component *component)
 	int cnt;
 	int ret = 0;
 	printk("enter into %s()\n", __func__);
-	tron_component1[es7202_adc_num++] = component;
 
 	for (cnt = 0; cnt < ADC_DEV_MAXNUM; cnt++) {
-		es7202_write(ES7202_SOFT_MODE_REG01, 0x01, i2c_ctl[cnt]);
+		if (!i2c_ctl[cnt])
+			continue;
+		ret = es7202_write(ES7202_SOFT_MODE_REG01, 0x01, i2c_ctl[cnt]);
+		if (ret)
+			return ret;
 		switch(es7202->pwr_vdd_voltage) {
 		case VDD_3V3:
-			es7202_write(ES7202_ANALOG_MISC1_REG1B, 0x50, i2c_ctl[cnt]);
-			es7202_write(ES7202_PGA1_REG1D, 0x1b, i2c_ctl[cnt]);
-			es7202_write(ES7202_PGA2_REG1E, 0x1b, i2c_ctl[cnt]);
-			es7202_write(ES7202_ANALOG_EN_REG10, 0x7F, i2c_ctl[cnt]);
-			es7202_write(ES7202_BIAS_VMID_REG11, 0x2F, i2c_ctl[cnt]);
-			es7202_write(ES7202_ANALOG_EN_REG10, 0x0F, i2c_ctl[cnt]);
-			es7202_write(ES7202_ANALOG_EN_REG10, 0x00, i2c_ctl[cnt]);
+			ret = es7202_write(ES7202_ANALOG_MISC1_REG1B, 0x50, i2c_ctl[cnt]);
+			if (ret)
+				return ret;
+			ret = es7202_write(ES7202_PGA1_REG1D, 0x1b, i2c_ctl[cnt]);
+			if (ret)
+				return ret;
+			ret = es7202_write(ES7202_PGA2_REG1E, 0x1b, i2c_ctl[cnt]);
+			if (ret)
+				return ret;
+			ret = es7202_write(ES7202_ANALOG_EN_REG10, 0x7F, i2c_ctl[cnt]);
+			if (ret)
+				return ret;
+			ret = es7202_write(ES7202_BIAS_VMID_REG11, 0x2F, i2c_ctl[cnt]);
+			if (ret)
+				return ret;
+			ret = es7202_write(ES7202_ANALOG_EN_REG10, 0x0F, i2c_ctl[cnt]);
+			if (ret)
+				return ret;
+			ret = es7202_write(ES7202_ANALOG_EN_REG10, 0x00, i2c_ctl[cnt]);
+			if (ret)
+				return ret;
 			break;
 		default:
 		case VDD_1V8:
-			es7202_write(ES7202_ANALOG_MISC1_REG1B, 0x40, i2c_ctl[cnt]);
-			es7202_write(ES7202_PGA1_REG1D, 0x1b, i2c_ctl[cnt]);
-			es7202_write(ES7202_PGA2_REG1E, 0x1b, i2c_ctl[cnt]);
-			es7202_write(ES7202_ANALOG_EN_REG10, 0x7F, i2c_ctl[cnt]);
-			es7202_write(ES7202_BIAS_VMID_REG11, 0x2F, i2c_ctl[cnt]);
-			es7202_write(ES7202_ANALOG_EN_REG10, 0x3F, i2c_ctl[cnt]);
-			es7202_write(ES7202_ANALOG_EN_REG10, 0x00, i2c_ctl[cnt]);
+			ret = es7202_write(ES7202_ANALOG_MISC1_REG1B, 0x40, i2c_ctl[cnt]);
+			if (ret)
+				return ret;
+			ret = es7202_write(ES7202_PGA1_REG1D, 0x1b, i2c_ctl[cnt]);
+			if (ret)
+				return ret;
+			ret = es7202_write(ES7202_PGA2_REG1E, 0x1b, i2c_ctl[cnt]);
+			if (ret)
+				return ret;
+			ret = es7202_write(ES7202_ANALOG_EN_REG10, 0x7F, i2c_ctl[cnt]);
+			if (ret)
+				return ret;
+			ret = es7202_write(ES7202_BIAS_VMID_REG11, 0x2F, i2c_ctl[cnt]);
+			if (ret)
+				return ret;
+			ret = es7202_write(ES7202_ANALOG_EN_REG10, 0x3F, i2c_ctl[cnt]);
+			if (ret)
+				return ret;
+			ret = es7202_write(ES7202_ANALOG_EN_REG10, 0x00, i2c_ctl[cnt]);
+			if (ret)
+				return ret;
 			break;	
 		}
-		es7202_write(ES7202_MOD1_BIAS_REG14, 0x58, i2c_ctl[cnt]);
-		es7202_write(ES7202_CLK_DIV_REG02, 0x01, i2c_ctl[cnt]);
-		es7202_write(ES7202_T2_VMID_REG05, 0x01, i2c_ctl[cnt]);
-		es7202_write(ES7202_MISC_CTL_REG08, 0x02, i2c_ctl[cnt]);
-		es7202_write(ES7202_RESET_REG00, 0x01, i2c_ctl[cnt]);
-		es7202_write(ES7202_CLK_EN_REG03, 0x03, i2c_ctl[cnt]);
-		es7202_write(ES7202_BIAS_VMID_REG11, 0x2E, i2c_ctl[cnt]);
+		ret = es7202_write(ES7202_MOD1_BIAS_REG14, 0x58, i2c_ctl[cnt]);
+		if (ret)
+			return ret;
+		ret = es7202_write(ES7202_CLK_DIV_REG02, 0x01, i2c_ctl[cnt]);
+		if (ret)
+			return ret;
+		ret = es7202_write(ES7202_T2_VMID_REG05, 0x01, i2c_ctl[cnt]);
+		if (ret)
+			return ret;
+		ret = es7202_write(ES7202_MISC_CTL_REG08, 0x02, i2c_ctl[cnt]);
+		if (ret)
+			return ret;
+		ret = es7202_write(ES7202_RESET_REG00, 0x01, i2c_ctl[cnt]);
+		if (ret)
+			return ret;
+		ret = es7202_write(ES7202_CLK_EN_REG03, 0x03, i2c_ctl[cnt]);
+		if (ret)
+			return ret;
+		ret = es7202_write(ES7202_BIAS_VMID_REG11, 0x2E, i2c_ctl[cnt]);
+		if (ret)
+			return ret;
 
-		es7202_multi_chips_update_bits(ES7202_PDM_INF_CTL_REG07, 0x03, 0x00);
+		ret = es7202_update_bits(ES7202_PDM_INF_CTL_REG07, 0x03, 0x00, i2c_ctl[cnt]);
+		if (ret)
+			return ret;
 	}
 	return ret;
 }
@@ -845,6 +922,14 @@ static struct attribute_group es7202_debug_attr_group = {
 	.attrs  = es7202_debug_attrs,
 };
 
+static void es7202_clear_client(void *data)
+{
+	struct es7202_priv *es7202 = data;
+
+	if (i2c_ctl[es7202->index] == es7202->i2c)
+		i2c_ctl[es7202->index] = NULL;
+}
+
 static int es7202_i2c_probe(struct i2c_client *i2c)
 {
 	const struct i2c_device_id *id = i2c_client_get_device_id(i2c);
@@ -853,11 +938,17 @@ static int es7202_i2c_probe(struct i2c_client *i2c)
 	int uV;
 	int ret = -1;
 
+	if (index >= ADC_DEV_MAXNUM)
+		return -EINVAL;
+	if (i2c_ctl[index])
+		return -EBUSY;
+
 	dev_info(&i2c->dev, "probe\n");
 	es7202 = devm_kzalloc(&i2c->dev, sizeof(*es7202), GFP_KERNEL);
 	if (!es7202)
 		return -ENOMEM;
 	es7202->i2c = i2c;
+	es7202->index = index;
 	es7202->vdd = devm_regulator_get_optional(&i2c->dev, "power");
 	if (IS_ERR(es7202->vdd)) {
 		if (PTR_ERR(es7202->vdd) == -EPROBE_DEFER)
@@ -875,6 +966,9 @@ static int es7202_i2c_probe(struct i2c_client *i2c)
 	dev_set_drvdata(&i2c->dev, es7202);
 	if (index < ADC_DEV_MAXNUM) {
 		i2c_ctl[index] = i2c;
+		ret = devm_add_action_or_reset(&i2c->dev, es7202_clear_client, es7202);
+		if (ret)
+			return ret;
 		dev_info(&i2c->dev, "probe reigister es7202 dai(%s) component\n",
 			 es7202_dai[index]->name);
 		ret = devm_snd_soc_register_component(&i2c->dev, &soc_codec_dev_es7202,

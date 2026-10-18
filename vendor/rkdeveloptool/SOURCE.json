@@ -7,6 +7,8 @@
     "Use constant sector buffer bounds for modern GCC and Clang.",
     "Report the local W132D tool version.",
     "Handle help and version before USB initialization.",
-    "Return success for a valid empty device listing so callers can poll."
+    "Return success for a valid empty device listing so callers can poll.",
+    "Flush progress lines immediately when stdout is captured by a launcher.",
+    "Limit individual USB control and bulk transfers to 30 seconds."
   ]
 }

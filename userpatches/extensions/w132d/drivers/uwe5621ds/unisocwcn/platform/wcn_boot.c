@@ -298,9 +298,11 @@ struct wifi_calibration {
 static struct wifi_calibration wifi_data;
 struct completion ge2_completion;
 static int first_call_flag;
-marlin_reset_callback marlin_reset_func;
-void *marlin_callback_para;
-static struct raw_notifier_head marlin_reset_notifiers[MARLIN_ALL];
+static marlin_reset_callback marlin_reset_func;
+static void *marlin_callback_para;
+static DEFINE_MUTEX(marlin_reset_lock);
+/* Reset callbacks run in process context; unregister must wait for them. */
+static struct blocking_notifier_head marlin_reset_notifiers[MARLIN_ALL];
 
 struct marlin_device *marlin_dev;
 struct sprdwcn_gnss_ops *gnss_ops;
@@ -921,61 +923,63 @@ static const struct imageinfo *marlin_judge_images(const unsigned char *buffer)
 	return NULL;
 }
 
+/* A size output permits a short initial read of a packed image. */
 static char *load_firmware_data_path(const char *path, loff_t offset,
-	unsigned long int imag_size)
+	unsigned long int imag_size, size_t *loaded_size)
 {
-	int read_len, size, i, opn_num_max = 1;
-	char *buffer = NULL;
-	char *data = NULL;
+	ssize_t read_len;
+	size_t remaining = imag_size;
+	char *data;
 	struct file *file;
 
-	WCN_DEBUG("%s Enter\n", __func__);
+	if (loaded_size)
+		*loaded_size = 0;
+	if (!imag_size || offset < 0)
+		return NULL;
+
 	file = filp_open(path, O_RDONLY, 0);
-	for (i = 1; i <= opn_num_max; i++) {
-		if (IS_ERR(file)) {
-			WCN_DEBUG("%s: try open file %s,count_num:%d\n",
-				  __func__, path, i);
-			ssleep(1);
-			file = filp_open(path, O_RDONLY, 0);
-		} else
-			break;
-	}
 	if (IS_ERR(file)) {
-		WCN_ERR("%s: open file %s error\n",
-			__func__, path);
-		return NULL;
+		ssleep(1);
+		file = filp_open(path, O_RDONLY, 0);
 	}
-	WCN_DEBUG("marlin %s open image file sucessfully\n",
-		  __func__);
-	size = imag_size;
-	buffer = vmalloc(size);
-	if (!buffer) {
+	if (IS_ERR(file))
+		return NULL;
+
+	data = vmalloc(imag_size);
+	if (!data) {
 		fput(file);
-		WCN_ERR("no memory for image\n");
 		return NULL;
 	}
 
-	data = buffer;
-	do {
+	while (remaining) {
 #if KERNEL_VERSION(4, 14, 0) <= LINUX_VERSION_CODE
-		read_len = kernel_read(file, (void *)buffer, size, &offset);
+		read_len = kernel_read(file, data + imag_size - remaining,
+				       remaining, &offset);
 #else
-		read_len = kernel_read(file, offset, buffer, size);
+		read_len = kernel_read(file, offset,
+				       data + imag_size - remaining, remaining);
+		if (read_len > 0)
+			offset += read_len;
 #endif
-		if (read_len > 0) {
-			size -= read_len;
-			buffer += read_len;
-		}
-	} while ((read_len > 0) && (size > 0));
+		if (read_len < 0)
+			goto fail;
+		if (!read_len)
+			break;
+		remaining -= read_len;
+	}
 	fput(file);
-	WCN_DEBUG("%s finish read_Len:%d\n", __func__, read_len);
-#if KERNEL_VERSION(4, 14, 0) > LINUX_VERSION_CODE
-	/* kernel_read return value changed. */
-	if (read_len <= 0)
+	if (remaining == imag_size || (remaining && !loaded_size)) {
+		vfree(data);
 		return NULL;
-#endif
-
+	}
+	if (loaded_size)
+		*loaded_size = imag_size - remaining;
 	return data;
+
+fail:
+	fput(file);
+	vfree(data);
+	return NULL;
 }
 
 static int sprdwcn_bus_direct_write_dispack(unsigned int addr, const void *buf,
@@ -1001,12 +1005,21 @@ OUT:
 	return ret;
 }
 
+enum marlin_firmware_source {
+	MARLIN_FW_BORROWED,
+	MARLIN_FW_REQUESTED,
+	MARLIN_FW_PATH,
+};
+
 struct marlin_firmware {
 	const u8 *data;
 	size_t size;
-	bool is_from_fs;
+	enum marlin_firmware_source source;
+	size_t file_offset;
 	const void *priv;
 };
+
+static void marlin_release_firmware(struct marlin_firmware *mfirmware);
 
 /* this function __must__ be paired with marlin_firmware_release !*/
 /* Suggest use it like Documentation/firmware_class/README:65
@@ -1022,11 +1035,12 @@ static int marlin_request_firmware(struct marlin_firmware **mfirmware_p)
 	unsigned char load_fw_cnt = 0;
 	const void *buffer;
 	const struct firmware *firmware;
-	int ret = 0;
+	void *backup;
 #endif
+	int ret;
 
 	*mfirmware_p = NULL;
-	mfirmware = kmalloc(sizeof(struct marlin_firmware), GFP_KERNEL);
+	mfirmware = kzalloc(sizeof(*mfirmware), GFP_KERNEL);
 	if (!mfirmware)
 		return -ENOMEM;
 
@@ -1043,8 +1057,7 @@ static int marlin_request_firmware(struct marlin_firmware **mfirmware_p)
 	WCN_INFO("marlin %s from wcnmodem.bin.hex start!\n", __func__);
 	mfirmware->data = firmware_hex_buf;
 	mfirmware->size = FIRMWARE_HEX_SIZE;
-	mfirmware->is_from_fs = 0;
-	mfirmware->priv = firmware_hex_buf;
+	mfirmware->source = MARLIN_FW_BORROWED;
 
 #else /* CONFIG_WCN_DOWNLOAD_FIRMWARE_FROM_HEX */
 
@@ -1062,28 +1075,27 @@ static int marlin_request_firmware(struct marlin_firmware **mfirmware_p)
 					__func__, WCN_FW_NAME, ret);
 				marlin_dev->is_btwf_in_sysfs = 1;
 
-				return ret;
+				goto fail;
 			}
 
 			mfirmware->priv = (void *)firmware;
 			mfirmware->data = firmware->data;
 			mfirmware->size = firmware->size;
-			mfirmware->is_from_fs = 1;
-			marlin_dev->firmware.size = firmware->size;
-			marlin_dev->firmware.data = vmalloc(firmware->size);
-			if (!marlin_dev->firmware.data) {
-				WCN_INFO("%s malloc backup error!\n", __func__);
-				return -1;
+			mfirmware->source = MARLIN_FW_REQUESTED;
+			backup = vmalloc(firmware->size);
+			if (!backup) {
+				ret = -ENOMEM;
+				goto fail;
 			}
-
-			memcpy(marlin_dev->firmware.data, firmware->data,
-			       firmware->size);
+			memcpy(backup, firmware->data, firmware->size);
+			vfree(marlin_dev->firmware.data);
+			marlin_dev->firmware.data = backup;
+			marlin_dev->firmware.size = firmware->size;
 		} else {
 			WCN_INFO("marlin %s from backup start!\n", __func__);
-			mfirmware->priv = (void *)(&marlin_dev->firmware);
 			mfirmware->data = marlin_dev->firmware.data;
 			mfirmware->size = marlin_dev->firmware.size;
-			mfirmware->is_from_fs = 0;
+			mfirmware->source = MARLIN_FW_BORROWED;
 		}
 	} else {
 		/* NOTE! We canot guarantee the img is complete when we read it
@@ -1095,7 +1107,7 @@ load_fw:
 		WCN_INFO("%s from %s start!\n", __func__, BTWF_FIRMWARE_PATH);
 		marlin_dev->is_btwf_in_sysfs = 1;
 		buffer = load_firmware_data_path(BTWF_FIRMWARE_PATH, 0,
-						 FIRMWARE_MAX_SIZE);
+						 FIRMWARE_MAX_SIZE, &mfirmware->size);
 		if (!buffer) {
 			load_fw_cnt++;
 			WCN_DEBUG("%s buff is NULL\n", __func__);
@@ -1105,22 +1117,26 @@ load_fw:
 					WCN_FW_NAME);
 				goto load_fw;
 			}
-			kfree(mfirmware);
-			return -1;
+			ret = -ENOENT;
+			goto fail;
 		}
 
 		mfirmware->data = buffer;
-		mfirmware->size = FIRMWARE_MAX_SIZE;
-		mfirmware->is_from_fs = 0;
+		mfirmware->source = MARLIN_FW_PATH;
 		mfirmware->priv = buffer;
 	}
 
 #endif /* CONFIG_WCN_DOWNLOAD_FIRMWARE_FROM_HEX */
 
+	if (!mfirmware->data || mfirmware->size <= sizeof(functionmask)) {
+		ret = -EINVAL;
+		goto fail;
+	}
 	memcpy(functionmask, mfirmware->data, 8);
 	if ((functionmask[0] == 0x00) && (functionmask[1] == 0x00)) {
 		mfirmware->data += 8;
 		mfirmware->size -= 8;
+		mfirmware->file_offset = 8;
 	} else {
 		functionmask[7] = 0;
 	}
@@ -1128,72 +1144,72 @@ load_fw:
 	*mfirmware_p = mfirmware;
 
 	return 0;
+fail:
+	marlin_release_firmware(mfirmware);
+	return ret;
 }
 
-static int marlin_firmware_parse_image(struct marlin_firmware *mfirmware)
+static int marlin_firmware_parse_image(struct marlin_firmware *fw)
 {
-	int offset = 0;
-	int size = 0;
-	int old_mfirmware_size = mfirmware->size;
+	size_t offset = 0, size = fw->size, table_size;
+	unsigned int count, i;
+	bool packed, combined;
 
-	if (bin_magic_is(mfirmware->data, IMG_HEAD_MAGIC)) {
-		const struct imageinfo *info;
+	if (fw->size < 4)
+		return -EINVAL;
+	packed = bin_magic_is(fw->data, IMG_HEAD_MAGIC);
+	combined = bin_magic_is(fw->data, IMG_HEAD_MAGIC_COMBINE);
+	if (!packed && !combined)
+		return 0;
+	if (fw->size < sizeof(struct head))
+		return -EINVAL;
+	count = marlin_fw_get_img_count(fw->data);
+	/* Both table entries occupy twelve bytes. Validate before lookup. */
+	if (!count || count > (fw->size - sizeof(struct head)) /
+				 sizeof(struct imageinfo))
+		return -EINVAL;
+	table_size = sizeof(struct head) + count * sizeof(struct imageinfo);
 
-		WCN_INFO("%s imagepack is %s type,need parse it\n",
-			 __func__, IMG_HEAD_MAGIC);
-		info = marlin_judge_images(mfirmware->data);
-		if (!info) {
-			WCN_ERR("marlin:%s imginfo is NULL\n", __func__);
-			return -1;
-		}
-		mfirmware->size = info->size;
-		mfirmware->data += info->offset;
+	if (packed) {
+		const struct imageinfo *info = marlin_judge_images(fw->data);
+
+		if (!info)
+			return -EINVAL;
 		offset = info->offset;
 		size = info->size;
-	} else if (bin_magic_is(mfirmware->data, IMG_HEAD_MAGIC_COMBINE)) {
-		/* cal the combin size */
-		int img_count;
-		const struct combin_img_info *img_info;
-		int img_real_size = 0;
+		if (offset < table_size || !size || offset > U32_MAX - size)
+			return -EINVAL;
+	} else {
+		const struct combin_img_info *info =
+			marlin_firmware_get_combin_info(fw->data);
 
-		WCN_INFO("%s imagepack is %s type,need parse it\n",
-			 __func__, IMG_HEAD_MAGIC_COMBINE);
-
-		img_count = marlin_fw_get_img_count(mfirmware->data);
-		img_info = marlin_firmware_get_combin_info(mfirmware->data);
-
-		img_real_size =
-		img_info[img_count - 1].size + img_info[img_count - 1].offset;
-
-		mfirmware->size = img_real_size;
-		size = img_real_size;
+		size = table_size;
+		for (i = 0; i < count; i++) {
+			if (info[i].offset < table_size || !info[i].size ||
+			    info[i].offset > U32_MAX - info[i].size)
+				return -EINVAL;
+			size = max_t(size_t, size,
+				     (size_t)info[i].offset + info[i].size);
+		}
 	}
 
-#ifndef CONFIG_WCN_RESUME_POWER_DOWN
-	if (!mfirmware->is_from_fs && (offset + size) > old_mfirmware_size) {
+	if (offset > fw->size || size > fw->size - offset) {
 		const void *buffer;
 
-		/* NOTE! We canot guarantee the img is complete when we read it
-		 * first! The macro FIRMWARE_MAX_SIZE only guarantee AA(first in
-		 * partition) img is complete. So we need read this img two
-		 * times (in this)
-		 */
+		if (fw->source != MARLIN_FW_PATH)
+			return -EINVAL;
+		/* Image offsets are relative to data after the function mask. */
 		buffer = load_firmware_data_path(BTWF_FIRMWARE_PATH,
-				offset, size);
-		if (!buffer) {
-			WCN_ERR("marlin:%s buffer is NULL\n", __func__);
-			return -1;
-		}
-		/* struct data "info" is a part of mfirmware->priv,
-		 * if we free mfirmware->priv, "info" will be free too!
-		 * so we need free priv at here after use "info"
-		 */
-		vfree(mfirmware->priv);
-		mfirmware->data = buffer;
-		mfirmware->priv = buffer;
+				fw->file_offset + offset, size, NULL);
+		if (!buffer)
+			return -EINVAL;
+		vfree(fw->priv);
+		fw->data = buffer;
+		fw->priv = buffer;
+	} else {
+		fw->data += offset;
 	}
-#endif
-
+	fw->size = size;
 	return 0;
 }
 
@@ -1222,7 +1238,8 @@ int marlin_firmware_write(struct marlin_firmware *fw)
 
 	/* for every img_info */
 	for (i = 0; i < img_count; i++) {
-		if (img_info[i].size + img_info[i].offset > fw->size) {
+		if (img_info[i].offset > fw->size ||
+		    img_info[i].size > fw->size - img_info[i].offset) {
 			WCN_ERR("%s memory crossover\n", __func__);
 			return -1;
 		}
@@ -1258,8 +1275,8 @@ static int marlin_firmware_write(struct marlin_firmware *mfirmware)
 		}
 
 		for (i = 0; i < combin_img_count; i++) {
-			if (imginfoe[i].size + imginfoe[i].offset >
-					mfirmware->size) {
+			if (imginfoe[i].offset > mfirmware->size ||
+			    imginfoe[i].size > mfirmware->size - imginfoe[i].offset) {
 				WCN_ERR("%s memory crossover\n", __func__);
 				return -1;
 			}
@@ -1288,9 +1305,9 @@ static int marlin_firmware_write(struct marlin_firmware *mfirmware)
 static void marlin_release_firmware(struct marlin_firmware *mfirmware)
 {
 	if (mfirmware) {
-		if (mfirmware->is_from_fs)
+		if (mfirmware->source == MARLIN_FW_REQUESTED)
 			release_firmware(mfirmware->priv);
-		else
+		else if (mfirmware->source == MARLIN_FW_PATH)
 			/*
 			 * data may have been advanced past the WCNM pack header
 			 * (marlin_firmware_parse_image) or the 8-byte function
@@ -1327,7 +1344,7 @@ static char *gnss_load_firmware_data(unsigned long int imag_size)
 		gnss_ops->set_file_path(&GNSS_FIRMWARE_PATH[0]);
 	else
 		WCN_ERR("%s gnss_ops set_file_path error\n", __func__);
-	buf = load_firmware_data_path(GNSS_FIRMWARE_PATH, 0, imag_size);
+	buf = load_firmware_data_path(GNSS_FIRMWARE_PATH, 0, imag_size, NULL);
 
 	return buf;
 }
@@ -3168,15 +3185,14 @@ static int wcn_usb_fdl_download(void)
 	int ret;
 	struct marlin_firmware *firmware;
 
-	firmware = kmalloc(sizeof(struct marlin_firmware), GFP_KERNEL);
+	firmware = kzalloc(sizeof(*firmware), GFP_KERNEL);
 	if (!firmware)
 		return -ENOMEM;
 
 	WCN_INFO("marlin %s from wcnmodem.bin.hex start!\n", __func__);
 	firmware->data = fdl_hex_buf;
 	firmware->size = FDL_HEX_SIZE;
-	firmware->is_from_fs = 0;
-	firmware->priv = fdl_hex_buf;
+	firmware->source = MARLIN_FW_BORROWED;
 
 	ret = marlin_firmware_parse_image(firmware);
 	if (ret) {
@@ -4233,8 +4249,10 @@ static int marlin_suspend(struct device *dev)
 
 int marlin_reset_register_notify(void *callback_func, void *para)
 {
-	marlin_reset_func = (marlin_reset_callback)callback_func;
+	mutex_lock(&marlin_reset_lock);
 	marlin_callback_para = para;
+	marlin_reset_func = (marlin_reset_callback)callback_func;
+	mutex_unlock(&marlin_reset_lock);
 
 	return 0;
 }
@@ -4242,18 +4260,30 @@ EXPORT_SYMBOL_GPL(marlin_reset_register_notify);
 
 int marlin_reset_unregister_notify(void)
 {
+	mutex_lock(&marlin_reset_lock);
 	marlin_reset_func = NULL;
 	marlin_callback_para = NULL;
+	mutex_unlock(&marlin_reset_lock);
 
 	return 0;
 }
 EXPORT_SYMBOL_GPL(marlin_reset_unregister_notify);
 
+void marlin_reset_notify(void)
+{
+	/* Keep the owner alive until the callback has returned. */
+	mutex_lock(&marlin_reset_lock);
+	if (marlin_reset_func)
+		marlin_reset_func(marlin_callback_para);
+	mutex_unlock(&marlin_reset_lock);
+}
+
+
 static void marlin_reset_notify_init(void)
 {
 	int i = 0;
 	for (i = 0; i < MARLIN_ALL; i++)
-		 RAW_INIT_NOTIFIER_HEAD(&marlin_reset_notifiers[i]);
+		 BLOCKING_INIT_NOTIFIER_HEAD(&marlin_reset_notifiers[i]);
 }
 
 /**
@@ -4263,8 +4293,7 @@ int marlin_reset_notify_call(enum marlin_cp2_status sts)
 {
 	int i = 0;
 	for (i = 0; i < MARLIN_ALL; i++) {
-		if (NULL != marlin_reset_notifiers[i].head)
-			raw_notifier_call_chain(&marlin_reset_notifiers[i], sts, (void *)strno(i));
+		blocking_notifier_call_chain(&marlin_reset_notifiers[i], sts, (void *)strno(i));
 	}
 	return 0;
 }
@@ -4272,14 +4301,14 @@ EXPORT_SYMBOL_GPL(marlin_reset_notify_call);
 
 int marlin_reset_callback_register(u32 subsys, struct notifier_block *nb)
 {
-	return raw_notifier_chain_register(&marlin_reset_notifiers[subsys], nb);
+	return blocking_notifier_chain_register(&marlin_reset_notifiers[subsys], nb);
 }
 EXPORT_SYMBOL_GPL(marlin_reset_callback_register);
 
 void marlin_reset_callback_unregister(u32 subsys, struct notifier_block *nb)
 {
 	int ret = 0;
-	ret = raw_notifier_chain_unregister(&marlin_reset_notifiers[subsys], nb);
+	ret = blocking_notifier_chain_unregister(&marlin_reset_notifiers[subsys], nb);
 	if (ret)
 		WCN_ERR("%s is not registered for reset notification\n", strno(subsys));
 }

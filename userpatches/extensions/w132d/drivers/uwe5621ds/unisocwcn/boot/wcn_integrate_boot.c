@@ -54,8 +54,7 @@ void wcn_device_poweroff(void)
 	for (i = 0; i < WCN_MARLIN_ALL; i++)
 		stop_integrate_wcn_truely(i);
 
-	if (marlin_reset_func != NULL)
-		marlin_reset_func(marlin_callback_para);
+	marlin_reset_notify();
 
 	mutex_unlock(&marlin_lock);
 	WCN_INFO("all subsys power off finish!\n");

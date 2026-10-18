@@ -67,10 +67,13 @@ struct sprdwl_tx_buf {
 
 #define MAX_CHN_NUM 16
 struct sprdwl_intf_ops {
+	unsigned int registered;
 	unsigned int max_num;
 	void *intf;
 	struct mchn_ops_t *hif_ops;
 };
+
+int sprdwl_rx_payload_len(struct sprdwl_intf *intf, void *buf, int len);
 
 struct sdiohal_puh {
 	unsigned int pad:6;
@@ -239,6 +242,8 @@ static inline bool sprdwl_is_group(unsigned char *addr)
 }
 
 int sprdwl_intf_init(struct sprdwl_priv *priv, struct sprdwl_intf *intf);
+int sprdwl_intf_start(struct sprdwl_intf *intf);
+void sprdwl_intf_stop(struct sprdwl_intf *intf);
 void sprdwl_intf_deinit(struct sprdwl_intf *dev);
 int if_tx_cmd(struct sprdwl_intf *intf, unsigned char *data, int len);
 int if_tx_addr_trans(struct sprdwl_intf *intf, unsigned char *data, int len);

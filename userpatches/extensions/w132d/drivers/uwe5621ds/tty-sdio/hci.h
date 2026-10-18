@@ -8,12 +8,12 @@
 int sprd_hci_register(struct device *dev);
 void sprd_hci_unregister(void);
 void sprd_hci_recv(const unsigned char *data, int len);
-void sprd_hci_reset(void);
+void sprd_hci_reset(bool ready);
 #else
 static inline int sprd_hci_register(struct device *dev) { return -ENODEV; }
 static inline void sprd_hci_unregister(void) { }
 static inline void sprd_hci_recv(const unsigned char *data, int len) { }
-static inline void sprd_hci_reset(void) { }
+static inline void sprd_hci_reset(bool ready) { }
 #endif
 
 #endif

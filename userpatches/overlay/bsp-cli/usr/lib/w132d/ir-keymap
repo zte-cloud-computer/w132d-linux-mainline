@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Load the board keymap without assuming that its receiver is rc0."""
+from pathlib import Path
+import subprocess
+
+
+def load(root=Path('/sys/class/rc')):
+    for receiver in sorted(root.glob('rc[0-9]*')):
+        try:
+            driver = (receiver / 'uevent').read_text().splitlines()
+            node = (receiver / 'device/of_node').resolve()
+        except OSError:
+            continue
+        if 'DRV_NAME=gpio_ir_recv' in driver and node.name == 'ir-receiver':
+            subprocess.run(['/usr/bin/ir-keytable', '-c', '-w', '/etc/rc_keymaps/w132d.toml',
+                            '-s', receiver.name], check=True)
+
+
+if __name__ == '__main__':
+    load()

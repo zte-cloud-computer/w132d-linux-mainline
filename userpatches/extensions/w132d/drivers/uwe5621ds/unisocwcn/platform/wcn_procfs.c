@@ -120,7 +120,7 @@ void mdbg_assert_interface(char *str)
 	marlin_reset_notify_call(MARLIN_CP2_STS_ASSERTED);
 	marlin_cp2_reset();
 	msleep(1000);
-	// marlin_reset_notify_call(MARLIN_CP2_STS_READY);
+	marlin_reset_notify_call(MARLIN_CP2_STS_RESET_DONE);
 #endif
 
 }
@@ -180,7 +180,7 @@ int mdbg_assert_read(int channel, struct mbuf_t *head,
 		marlin_reset_notify_call(MARLIN_CP2_STS_ASSERTED);
 		marlin_cp2_reset();
 		msleep(1000);
-		// marlin_reset_notify_call(MARLIN_CP2_STS_READY);
+		marlin_reset_notify_call(MARLIN_CP2_STS_RESET_DONE);
 #endif
 	return 0;
 }
@@ -898,8 +898,7 @@ static ssize_t mdbg_proc_write(struct file *filp,
 		WCN_INFO("fail_reset is value %d\n", flag_reset);
 		mdbg_proc->fail_count = 0;
 		sprdwcn_bus_set_carddump_status(false);
-		if (marlin_reset_func != NULL)
-			marlin_reset_func(marlin_callback_para);
+		marlin_reset_notify();
 		return count;
 	}
 	if (strncmp(mdbg_proc->write_buf, "rebootwcn", 9) == 0) {
@@ -909,8 +908,7 @@ static ssize_t mdbg_proc_write(struct file *filp,
 		mdbg_proc->fail_count = 0;
 		sprdwcn_bus_set_carddump_status(false);
 		marlin_chip_en(false, true);
-		if (marlin_reset_func != NULL)
-			marlin_reset_func(marlin_callback_para);
+		marlin_reset_notify();
 		return count;
 	}
 	if (strncmp(mdbg_proc->write_buf, "at+getchipversion", 17) == 0) {

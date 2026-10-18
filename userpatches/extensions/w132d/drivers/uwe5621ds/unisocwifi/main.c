@@ -1576,7 +1576,7 @@ int sprdwl_core_init(struct device *dev, struct sprdwl_priv *priv)
 	ret = wiphy_register(wiphy);
 	if (ret) {
 		wl_err("failed to regitster wiphy(%d)!\n", ret);
-		goto out;
+		goto err_vendor;
 	}
 	sprdwl_init_debugfs(priv);
 
@@ -1586,9 +1586,8 @@ int sprdwl_core_init(struct device *dev, struct sprdwl_priv *priv)
 	wdev = sprdwl_add_iface(priv, "wlan%d", NL80211_IFTYPE_STATION, NULL);
 	rtnl_unlock();
 	if (IS_ERR(wdev)) {
-		wiphy_unregister(wiphy);
-		ret = -ENXIO;
-		goto out;
+		ret = PTR_ERR(wdev);
+		goto err_wiphy;
 	}
 
 #ifdef CONFIG_P2P_INTF
@@ -1596,9 +1595,8 @@ int sprdwl_core_init(struct device *dev, struct sprdwl_priv *priv)
 	wdev = sprdwl_add_iface(priv, "p2p%d", NL80211_IFTYPE_P2P_DEVICE, NULL);
 	rtnl_unlock();
 	if (IS_ERR(wdev)) {
-		wiphy_unregister(wiphy);
-		ret = -ENXIO;
-		goto out;
+		ret = PTR_ERR(wdev);
+		goto err_ifaces;
 	}
 #endif
 
@@ -1611,24 +1609,40 @@ int sprdwl_core_init(struct device *dev, struct sprdwl_priv *priv)
 	sprdwl_init_npi();
 	ret = register_inetaddr_notifier(&sprdwl_inetaddr_cb);
 	if (ret)
-		wl_err("%s failed to register inetaddr notifier(%d)!\n",
-		       __func__, ret);
+		goto err_npi;
 	if (priv->fw_capa & SPRDWL_CAPA_NS_OFFLOAD) {
 		wl_info("\tIPV6 NS Offload supported\n");
 		ret = register_inet6addr_notifier(&sprdwl_inet6addr_cb);
 		if (ret)
-			wl_err("%s failed to register inet6addr notifier(%d)!\n",
-			       __func__, ret);
+			goto err_inet;
 	}
 
 	trace_info_init();
 
 	ret = marlin_reset_register_notify(priv->if_ops->force_exit, priv->hw_priv);
-	if (ret) {
-		wl_err("%s failed to register wcn cp rest notify(%d)!\n",
-		       __func__, ret);
-	}
+	if (!ret)
+		return 0;
 
+	trace_info_deinit();
+	if (priv->fw_capa & SPRDWL_CAPA_NS_OFFLOAD)
+		unregister_inet6addr_notifier(&sprdwl_inet6addr_cb);
+err_inet:
+	unregister_inetaddr_notifier(&sprdwl_inetaddr_cb);
+err_npi:
+	sprdwl_deinit_npi();
+	qos_enable(0);
+#ifdef CONFIG_P2P_INTF
+err_ifaces:
+#endif
+	sprdwl_del_all_ifaces(priv);
+err_wiphy:
+	wiphy_unregister(wiphy);
+err_vendor:
+	sprdwl_vendor_deinit(wiphy);
+	sprdwl_tcp_ack_deinit(priv);
+#ifdef RTT_SUPPORT
+	sprdwl_ftm_deinit(priv);
+#endif
 out:
 	return ret;
 }

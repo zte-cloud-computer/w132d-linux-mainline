@@ -1,0 +1,6 @@
+[Unit]
+Description=Load W132D IR keymap for %I
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ir-keytable -c -w /etc/rc_keymaps/w132d.toml -s %I

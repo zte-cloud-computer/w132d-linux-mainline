@@ -1070,7 +1070,7 @@ static void sprdwl_flush_all_txlist(struct sprdwl_tx_msg *sprdwl_tx_dev)
 	sprdwl_flush_data_txlist(sprdwl_tx_dev);
 }
 
-int sprdwl_sdio_process_credit(void *pdev, void *data)
+int sprdwl_sdio_process_credit(void *pdev, void *data, int len)
 {
 	int ret = 0, i;
 	unsigned char *flow;
@@ -1082,11 +1082,15 @@ int sprdwl_sdio_process_credit(void *pdev, void *data)
 
 	intf = (struct sprdwl_intf *)pdev;
 	tx_msg = (struct sprdwl_tx_msg *)intf->sprdwl_tx;
+	if (len < sizeof(*common))
+		return 0;
 	common = (struct sprdwl_common_hdr *)data;
 
 	if (common->type == SPRDWL_TYPE_DATA_SPECIAL) {
 		int offset = (size_t)&((struct rx_msdu_desc *)0)->rsvd5;
 
+		if (len < offset + MAX_COLOR_BIT)
+			return 0;
 		flow = data + offset;
 		goto out;
 	}
@@ -1094,8 +1098,13 @@ int sprdwl_sdio_process_credit(void *pdev, void *data)
 	if (common->type == SPRDWL_TYPE_EVENT) {
 		struct sprdwl_cmd_hdr *cmd;
 
+		if (len < sizeof(*cmd))
+			return 0;
 		cmd = (struct sprdwl_cmd_hdr *)data;
 		if (cmd->cmd_id == WIFI_EVENT_SDIO_FLOWCON) {
+			if (le16_to_cpu(cmd->plen) < sizeof(*cmd) + MAX_COLOR_BIT ||
+			    le16_to_cpu(cmd->plen) > len)
+				return 0;
 			flow = cmd->paydata;
 			ret = -1;
 			goto out;
@@ -1464,8 +1473,10 @@ int sprdwl_tx_init(struct sprdwl_intf *intf)
 
 	for (i = 0; i < SPRDWL_MODE_MAX; i++) {
 		tx_msg->tx_list[i] = kzalloc(sizeof(struct tx_t), GFP_KERNEL);
-		if (!tx_msg->tx_list[i])
+		if (!tx_msg->tx_list[i]) {
+			ret = -ENOMEM;
 			goto err_txlist;
+		}
 		qos_init(tx_msg->tx_list[i]);
 	}
 	sprdwl_init_xmit_list(tx_msg);
@@ -1473,9 +1484,9 @@ int sprdwl_tx_init(struct sprdwl_intf *intf)
 	tx_msg->tx_thread =
 		kthread_create(sprdwl_tx_work_queue,
 			       (void *)tx_msg, "SPRDWL_TX_QUEUE");
-	if (!tx_msg->tx_thread) {
+	if (IS_ERR(tx_msg->tx_thread)) {
 		wl_err("%s SPRDWL_TX_QUEUE create failed", __func__);
-		ret = -ENOMEM;
+		ret = PTR_ERR(tx_msg->tx_thread);
 		goto err_txlist;
 	}
 
@@ -1484,7 +1495,6 @@ int sprdwl_tx_init(struct sprdwl_intf *intf)
 
 	init_completion(&tx_msg->tx_completed);
 	complete(&tx_msg->tx_completed); /* Prime completion so first tx_down() doesn't hang */
-	wake_up_process(tx_msg->tx_thread);
 
 #ifdef WMMAC_WFA_CERTIFICATION
 	reset_wmmac_parameters(tx_msg->intf->priv);
@@ -1498,6 +1508,7 @@ int sprdwl_tx_init(struct sprdwl_intf *intf)
 	}
 
 	tx_msg->hang_recovery_status = HANG_RECOVERY_END;
+	wake_up_process(tx_msg->tx_thread);
 
 	return ret;
 
@@ -1514,6 +1525,19 @@ exit:
 	return ret;
 }
 
+void sprdwl_tx_stop(struct sprdwl_intf *intf)
+{
+	struct sprdwl_tx_msg *tx_msg = intf->sprdwl_tx;
+
+	/*let tx work queue exit*/
+	WRITE_ONCE(intf->exit, 1);
+	if (tx_msg->tx_thread) {
+		tx_up(tx_msg);
+		kthread_stop(tx_msg->tx_thread);
+		tx_msg->tx_thread = NULL;
+	}
+}
+
 void sprdwl_tx_deinit(struct sprdwl_intf *intf)
 {
 	struct sprdwl_tx_msg *tx_msg = NULL;
@@ -1521,13 +1545,7 @@ void sprdwl_tx_deinit(struct sprdwl_intf *intf)
 
 	tx_msg = (void *)intf->sprdwl_tx;
 
-	/*let tx work queue exit*/
-	intf->exit = 1;
-	if (tx_msg->tx_thread) {
-		tx_up(tx_msg);
-		kthread_stop(tx_msg->tx_thread);
-		tx_msg->tx_thread = NULL;
-	}
+	sprdwl_tx_stop(intf);
 
 	/*need to check if there is some data and cmdpending
 	*or sending by HIF, and wait until tx complete and freed

@@ -1,67 +1,128 @@
 From: W132D maintainers <tech@wenziwanka.com>
-Subject: [PATCH] mmc hs400 support for W132D
+Subject: [PATCH] mmc: restore the complete RK3528 DLL configuration
 
-Locally maintained for the native Linux stable tree.
+Retain the validated Armbian port settings from the GPL-2.0 Rockchip BSP:
+HS200 TX tap 12, HS400 TX/CMD/strobe taps 6/6/3, DDR52 strobe delay 10,
+measured DLL tap selection and low-clock operation during mode switches.
+Keep the generic RK35xx behavior for platforms without these overrides.
+
 Original changes by wenziwanka <tech@wenziwanka.com>.
 
 diff --git a/drivers/mmc/host/sdhci-of-dwcmshc.c b/drivers/mmc/host/sdhci-of-dwcmshc.c
-index c688f3e..a053a9f 100644
 --- a/drivers/mmc/host/sdhci-of-dwcmshc.c
 +++ b/drivers/mmc/host/sdhci-of-dwcmshc.c
-@@ -333,6 +333,13 @@ struct rockchip_pltfm_data {
+@@ -117,6 +117,8 @@
+ #define DLL_CMDOUT_TAPNUM_FROM_SW	BIT(24)
+ #define DLL_CMDOUT_SRC_CLK_NEG		BIT(28)
+ #define DLL_CMDOUT_EN_SRC_CLK_NEG	BIT(29)
++#define DLL_TAP_VALUE_SEL		BIT(25)
++#define DLL_TAP_VALUE_OFFSET		8
+ 
+ #define DLL_LOCK_WO_TMOUT(x) \
+ 	((((x) & DWCMSHC_EMMC_DLL_LOCKED) == DWCMSHC_EMMC_DLL_LOCKED) && \
+@@ -333,6 +335,14 @@
  	 * - Revision 1: Implemented in all other Rockchip SoCs, including RK3576, RK3588, etc.
  	 */
  	int revision;
-+	/*
-+	 * Optional HS400 DLL tap overrides, ported from the GPL-2.0
-+	 * Rockchip BSP. Zero keeps the generic RK35xx defaults below.
-+	 */
++	/* Optional RK3528 DLL settings; zero retains the generic defaults. */
++	u8 hs200_tx_tap;
 +	u8 hs400_tx_tap;
 +	u8 hs400_cmd_tap;
 +	u8 hs400_strbin_tap;
++	u8 ddr52_strbin_delay;
++	bool tap_value_sel;
++	bool allow_low_clock;
  };
  
  static void dwcmshc_enable_card_clk(struct sdhci_host *host)
-@@ -756,6 +763,7 @@ static void dwcmshc_rk3568_set_clock(struct sdhci_host *host, unsigned int clock
+@@ -756,6 +766,10 @@
  	struct rk35xx_priv *priv = dwc_priv->priv;
  	const struct rockchip_pltfm_data *rockchip_pdata = to_pltfm_data(dwc_priv, rockchip);
  	u8 txclk_tapnum = DLL_TXCLK_TAPNUM_DEFAULT;
 +	u32 strbin_tapnum = DLL_STRBIN_TAPNUM_DEFAULT;
++	u32 strbin_delay = rockchip_pdata->ddr52_strbin_delay ?:
++			   DLL_STRBIN_DELAY_NUM_DEFAULT;
++	u32 dll_tap = 0;
  	u32 extra, reg;
  	int err;
  
-@@ -852,12 +860,19 @@ static void dwcmshc_rk3568_set_clock(struct sdhci_host *host, unsigned int clock
- 		txclk_tapnum = priv->txclk_tapnum;
+@@ -788,8 +802,9 @@
+ 	sdhci_writew(host, 0, SDHCI_CLOCK_CONTROL);
+ 
+ 	if (clock <= 52000000) {
+-		if (host->mmc->ios.timing == MMC_TIMING_MMC_HS200 ||
+-		    host->mmc->ios.timing == MMC_TIMING_MMC_HS400) {
++		if (!rockchip_pdata->allow_low_clock &&
++		    (host->mmc->ios.timing == MMC_TIMING_MMC_HS200 ||
++		     host->mmc->ios.timing == MMC_TIMING_MMC_HS400)) {
+ 			dev_err(mmc_dev(host->mmc),
+ 				"Can't reduce the clock below 52MHz in HS200/HS400 mode");
+ 			goto enable_clk;
+@@ -810,7 +825,7 @@
+ 		 */
+ 		extra = DWCMSHC_EMMC_DLL_DLYENA |
+ 			DLL_STRBIN_DELAY_NUM_SEL |
+-			DLL_STRBIN_DELAY_NUM_DEFAULT << DLL_STRBIN_DELAY_NUM_OFFSET;
++			strbin_delay << DLL_STRBIN_DELAY_NUM_OFFSET;
+ 		sdhci_writel(host, extra, DWCMSHC_EMMC_DLL_STRBIN);
+ 		goto enable_clk;
+ 	}
+@@ -842,6 +857,15 @@
+ 		goto enable_clk;
+ 	}
+ 
++	/* Feed the measured DLL lock value back into all four clock lines. */
++	if (rockchip_pdata->tap_value_sel) {
++		u32 lock_value = (sdhci_readl(host, DWCMSHC_EMMC_DLL_STATUS0) * 2) & 0xff;
++
++		dll_tap = DLL_TAP_VALUE_SEL | lock_value << DLL_TAP_VALUE_OFFSET;
++		extra = sdhci_readl(host, DWCMSHC_EMMC_DLL_RXCLK) | dll_tap;
++		sdhci_writel(host, extra, DWCMSHC_EMMC_DLL_RXCLK);
++	}
++
+ 	extra = 0x1 << 16 | /* tune clock stop en */
+ 		0x3 << 17 | /* pre-change delay */
+ 		0x3 << 19;  /* post-change delay */
+@@ -849,15 +873,21 @@
+ 
+ 	if (host->mmc->ios.timing == MMC_TIMING_MMC_HS200 ||
+ 	    host->mmc->ios.timing == MMC_TIMING_MMC_HS400)
+-		txclk_tapnum = priv->txclk_tapnum;
++		txclk_tapnum = rockchip_pdata->hs200_tx_tap ?: priv->txclk_tapnum;
  
  	if (rockchip_pdata->revision == 1 && host->mmc->ios.timing == MMC_TIMING_MMC_HS400) {
 -		txclk_tapnum = DLL_TXCLK_TAPNUM_90_DEGREES;
-+		u32 cmd_tapnum = DLL_CMDOUT_TAPNUM_90_DEGREES;
++		u32 cmd_tapnum = rockchip_pdata->hs400_cmd_tap ?:
++				 DLL_CMDOUT_TAPNUM_90_DEGREES;
 +
 +		txclk_tapnum = rockchip_pdata->hs400_tx_tap ?:
 +			       DLL_TXCLK_TAPNUM_90_DEGREES;
-+		if (rockchip_pdata->hs400_cmd_tap)
-+			cmd_tapnum = rockchip_pdata->hs400_cmd_tap;
-+		if (rockchip_pdata->hs400_strbin_tap)
-+			strbin_tapnum = rockchip_pdata->hs400_strbin_tap;
++		strbin_tapnum = rockchip_pdata->hs400_strbin_tap ?:
++				DLL_STRBIN_TAPNUM_DEFAULT;
  
  		extra = DLL_CMDOUT_SRC_CLK_NEG |
  			DLL_CMDOUT_EN_SRC_CLK_NEG |
  			DWCMSHC_EMMC_DLL_DLYENA |
 -			DLL_CMDOUT_TAPNUM_90_DEGREES |
-+			cmd_tapnum |
++			cmd_tapnum | dll_tap |
  			DLL_CMDOUT_TAPNUM_FROM_SW;
  		sdhci_writel(host, extra, DECMSHC_EMMC_DLL_CMDOUT);
  	}
-@@ -869,7 +884,7 @@ static void dwcmshc_rk3568_set_clock(struct sdhci_host *host, unsigned int clock
+@@ -865,11 +895,11 @@
+ 	extra = DWCMSHC_EMMC_DLL_DLYENA |
+ 		DLL_TXCLK_TAPNUM_FROM_SW |
+ 		DLL_RXCLK_NO_INVERTER << DWCMSHC_EMMC_DLL_RXCLK_SRCSEL |
+-		txclk_tapnum;
++		txclk_tapnum | dll_tap;
  	sdhci_writel(host, extra, DWCMSHC_EMMC_DLL_TXCLK);
  
  	extra = DWCMSHC_EMMC_DLL_DLYENA |
 -		DLL_STRBIN_TAPNUM_DEFAULT |
-+		strbin_tapnum |
++		strbin_tapnum | dll_tap |
  		DLL_STRBIN_TAPNUM_FROM_SW;
  	sdhci_writel(host, extra, DWCMSHC_EMMC_DLL_STRBIN);
  
-@@ -2122,6 +2137,26 @@ static const struct cqhci_host_ops rk35xx_cqhci_ops = {
+@@ -2122,6 +2152,30 @@
  	.set_tran_desc	= dwcmshc_set_tran_desc,
  };
  
@@ -79,23 +140,27 @@ index c688f3e..a053a9f 100644
 +		.postinit = dwcmshc_rk35xx_postinit,
 +	},
 +	.revision = 1,
-+	/* Rockchip BSP rk3528_drvdata: hs400 tx/cmd/strbin = 6/6/3 */
++	/* Rockchip BSP rk3528_drvdata, retained from the Armbian port. */
++	.hs200_tx_tap = 12,
 +	.hs400_tx_tap = 6,
 +	.hs400_cmd_tap = 6,
 +	.hs400_strbin_tap = 3,
++	.ddr52_strbin_delay = 10,
++	.tap_value_sel = true,
++	.allow_low_clock = true,
 +};
 +
  static const struct rockchip_pltfm_data sdhci_dwcmshc_rk3568_pdata = {
  	.dwcmshc_pdata = {
  		.pdata = {
-@@ -2336,6 +2371,10 @@ static const struct of_device_id sdhci_dwcmshc_dt_ids[] = {
- 		.compatible = "canaan,k230-sdio",
+@@ -2337,6 +2391,10 @@
  		.data = &k230_sdio_data.dwcmshc_pdata,
  	},
-+	{
+ 	{
 +		.compatible = "rockchip,rk3528-dwcmshc",
 +		.data = &sdhci_dwcmshc_rk3528_pdata,
 +	},
- 	{
++	{
  		.compatible = "rockchip,rk3588-dwcmshc",
  		.data = &sdhci_dwcmshc_rk3588_pdata,
+ 	},

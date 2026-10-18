@@ -242,11 +242,15 @@ int bus_chn_init(struct mchn_ops_t *ops, int hif_type)
 	mutex_init(&chn_inf->callback_lock[ops->channel]);
 	mutex_lock(&chn_inf->callback_lock[ops->channel]);
 	ops->hif_type = hif_type;
-	chn_inf->ops[ops->channel] = ops;
 	if (ops->pool_size > 0)
 		ret = buf_pool_init(&(chn_inf->pool[ops->channel]),
 				    ops->pool_size, 0);
+	/* Failed allocation must not leave a live callback or channel behind. */
+	if (!ret)
+		chn_inf->ops[ops->channel] = ops;
 	mutex_unlock(&chn_inf->callback_lock[ops->channel]);
+	if (ret)
+		mutex_destroy(&chn_inf->callback_lock[ops->channel]);
 
 	/* pr_info("[-]%s(%d)\n", __func__, ops->channel); */
 

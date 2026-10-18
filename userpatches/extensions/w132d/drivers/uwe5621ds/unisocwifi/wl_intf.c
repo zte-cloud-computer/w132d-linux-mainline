@@ -330,8 +330,6 @@ sprdwl_list_cut_position(struct list_head *tx_list_head,
 int sprdwl_add_topop_list(int chn, struct mbuf_t *head,
 			   struct mbuf_t *tail, int num)
 {
-	struct sprdwl_intf *intf = get_intf();
-	struct sprdwl_work *misc_work;
 	struct sprdwl_pop_work pop_work;
 
 	pop_work.chn = chn;
@@ -339,16 +337,8 @@ int sprdwl_add_topop_list(int chn, struct mbuf_t *head,
 	pop_work.tail = (void *)tail;
 	pop_work.num = num;
 
-	misc_work = sprdwl_alloc_work(sizeof(struct sprdwl_pop_work));
-	if (!misc_work) {
-		wl_err("%s out of memory\n", __func__);
-		return -1;
-	}
-	misc_work->vif = NULL;
-	misc_work->id = SPRDWL_POP_MBUF;
-	memcpy(misc_work->data, &pop_work, sizeof(struct sprdwl_pop_work));
-
-	sprdwl_queue_work(intf->priv, misc_work);
+	/* Return nodes while the bus callback still pins the channel pool. */
+	sprdwl_handle_pop_list(&pop_work);
 	return 0;
 }
 
@@ -949,6 +939,19 @@ static int sprdwl_rx_common_push(int chn, struct mbuf_t **head, struct mbuf_t **
 	return ret;
 }
 
+int sprdwl_rx_payload_len(struct sprdwl_intf *intf, void *buf, int len)
+{
+	if (!buf || len <= 0)
+		return 0;
+	/* ADMA mbuf lengths describe capacity, not the received payload. */
+	if (intf->priv->hw_type == SPRDWL_HW_SDIO) {
+		struct sdiohal_puh *puh = buf;
+
+		return min_t(int, len, puh->len);
+	}
+	return len;
+}
+
 inline void *sprdwl_get_rx_data(struct sprdwl_intf *intf,
 				void *pos, void **data,
 				void **tran_data, int *len, int offset)
@@ -963,7 +966,7 @@ inline void *sprdwl_get_rx_data(struct sprdwl_intf *intf,
 
 	*tran_data = mbuf->buf;
 	*data = (*tran_data) + offset;
-	*len = mbuf->len;
+	*len = sprdwl_rx_payload_len(intf, mbuf->buf, mbuf->len);
 	mbuf->buf = NULL;
 
 	return (void *)mbuf->next;
@@ -1015,7 +1018,8 @@ static int intf_rx_handle(int chn, struct mbuf_t *head,
 		mbuf = head;
 		for (i = num; i > 0; i--) {
 			sprdwl_sdio_process_credit(intf,
-				(void *)(mbuf->buf + intf->hif_offset));
+				(void *)(mbuf->buf + intf->hif_offset),
+				sprdwl_rx_payload_len(intf, mbuf->buf, mbuf->len));
 			mbuf = mbuf->next;
 		}
 	}
@@ -1487,6 +1491,8 @@ void sprdwl_event_sta_lut(struct sprdwl_vif *vif, u8 *data, u16 len)
 	}
 
 	i = sta_lut->sta_lut_index;
+	if (i >= MAX_LUT_NUM)
+		return;
 
 	wl_debug("ctx_id:%d,action:%d,lut:%d\n", sta_lut->ctx_id,
 		sta_lut->action, sta_lut->sta_lut_index);
@@ -1674,69 +1680,68 @@ void sprdwl_tx_delba(struct sprdwl_intf *intf,
 
 int sprdwl_intf_init(struct sprdwl_priv *priv, struct sprdwl_intf *intf)
 {
-	int ret = -EINVAL, chn = 0;
-
 	if (priv->hw_type == SPRDWL_HW_SDIO) {
 		g_intf_ops.hif_ops = sdio_hif_ops;
-		g_intf_ops.max_num =
-			sizeof(sdio_hif_ops)/sizeof(struct mchn_ops_t);
+		g_intf_ops.max_num = ARRAY_SIZE(sdio_hif_ops);
 	} else if (priv->hw_type == SPRDWL_HW_PCIE) {
 		g_intf_ops.hif_ops = pcie_hif_ops;
-		g_intf_ops.max_num =
-			sizeof(pcie_hif_ops)/sizeof(struct mchn_ops_t);
+		g_intf_ops.max_num = ARRAY_SIZE(pcie_hif_ops);
 	} else if (priv->hw_type == SPRDWL_HW_USB) {
 		g_intf_ops.hif_ops = usb_hif_ops;
-		g_intf_ops.max_num =
-			sizeof(usb_hif_ops)/sizeof(struct mchn_ops_t);
-	}
-
-	if (g_intf_ops.max_num < MAX_CHN_NUM) {
-		wl_info("%s: register %d ops\n",
-			__func__, g_intf_ops.max_num);
-
-		for (chn = 0; chn < g_intf_ops.max_num; chn++) {
-			ret = sprdwcn_bus_chn_init(&g_intf_ops.hif_ops[chn]);
-			if (ret < 0)
-				goto err;
-		}
-
-		g_intf_ops.intf = (void *)intf;
-		/* TODO: Need we reserve g_intf_ops? */
-		intf->hw_intf = (void *)&g_intf_ops;
-
-		priv->hw_priv = intf;
-		priv->hw_offset = intf->hif_offset;
-		intf->priv = priv;
-		intf->fw_awake = 1;
-		intf->fw_power_down = 0;
-#ifdef UNISOC_WIFI_PS
-		init_completion(&intf->suspend_completed);
-#endif
+		g_intf_ops.max_num = ARRAY_SIZE(usb_hif_ops);
 	} else {
-err:
-		wl_err("%s: unregister %d ops\n",
-		       __func__, g_intf_ops.max_num);
-
-		for (; chn > 0; chn--)
-			sprdwcn_bus_chn_deinit(&g_intf_ops.hif_ops[chn]);
-
-		g_intf_ops.hif_ops = NULL;
-		g_intf_ops.max_num = 0;
+		return -EINVAL;
 	}
 
-	return ret;
+	if (g_intf_ops.max_num >= MAX_CHN_NUM)
+		return -EINVAL;
+
+	/* RX/TX state must exist before the first bus callback is published. */
+	g_intf_ops.intf = intf;
+	g_intf_ops.registered = 0;
+	intf->hw_intf = &g_intf_ops;
+	priv->hw_priv = intf;
+	priv->hw_offset = intf->hif_offset;
+	intf->priv = priv;
+	intf->fw_awake = 1;
+	intf->fw_power_down = 0;
+#ifdef UNISOC_WIFI_PS
+	init_completion(&intf->suspend_completed);
+#endif
+	return 0;
 }
 
-void sprdwl_intf_deinit(struct sprdwl_intf *dev)
+void sprdwl_intf_stop(struct sprdwl_intf *intf)
 {
-	int chn = 0;
+	/* Complete deferred TX returns before releasing the channel pools. */
+	flush_workqueue(intf->priv->common_workq);
+	while (g_intf_ops.registered)
+		sprdwcn_bus_chn_deinit(&g_intf_ops.hif_ops[--g_intf_ops.registered]);
+}
 
-	for (chn = 0; chn < g_intf_ops.max_num; chn++)
-		sprdwcn_bus_chn_deinit(&g_intf_ops.hif_ops[chn]);
+int sprdwl_intf_start(struct sprdwl_intf *intf)
+{
+	int ret;
 
+	while (g_intf_ops.registered < g_intf_ops.max_num) {
+		ret = sprdwcn_bus_chn_init(&g_intf_ops.hif_ops[g_intf_ops.registered]);
+		if (ret) {
+			sprdwl_tx_stop(intf);
+			sprdwl_intf_stop(intf);
+			return ret;
+		}
+		g_intf_ops.registered++;
+	}
+	return 0;
+}
+
+void sprdwl_intf_deinit(struct sprdwl_intf *intf)
+{
+	sprdwl_intf_stop(intf);
 	g_intf_ops.intf = NULL;
+	g_intf_ops.hif_ops = NULL;
 	g_intf_ops.max_num = 0;
-	dev->hw_intf = NULL;
+	intf->hw_intf = NULL;
 }
 
 int sprdwl_dis_flush_txlist(struct sprdwl_intf *intf, u8 lut_index)

@@ -687,7 +687,7 @@ static int rk3528_platform_probe(struct platform_device *pdev)
 						       GPIOD_OUT_LOW);
 	if (IS_ERR(rk3528->pa_ctl_gpio)) {
 		dev_err(&pdev->dev, "Unable to claim gpio pa-ctl\n");
-		return -EINVAL;
+		return PTR_ERR(rk3528->pa_ctl_gpio);
 	}
 
 	if (rk3528->pa_ctl_gpio)
@@ -701,36 +701,22 @@ static int rk3528_platform_probe(struct platform_device *pdev)
 	/* Close external PA during startup. */
 	rk3528_codec_pa_ctrl(rk3528, false);
 
-	rk3528->pclk = devm_clk_get(&pdev->dev, "pclk");
-	if (IS_ERR(rk3528->pclk)) {
-		dev_err(&pdev->dev, "Can't get acodec pclk\n");
-		return -EINVAL;
-	}
-
-	rk3528->mclk = devm_clk_get(&pdev->dev, "mclk");
-	if (IS_ERR(rk3528->mclk)) {
-		dev_err(&pdev->dev, "Can't get acodec mclk\n");
-		return -EINVAL;
-	}
-
-	ret = clk_prepare_enable(rk3528->pclk);
-	if (ret < 0) {
-		dev_err(&pdev->dev, "Failed to enable acodec pclk: %d\n", ret);
-		return ret;
-	}
-
-	ret = clk_prepare_enable(rk3528->mclk);
-	if (ret < 0) {
-		dev_err(&pdev->dev, "Failed to enable acodec mclk: %d\n", ret);
-		goto failed_1;
-	}
+	/* Devres unregisters the component before disabling its register clocks. */
+	rk3528->pclk = devm_clk_get_enabled(&pdev->dev, "pclk");
+	if (IS_ERR(rk3528->pclk))
+		return dev_err_probe(&pdev->dev, PTR_ERR(rk3528->pclk),
+				     "Can't enable acodec pclk\n");
+	rk3528->mclk = devm_clk_get_enabled(&pdev->dev, "mclk");
+	if (IS_ERR(rk3528->mclk))
+		return dev_err_probe(&pdev->dev, PTR_ERR(rk3528->mclk),
+				     "Can't enable acodec mclk\n");
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(base)) {
 		ret = PTR_ERR(base);
 		dev_err(&pdev->dev, "Failed to ioremap resource\n");
-		goto failed;
+		return ret;
 	}
 
 	rk3528->regmap = devm_regmap_init_mmio(&pdev->dev, base,
@@ -738,7 +724,7 @@ static int rk3528_platform_probe(struct platform_device *pdev)
 	if (IS_ERR(rk3528->regmap)) {
 		ret = PTR_ERR(rk3528->regmap);
 		dev_err(&pdev->dev, "Failed to regmap mmio\n");
-		goto failed;
+		return ret;
 	}
 
 	platform_set_drvdata(pdev, rk3528);
@@ -746,26 +732,11 @@ static int rk3528_platform_probe(struct platform_device *pdev)
 					      rk3528_dai, ARRAY_SIZE(rk3528_dai));
 	if (ret < 0) {
 		dev_err(&pdev->dev, "Failed to register codec: %d\n", ret);
-		goto failed;
+		return ret;
 	}
 
 	return ret;
 
-failed:
-	clk_disable_unprepare(rk3528->mclk);
-failed_1:
-	clk_disable_unprepare(rk3528->pclk);
-
-	return ret;
-}
-
-static void rk3528_platform_remove(struct platform_device *pdev)
-{
-	struct rk3528_codec_priv *rk3528 =
-		(struct rk3528_codec_priv *)platform_get_drvdata(pdev);
-
-	clk_disable_unprepare(rk3528->mclk);
-	clk_disable_unprepare(rk3528->pclk);
 }
 
 static struct platform_driver rk3528_codec_driver = {
@@ -774,7 +745,6 @@ static struct platform_driver rk3528_codec_driver = {
 		   .of_match_table = of_match_ptr(rk3528_codec_of_match),
 	},
 	.probe = rk3528_platform_probe,
-	.remove = rk3528_platform_remove,
 };
 module_platform_driver(rk3528_codec_driver);
 

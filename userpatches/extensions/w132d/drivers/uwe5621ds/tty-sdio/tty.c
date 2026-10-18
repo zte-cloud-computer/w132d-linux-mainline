@@ -258,14 +258,40 @@ static void mtty_rx_work_queue(struct work_struct *work)
 	}
 }
 
+static void mtty_hci_rx(struct mbuf_t *head, int num)
+{
+	struct mbuf_t *mbuf = head;
+	int i;
+
+	for (i = 0; i < num && mbuf; i++, mbuf = mbuf->next) {
+		const u8 *buf = (const u8 *)mbuf->buf;
+		unsigned int len;
+
+		if (!buf || !mbuf->len)
+			continue;
+		len = ((buf[2] & 0x7f) << 9) | (buf[1] << 1) | (buf[0] >> 7);
+		if (len > mbuf->len)
+			continue;
+		sprd_hci_recv(buf + BT_SDIO_HEAD_LEN, len);
+	}
+}
+
 static int mtty_rx_cb(int chn, struct mbuf_t *head, struct mbuf_t *tail, int num)
 {
 	int ret = 0, block_size;
 	struct rx_data *rx;
+
+	/* The HCI path reassembles every block, without the legacy WoBLE parser. */
+	if (IS_ENABLED(CONFIG_TTY_OVERY_SDIO_HCI)) {
+		mtty_hci_rx(head, num);
+		sprdwcn_bus_push_list(chn, head, tail, num);
+		return 0;
+	}
 #ifndef WOBLE_FUN
 	bt_wakeup_host();
 #endif
-	block_size = ((head->buf[2] & 0x7F) << 9) + (head->buf[1] << 1) + (head->buf[0] >> 7);
+	block_size = (((u8)head->buf[2] & 0x7f) << 9) |
+		     ((u8)head->buf[1] << 1) | ((u8)head->buf[0] >> 7);
 
 	if (log_level == MTTY_LOG_LEVEL_VER) {
 		BT_VER("%s dump head: %d, channel: %d, num: %d\n", __func__, BT_SDIO_HEAD_LEN, chn, num);
@@ -278,12 +304,6 @@ static int mtty_rx_cb(int chn, struct mbuf_t *head, struct mbuf_t *tail, int num
 	}
 
 	woble_data_recv((unsigned char *)head->buf + BT_SDIO_HEAD_LEN, block_size);
-
-	if (IS_ENABLED(CONFIG_TTY_OVERY_SDIO_HCI)) {
-		sprd_hci_recv((unsigned char *)head->buf + BT_SDIO_HEAD_LEN, block_size);
-		sprdwcn_bus_push_list(chn, head, tail, num);
-		return 0;
-	}
 
 	if (atomic_read(&mtty_dev->state) == MTTY_STATE_CLOSE) {
 		pr_err("%s mtty bt is closed abnormally\n", __func__);
@@ -443,7 +463,11 @@ static int mtty_write(struct tty_struct *tty,
 	}
 	memset(block, 0, count + BT_SDIO_HEAD_LEN);
 	memcpy(block + BT_SDIO_HEAD_LEN, buf, count);
-	down(&sem_id);
+	ret = down_timeout(&sem_id, msecs_to_jiffies(1000));
+	if (ret) {
+		kfree(block);
+		return ret;
+	}
 	ret = sprdwcn_bus_list_alloc(BT_TX_CHANNEL, &tx_head, &tx_tail, &num);
 	if (ret) {
 		pr_err("%s sprdwcn_bus_list_alloc failed: %d\n", __func__, ret);
@@ -462,6 +486,7 @@ static int mtty_write(struct tty_struct *tty,
 		kfree(tx_head->buf);
 		tx_head->buf = NULL;
 		sprdwcn_bus_list_free(BT_TX_CHANNEL, tx_head, tx_tail, num);
+		up(&sem_id);
 		return -EBUSY;
 	}
 
@@ -611,6 +636,10 @@ static inline void mtty_destroy_pdata(struct mtty_init_data **init)
 static int bt_tx_powerchange(int channel, int is_resume)
 {
 	unsigned long power_state = marlin_get_power_state();
+
+	/* Raw vendor commands bypass the Bluetooth core's command accounting. */
+	if (IS_ENABLED(CONFIG_TTY_OVERY_SDIO_HCI))
+		return 0;
 	pr_info("%s is_resume =%d", __func__, is_resume);
 	if (test_bit(MARLIN_BLUETOOTH, &power_state)) {
 		if (!is_resume) {
@@ -652,12 +681,13 @@ static int bluetooth_reset(struct notifier_block *this, unsigned long ev, void *
 	int block_size = RESET_BUFSIZE;
 	unsigned char reset_buf[RESET_BUFSIZE] = {0x04, 0xff, 0x02, 0x57, 0xa5};
 
+	if (IS_ENABLED(CONFIG_TTY_OVERY_SDIO_HCI)) {
+		sprd_hci_reset(ev == MARLIN_CP2_STS_RESET_DONE);
+		return NOTIFY_DONE;
+	}
+
 	if (!ev) {
 		pr_info("%s:reset callback coming\n", __func__);
-		if (IS_ENABLED(CONFIG_TTY_OVERY_SDIO_HCI)) {
-			sprd_hci_reset();
-			return NOTIFY_DONE;
-		}
 		if (mtty_dev != NULL) {
 			if (!work_pending(&mtty_dev->bt_rx_work)) {
 				pr_info("%s tty_insert_flip_string", __func__);
@@ -715,55 +745,75 @@ static int  mtty_probe(struct platform_device *pdev)
 	}
 
 	mtty->pdata = pdata;
-	if (IS_ENABLED(CONFIG_TTY_OVERY_SDIO_HCI))
-		rval = sprd_hci_register(&pdev->dev);
-	else
-		rval = mtty_tty_driver_init(mtty);
-	if (rval) {
-		kfree(mtty->port);
-		kfree(mtty);
-		mtty_destroy_pdata(&pdata);
-		pr_err("regitster notifier failed (%d)\n", rval);
-		return rval;
-	}
-
-	pr_info("mtty_probe init device addr: 0x%p\n", mtty);
-	platform_set_drvdata(pdev, mtty);
-
-	/*spin_lock_init(&mtty->rw_lock);*/
 	atomic_set(&mtty->state, MTTY_STATE_CLOSE);
 	mutex_init(&mtty->rw_mutex);
 	INIT_LIST_HEAD(&mtty->rx_head);
-	/*tasklet_init(&mtty->rx_task, mtty_rx_task, (unsigned long)mtty);*/
-	mtty->bt_rx_workqueue =
-	create_singlethread_workqueue("SPRDBT_RX_QUEUE");
-	if (!mtty->bt_rx_workqueue) {
-		pr_err("%s SPRDBT_RX_QUEUE create failed", __func__);
-		return -ENOMEM;
-	}
 	INIT_WORK(&mtty->bt_rx_work, mtty_rx_work_queue);
-
-	mtty_dev = mtty;
-
-//#ifdef KERNEL_VERSION_414
-	if (sysfs_create_group(&pdev->dev.kobj, &bluetooth_group)) {
-		pr_err("%s failed to create bluetooth tty attributes.\n", __func__);
+	mtty->bt_rx_workqueue = create_singlethread_workqueue("SPRDBT_RX_QUEUE");
+	if (!mtty->bt_rx_workqueue) {
+		rval = -ENOMEM;
+		goto free_device;
 	}
-//#endif
 
-	/* the Bluetooth core provides the rfkill switch for an hci_dev */
-	if (!IS_ENABLED(CONFIG_TTY_OVERY_SDIO_HCI))
-		rfkill_bluetooth_init(pdev);
-	bluesleep_init();
-	woble_init();
-
-	marlin_reset_callback_register(MARLIN_BLUETOOTH, &bluetooth_reset_block);
-
-	sprdwcn_bus_chn_init(&bt_rx_ops);
-	sprdwcn_bus_chn_init(&bt_tx_ops);
+	rval = bluesleep_init();
+	if (rval)
+		goto destroy_workqueue;
+	rval = woble_init();
+	if (rval)
+		goto exit_bluesleep;
 	sema_init(&sem_id, BT_TX_POOL_SIZE - 1);
+	mtty_dev = mtty;
+	platform_set_drvdata(pdev, mtty);
+
+	rval = sprdwcn_bus_chn_init(&bt_rx_ops);
+	if (rval)
+		goto clear_device;
+	rval = sprdwcn_bus_chn_init(&bt_tx_ops);
+	if (rval)
+		goto deinit_rx;
+	rval = marlin_reset_callback_register(MARLIN_BLUETOOTH, &bluetooth_reset_block);
+	if (rval)
+		goto deinit_tx;
+	rval = sysfs_create_group(&pdev->dev.kobj, &bluetooth_group);
+	if (rval)
+		goto unregister_reset;
+
+	/* Registration can immediately open HCI and send vendor commands. */
+	if (IS_ENABLED(CONFIG_TTY_OVERY_SDIO_HCI)) {
+		rval = sprd_hci_register(&pdev->dev);
+	} else {
+		rval = mtty_tty_driver_init(mtty);
+		if (!rval) {
+			rval = rfkill_bluetooth_init(pdev);
+			if (rval)
+				mtty_tty_driver_exit(mtty);
+		}
+	}
+	if (rval)
+		goto remove_sysfs;
 
 	return 0;
+
+remove_sysfs:
+	sysfs_remove_group(&pdev->dev.kobj, &bluetooth_group);
+unregister_reset:
+	marlin_reset_callback_unregister(MARLIN_BLUETOOTH, &bluetooth_reset_block);
+deinit_tx:
+	sprdwcn_bus_chn_deinit(&bt_tx_ops);
+deinit_rx:
+	sprdwcn_bus_chn_deinit(&bt_rx_ops);
+clear_device:
+	mtty_dev = NULL;
+	platform_set_drvdata(pdev, NULL);
+exit_bluesleep:
+	bluesleep_exit();
+destroy_workqueue:
+	destroy_workqueue(mtty->bt_rx_workqueue);
+free_device:
+	kfree(mtty->port);
+	mtty_destroy_pdata(&mtty->pdata);
+	kfree(mtty);
+	return rval;
 }
 
 int marlin_sdio_write(const unsigned char *buf, int count)
@@ -794,7 +844,11 @@ int marlin_sdio_write(const unsigned char *buf, int count)
 	memset(block, 0, count + BT_SDIO_HEAD_LEN);
 	memcpy(block + BT_SDIO_HEAD_LEN, buf, count);
 
-	down(&sem_id);
+	ret = down_timeout(&sem_id, msecs_to_jiffies(1000));
+	if (ret) {
+		kfree(block);
+		return ret;
+	}
 	ret = sprdwcn_bus_list_alloc(BT_TX_CHANNEL, &tx_head, &tx_tail, &num);
 
 	if (ret) {
@@ -816,6 +870,7 @@ int marlin_sdio_write(const unsigned char *buf, int count)
 		kfree(tx_head->buf);
 		tx_head->buf = NULL;
 		sprdwcn_bus_list_free(BT_TX_CHANNEL, tx_head, tx_tail, num);
+		up(&sem_id);
 		return -EBUSY;
 	}
 
@@ -828,6 +883,9 @@ int marlin_sdio_write(const unsigned char *buf, int count)
 static void  mtty_shutdown(struct platform_device *pdev)
 {
 	unsigned long int power_state = marlin_get_power_state();
+
+	if (IS_ENABLED(CONFIG_TTY_OVERY_SDIO_HCI))
+		return;
 	pr_info("%s ---\n", __func__);
 	if (test_bit(MARLIN_BLUETOOTH, &power_state)) {
 		pr_info("set bluetooth into sleep mode\n");
@@ -846,23 +904,25 @@ static int mtty_remove(struct platform_device *pdev)
 {
 	struct mtty_device *mtty = platform_get_drvdata(pdev);
 
-	if (IS_ENABLED(CONFIG_TTY_OVERY_SDIO_HCI))
+	/* Stop external entry points before dismantling the live transport. */
+	sysfs_remove_group(&pdev->dev.kobj, &bluetooth_group);
+	marlin_reset_callback_unregister(MARLIN_BLUETOOTH, &bluetooth_reset_block);
+	if (IS_ENABLED(CONFIG_TTY_OVERY_SDIO_HCI)) {
 		sprd_hci_unregister();
-	else
+	} else {
+		rfkill_bluetooth_remove(pdev);
 		mtty_tty_driver_exit(mtty);
+	}
 	sprdwcn_bus_chn_deinit(&bt_rx_ops);
 	sprdwcn_bus_chn_deinit(&bt_tx_ops);
+	cancel_work_sync(&mtty->bt_rx_work);
+	destroy_workqueue(mtty->bt_rx_workqueue);
+	bluesleep_exit();
+	mtty_dev = NULL;
+	platform_set_drvdata(pdev, NULL);
 	kfree(mtty->port);
 	mtty_destroy_pdata(&mtty->pdata);
-	flush_workqueue(mtty->bt_rx_workqueue);
-	destroy_workqueue(mtty->bt_rx_workqueue);
-	/*tasklet_kill(&mtty->rx_task);*/
 	kfree(mtty);
-	platform_set_drvdata(pdev, NULL);
-//#ifdef KERNEL_VERSION_414
-	sysfs_remove_group(&pdev->dev.kobj, &bluetooth_group);
-//#endif
-	bluesleep_exit();
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
 	return 0;
@@ -907,10 +967,22 @@ static int __init mtty_pdev_init(void)
 			return ret;
 		}
 		mtty_pdev = platform_device_alloc("mtty", -1);
-		if (platform_device_add(mtty_pdev) != 0)
-			pr_err("register platform device unisoc mtty failed\n");
+		if (!mtty_pdev) {
+			ret = -ENOMEM;
+			goto unregister_driver;
+		}
+		ret = platform_device_add(mtty_pdev);
+		if (ret) {
+			platform_device_put(mtty_pdev);
+			mtty_pdev = NULL;
+			goto unregister_driver;
+		}
 	}
 
+	return ret;
+
+unregister_driver:
+	platform_driver_unregister(&mtty_driver);
 	return ret;
 }
 
@@ -918,7 +990,7 @@ static void __exit mtty_pdev_exit(void)
 {
 	platform_driver_unregister(&mtty_driver);
 	if (mtty_pdev)
-		platform_device_del(mtty_pdev);
+		platform_device_unregister(mtty_pdev);
 }
 
 module_init(mtty_pdev_init);

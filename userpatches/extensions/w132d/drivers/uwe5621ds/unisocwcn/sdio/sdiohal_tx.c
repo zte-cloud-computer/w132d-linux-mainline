@@ -3,6 +3,50 @@
 #define SDIOHAL_TX_RETRY_MAX 3
 #define SDIOHAL_TX_NO_RETRY
 
+/* Serialize channel teardown with batches already removed from the TX queue. */
+static DEFINE_MUTEX(sdiohal_tx_dispatch_lock);
+
+void sdiohal_tx_flush_channel(struct mchn_ops_t *ops)
+{
+	struct sdiohal_data_t *sdio = sdiohal_get_data();
+	struct mbuf_t **link, *node, *next, *prev = NULL;
+	struct mbuf_t *head = NULL, *tail = NULL;
+	int num = 0;
+
+	if (ops->channel >= SDIO_CHN_TX_NUM)
+		return;
+	mutex_lock(&sdiohal_tx_dispatch_lock);
+	spin_lock_bh(&sdio->tx_spinlock);
+	link = &sdio->tx_list_head.mbuf_head;
+	while ((node = *link)) {
+		struct sdio_puh_t *puh = (struct sdio_puh_t *)node->buf;
+		int channel = sdiohal_hwtype_to_channel(1, puh->type, puh->subtype);
+
+		next = node->next;
+		if (channel == ops->channel) {
+			*link = next;
+			node->next = NULL;
+			if (tail)
+				tail->next = node;
+			else
+				head = node;
+			tail = node;
+			num++;
+		} else {
+			prev = node;
+			link = &node->next;
+		}
+	}
+	sdio->tx_list_head.mbuf_tail = prev;
+	sdio->tx_list_head.node_num -= num;
+	sdiohal_atomic_sub(num, &sdio->tx_mbuf_num);
+	spin_unlock_bh(&sdio->tx_spinlock);
+	/* Return unsent buffers while their owner and pool are still alive. */
+	if (num && ops->pop_link)
+		ops->pop_link(ops->channel, head, tail, num);
+	mutex_unlock(&sdiohal_tx_dispatch_lock);
+}
+
 static void sdiohal_tx_retrybuf_left(unsigned int suc_pac_cnt)
 {
 	struct sdiohal_data_t *p_data = sdiohal_get_data();
@@ -167,12 +211,19 @@ int sdiohal_tx_thread(void *data)
 		while (!sdiohal_is_tx_list_empty()) {
 			getnstimeofday(&tm_begin);
 
+			mutex_lock(&sdiohal_tx_dispatch_lock);
+			/* Teardown may have removed the last queued packet while we waited. */
+			if (sdiohal_is_tx_list_empty()) {
+				mutex_unlock(&sdiohal_tx_dispatch_lock);
+				break;
+			}
 			sdiohal_tx_find_data_list(&data_list);
 			if (p_data->adma_tx_enable) {
 				sdiohal_adma_pt_write(&data_list);
 				sdiohal_tx_list_denq(&data_list);
 			} else
 				sdiohal_tx_data_list_send(&data_list, true);
+			mutex_unlock(&sdiohal_tx_dispatch_lock);
 
 			getnstimeofday(&tm_end);
 			time_total_ns += timespec_to_ns(&tm_end)

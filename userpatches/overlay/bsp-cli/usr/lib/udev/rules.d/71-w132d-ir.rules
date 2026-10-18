@@ -1,0 +1,2 @@
+# Load the board keymap after probe or rebind, regardless of the rc index.
+ACTION=="add", SUBSYSTEM=="rc", KERNEL=="rc[0-9]*", KERNELS=="ir-receiver", ENV{DRV_NAME}=="gpio_ir_recv", TAG+="systemd", ENV{SYSTEMD_WANTS}+="w132d-ir-keymap@%k.service"

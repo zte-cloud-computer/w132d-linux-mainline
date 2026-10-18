@@ -2542,8 +2542,18 @@ static int handle_rsp_status_err(u8 cmd_id, s8 status)
 	return flag;
 }
 
+static bool sprdwl_rx_cmd_length_valid(const struct sprdwl_cmd_hdr *hdr, int msg_len)
+{
+	u16 plen;
+
+	if (msg_len < (int)sizeof(*hdr))
+		return false;
+	plen = le16_to_cpu(hdr->plen);
+	return plen >= sizeof(*hdr) && plen <= msg_len;
+}
+
 /* retrun the msg length or 0 */
-unsigned short sprdwl_rx_rsp_process(struct sprdwl_priv *priv, u8 *msg)
+unsigned short sprdwl_rx_rsp_process(struct sprdwl_priv *priv, u8 *msg, int msg_len)
 {
 	u16 plen;
 	void *data;
@@ -2556,6 +2566,8 @@ unsigned short sprdwl_rx_rsp_process(struct sprdwl_priv *priv, u8 *msg)
 		return 0;
 	}
 
+	if (!sprdwl_rx_cmd_length_valid((struct sprdwl_cmd_hdr *)msg, msg_len))
+		return 0;
 	hdr = (struct sprdwl_cmd_hdr *)msg;
 	plen = SPRDWL_GET_LE16(hdr->plen);
 
@@ -2626,8 +2638,11 @@ static void sprdwl_event_station(struct sprdwl_vif *vif, u8 *data, u16 len)
 	struct sprdwl_event_new_station *sta =
 	    (struct sprdwl_event_new_station *)data;
 
+	if (len < sizeof(*sta) ||
+	    le16_to_cpu(sta->ie_len) > len - sizeof(*sta))
+		return;
 	sprdwl_report_softap(vif, sta->is_connect,
-			     sta->mac, sta->ie, sta->ie_len);
+			     sta->mac, sta->ie, le16_to_cpu(sta->ie_len));
 }
 
 void sprdwl_event_scan_done(struct sprdwl_vif *vif, u8 *data, u16 len)
@@ -2636,6 +2651,8 @@ void sprdwl_event_scan_done(struct sprdwl_vif *vif, u8 *data, u16 len)
 	    (struct sprdwl_event_scan_done *)data;
 	u8 bucket_id = 0;
 
+	if (len < sizeof(*p))
+		return;
 	switch (p->type) {
 	case SPRDWL_SCAN_DONE:
 		sprdwl_scan_done(vif, false);
@@ -2648,6 +2665,8 @@ void sprdwl_event_scan_done(struct sprdwl_vif *vif, u8 *data, u16 len)
 			    __func__, bss_count);
 		break;
 	case SPRDWL_GSCAN_DONE:
+		if (len < sizeof(struct sprdwl_event_gscan_done))
+			return;
 		bucket_id = ((struct sprdwl_event_gscan_done *)data)->bucket_id;
 		sprdwl_gscan_done(vif, bucket_id);
 		wl_ndev_log(L_DBG, vif->ndev, "%s gscan got %d bucketid done\n",
@@ -2670,7 +2689,7 @@ void sprdwl_event_scan_done(struct sprdwl_vif *vif, u8 *data, u16 len)
 static void sprdwl_event_connect(struct sprdwl_vif *vif, u8 *data, u16 len)
 {
 	u8 *pos = data;
-	u8 status_code = 0;
+	u8 status_code = WLAN_STATUS_UNSPECIFIED_FAILURE;
 	int left = len;
 	struct sprdwl_connect_info conn_info;
 #ifdef COMPAT_SAMPILE_CODE
@@ -2697,12 +2716,15 @@ static void sprdwl_event_connect(struct sprdwl_vif *vif, u8 *data, u16 len)
 
 	/*init data struct*/
 	memset(&conn_info, 0, sizeof(conn_info));
+	if (left < sizeof(conn_info.status))
+		goto invalid;
 	/* the first byte is status code */
 	memcpy(&conn_info.status, pos, sizeof(conn_info.status));
 	if (conn_info.status != SPRDWL_CONNECT_SUCCESS &&
 	    conn_info.status != SPRDWL_ROAM_SUCCESS){
 		/*Assoc response status code by set in the 3 byte if failure*/
-		memcpy(&status_code, pos+2, sizeof(status_code));
+		if (left >= 3)
+			memcpy(&status_code, pos + 2, sizeof(status_code));
 		goto out;
 	}
 	pos += sizeof(conn_info.status);
@@ -2710,61 +2732,80 @@ static void sprdwl_event_connect(struct sprdwl_vif *vif, u8 *data, u16 len)
 
 	/* parse BSSID */
 	if (left < ETH_ALEN)
-		goto out;
+		goto invalid;
 	conn_info.bssid = pos;
 	pos += ETH_ALEN;
 	left -= ETH_ALEN;
 
 	/* get channel */
 	if (left < sizeof(conn_info.channel))
-		goto out;
+		goto invalid;
 	memcpy(&conn_info.channel, pos, sizeof(conn_info.channel));
 	pos += sizeof(conn_info.channel);
 	left -= sizeof(conn_info.channel);
 
 	/* get signal */
 	if (left < sizeof(conn_info.signal))
-		goto out;
+		goto invalid;
 	memcpy(&conn_info.signal, pos, sizeof(conn_info.signal));
 	pos += sizeof(conn_info.signal);
 	left -= sizeof(conn_info.signal);
 
 	/* parse REQ IE */
-	if (left < 0)
-		goto out;
+	if (left < sizeof(conn_info.req_ie_len))
+		goto invalid;
 	memcpy(&conn_info.req_ie_len, pos, sizeof(conn_info.req_ie_len));
 	pos += sizeof(conn_info.req_ie_len);
 	left -= sizeof(conn_info.req_ie_len);
+	conn_info.req_ie_len = le16_to_cpu(conn_info.req_ie_len);
+	if (conn_info.req_ie_len > left)
+		goto invalid;
 	conn_info.req_ie = pos;
 	pos += conn_info.req_ie_len;
 	left -= conn_info.req_ie_len;
 
 	/* parse RESP IE */
-	if (left < 0)
-		goto out;
+	if (left < sizeof(conn_info.resp_ie_len))
+		goto invalid;
 	memcpy(&conn_info.resp_ie_len, pos, sizeof(conn_info.resp_ie_len));
 	pos += sizeof(conn_info.resp_ie_len);
 	left -= sizeof(conn_info.resp_ie_len);
+	conn_info.resp_ie_len = le16_to_cpu(conn_info.resp_ie_len);
+	if (conn_info.resp_ie_len > left)
+		goto invalid;
 	conn_info.resp_ie = pos;
 	pos += conn_info.resp_ie_len;
 	left -= conn_info.resp_ie_len;
 
 	/* parse BEA IE */
-	if (left < 0)
-		goto out;
+	if (left < sizeof(conn_info.bea_ie_len))
+		goto invalid;
 	memcpy(&conn_info.bea_ie_len, pos, sizeof(conn_info.bea_ie_len));
 	pos += sizeof(conn_info.bea_ie_len);
 	left -= sizeof(conn_info.bea_ie_len);
+	conn_info.bea_ie_len = le16_to_cpu(conn_info.bea_ie_len);
+	if (conn_info.bea_ie_len > left)
+		goto invalid;
 	conn_info.bea_ie = pos;
+	status_code = 0;
 out:
 	sprdwl_report_connection(vif, &conn_info, status_code);
+	return;
+
+invalid:
+	memset(&conn_info, 0, sizeof(conn_info));
+	conn_info.status = SPRDWL_CONNECT_FAILED;
+	sprdwl_report_connection(vif, &conn_info, WLAN_STATUS_UNSPECIFIED_FAILURE);
 }
 
 void sprdwl_event_disconnect(struct sprdwl_vif *vif, u8 *data, u16 len)
 {
 	u16 reason_code;
 
+	if (len < sizeof(reason_code))
+		return;
 	memcpy(&reason_code, data, sizeof(reason_code));
+	reason_code = le16_to_cpu(reason_code);
 #ifdef SYNC_DISCONNECT
 	/*Report disconnection on version > 4.9.60, even though disconnect
 	 is from wpas, otherwise it returns -EALREADY on next connect.*/
@@ -2785,6 +2826,8 @@ void sprdwl_event_mic_failure(struct sprdwl_vif *vif, u8 *data, u16 len)
 	struct sprdwl_event_mic_failure *mic_failure =
 	    (struct sprdwl_event_mic_failure *)data;
 
+	if (len < sizeof(*mic_failure))
+		return;
 	sprdwl_report_mic_failure(vif, mic_failure->is_mcast,
 				  mic_failure->key_id);
 }
@@ -2800,6 +2843,9 @@ static void sprdwl_event_mlme_tx_status(struct sprdwl_vif *vif, u8 *data, u16 le
 	struct sprdwl_event_mgmt_tx_status *tx_status =
 	    (struct sprdwl_event_mgmt_tx_status *)data;
 
+	if (len < sizeof(*tx_status) ||
+	    le16_to_cpu(tx_status->len) > len - sizeof(*tx_status))
+		return;
 	sprdwl_report_mgmt_tx_status(vif, SPRDWL_GET_LE64(tx_status->cookie),
 				     tx_status->buf,
 				     SPRDWL_GET_LE16(tx_status->len),
@@ -2814,6 +2860,8 @@ void sprdwl_event_frame(struct sprdwl_vif *vif, u8 *data, u16 len, int flag)
 	u8 *buf = NULL;
 	u8 channel, type;
 
+	if (len < sizeof(*frame))
+		return;
 	if (flag) {
 		/* here frame maybe not 4 bytes align */
 		frame = (struct sprdwl_event_mgmt_frame *)
@@ -2826,6 +2874,9 @@ void sprdwl_event_frame(struct sprdwl_vif *vif, u8 *data, u16 len, int flag)
 	channel = frame->channel;
 	type = frame->type;
 	buf_len = SPRDWL_GET_LE16(frame->len);
+	if (buf_len < offsetof(struct ieee80211_mgmt, u) ||
+	    buf_len > len - sizeof(*frame))
+		return;
 
 	sprdwl_cfg80211_dump_frame_prot_info(0, 0, buf, buf_len);
 
@@ -3362,13 +3413,16 @@ static const char *evt2str(u8 evt)
 #undef E2S
 
 /* retrun the msg length or 0 */
-unsigned short sprdwl_rx_event_process(struct sprdwl_priv *priv, u8 *msg)
+unsigned short sprdwl_rx_event_process(struct sprdwl_priv *priv, u8 *msg, int msg_len)
 {
 	struct sprdwl_cmd_hdr *hdr = (struct sprdwl_cmd_hdr *)msg;
 	struct sprdwl_vif *vif;
 	u8 ctx_id;
 	u16 len, plen;
 	u8 *data;
+
+	if (!sprdwl_rx_cmd_length_valid(hdr, msg_len))
+		return 0;
 
 	ctx_id = hdr->common.ctx_id;
 	/*TODO ctx_id range*/
@@ -3394,7 +3448,7 @@ unsigned short sprdwl_rx_event_process(struct sprdwl_priv *priv, u8 *msg)
 		evt2str(hdr->cmd_id), plen);
 
 	wl_hex_dump(L_DBG, "EVENT: ", DUMP_PREFIX_OFFSET, 16, 1,
-			     (u8 *)hdr, hdr->plen, 0);
+			     (u8 *)hdr, plen, 0);
 
 	len = plen - sizeof(*hdr);
 	vif = ctx_id_to_vif(priv, ctx_id);

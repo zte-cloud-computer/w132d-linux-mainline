@@ -10,6 +10,7 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
+#include <linux/mutex.h>
 #include "wcn_glb.h"
 #include "wcn_glb_reg.h"
 #include "wcn_procfs.h"
@@ -24,8 +25,9 @@
 static int wcn_open_module;
 static int wcn_module_state_change;
 char functionmask[8];
-marlin_reset_callback marlin_reset_func;
-void *marlin_callback_para;
+static marlin_reset_callback marlin_reset_func;
+static void *marlin_callback_para;
+static DEFINE_MUTEX(marlin_reset_lock);
 struct platform_chip_id g_platform_chip_id;
 static u32 g_platform_chip_type;
 static const struct wcn_chip_type wcn_chip_type[] = {
@@ -283,8 +285,10 @@ EXPORT_SYMBOL_GPL(marlin_get_module_status);
 
 int marlin_reset_register_notify(void *callback_func, void *para)
 {
-	marlin_reset_func = (marlin_reset_callback)callback_func;
+	mutex_lock(&marlin_reset_lock);
 	marlin_callback_para = para;
+	marlin_reset_func = (marlin_reset_callback)callback_func;
+	mutex_unlock(&marlin_reset_lock);
 
 	return 0;
 }
@@ -292,12 +296,24 @@ EXPORT_SYMBOL_GPL(marlin_reset_register_notify);
 
 int marlin_reset_unregister_notify(void)
 {
+	mutex_lock(&marlin_reset_lock);
 	marlin_reset_func = NULL;
 	marlin_callback_para = NULL;
+	mutex_unlock(&marlin_reset_lock);
 
 	return 0;
 }
 EXPORT_SYMBOL_GPL(marlin_reset_unregister_notify);
+
+void marlin_reset_notify(void)
+{
+	/* Keep the owner alive until the callback has returned. */
+	mutex_lock(&marlin_reset_lock);
+	if (marlin_reset_func)
+		marlin_reset_func(marlin_callback_para);
+	mutex_unlock(&marlin_reset_lock);
+}
+
 
 void wcn_set_module_state(bool status)
 {

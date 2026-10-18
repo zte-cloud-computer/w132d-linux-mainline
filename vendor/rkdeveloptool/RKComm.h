@@ -84,7 +84,8 @@ typedef struct {
 } CSW, *PCSW;
 
 #pragma pack()
-#define CMD_TIMEOUT 0
+// Bound individual USB requests even when the caller streams a large image.
+#define CMD_TIMEOUT 30000
 #define CBW_SIGN			0x43425355	/* "USBC" */
 #define CSW_SIGN			0x53425355	/* "USBS" */
 

@@ -55,12 +55,30 @@ static int sdio_list_push_direct(int chn, struct mbuf_t *head,
 
 static int sdio_chn_init(struct mchn_ops_t *ops)
 {
-	return bus_chn_init(ops, HW_TYPE_SDIO);
+	struct sdiohal_data_t *sdio = sdiohal_get_data();
+	int ret;
+
+	if (!sdio || !sdio->flag_init)
+		return -ENODEV;
+	sdiohal_callback_lock(&sdio->callback_lock[ops->channel]);
+	ret = bus_chn_init(ops, HW_TYPE_SDIO);
+	sdiohal_callback_unlock(&sdio->callback_lock[ops->channel]);
+	return ret;
 }
 
 static int sdio_chn_deinit(struct mchn_ops_t *ops)
 {
-	return bus_chn_deinit(ops);
+	struct sdiohal_data_t *sdio = sdiohal_get_data();
+	int ret;
+
+	if (!sdio || !sdio->flag_init)
+		return -ENODEV;
+	sdiohal_tx_flush_channel(ops);
+	/* Wait for RX/TX callbacks before freeing pools and their module owner. */
+	sdiohal_callback_lock(&sdio->callback_lock[ops->channel]);
+	ret = bus_chn_deinit(ops);
+	sdiohal_callback_unlock(&sdio->callback_lock[ops->channel]);
+	return ret;
 }
 
 static int sdio_direct_read(unsigned int addr,

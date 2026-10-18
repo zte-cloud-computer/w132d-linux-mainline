@@ -700,15 +700,18 @@ static int sprdwl_add_cipher_key(struct sprdwl_vif *vif, bool pairwise,
 	wl_ndev_log(L_DBG, vif->ndev, "%s %s key_index %d\n", __func__,
 		    pairwise ? "pairwise" : "group", key_index);
 
-	if (vif->key_len[pairwise][0] || vif->key_len[pairwise][1] ||
-	    vif->key_len[pairwise][2] || vif->key_len[pairwise][3]) {
-		*cipher_ptr = vif->prwise_crypto = sprdwl_parse_cipher(cipher);
+	if (vif->key_len[pairwise][key_index]) {
+		u8 key_cipher = sprdwl_parse_cipher(cipher);
+
+		/* IGTK slots must not replace the data encryption algorithm. */
+		if (key_index < 4)
+			*cipher_ptr = key_cipher;
 
 		ret = sprdwl_add_key(vif->priv, vif->ctx_id,
 				     vif->key[pairwise][key_index],
 				     vif->key_len[pairwise][key_index],
 				     pairwise, key_index, key_seq,
-				     *cipher_ptr, mac_addr);
+				     key_cipher, mac_addr);
 	}
 
 	return ret;
@@ -722,7 +725,7 @@ static int sprdwl_cfg80211_add_key(struct wiphy *wiphy, struct wireless_dev *wde
 {
 	struct sprdwl_vif *vif = netdev_priv(wdev->netdev);
 
-	if (key_index > SPRDWL_MAX_KEY_INDEX ||
+	if (key_index > SPRDWL_MAX_KEY_INDEX || params->key_len < 0 ||
 	    params->key_len > WLAN_MAX_KEY_LEN) {
 		wl_ndev_log(L_ERR, vif->ndev, "%s key index %d / len %d out of bounds!\n",
 			    __func__, key_index, params->key_len);
@@ -751,7 +754,7 @@ static int sprdwl_cfg80211_add_key(struct wiphy *wiphy, struct net_device *ndev,
 {
 	struct sprdwl_vif *vif = netdev_priv(ndev);
 
-	if (key_index > SPRDWL_MAX_KEY_INDEX ||
+	if (key_index > SPRDWL_MAX_KEY_INDEX || params->key_len < 0 ||
 	    params->key_len > WLAN_MAX_KEY_LEN) {
 		wl_ndev_log(L_ERR, vif->ndev, "%s key index %d / len %d out of bounds!\n",
 			    __func__, key_index, params->key_len);
@@ -780,7 +783,7 @@ static int sprdwl_cfg80211_add_key(struct wiphy *wiphy, struct net_device *ndev,
 {
 	struct sprdwl_vif *vif = netdev_priv(ndev);
 
-	if (key_index > SPRDWL_MAX_KEY_INDEX ||
+	if (key_index > SPRDWL_MAX_KEY_INDEX || params->key_len < 0 ||
 	    params->key_len > WLAN_MAX_KEY_LEN) {
 		wl_ndev_log(L_ERR, vif->ndev, "%s key index %d / len %d out of bounds!\n",
 			    __func__, key_index, params->key_len);
@@ -2504,6 +2507,9 @@ void sprdwl_report_scan_result(struct sprdwl_vif *vif, u16 chan, s16 rssi,
 	u8 *ie;
 	size_t ielen;
 
+	if (len < offsetof(struct ieee80211_mgmt, u.probe_resp.variable))
+		return;
+
 	if (!priv->scan_request && !priv->sched_scan_request) {
 		wl_ndev_log(L_DBG, vif->ndev, "%s Unexpected event\n", __func__);
 		return;
@@ -2633,6 +2639,10 @@ void sprdwl_report_connection(struct sprdwl_vif *vif,
 		wl_ndev_log(L_ERR, vif->ndev, "%s No associate RESP IE!\n", __func__);
 		goto err;
 	}
+
+	if (conn_info->bea_ie_len && conn_info->bea_ie_len <
+	    offsetof(struct ieee80211_mgmt, u.probe_resp.variable))
+		goto err;
 
 	if (conn_info->bea_ie_len) {
 		wl_debug("%s channel num:%d\n", __func__, conn_info->channel);
@@ -2894,16 +2904,19 @@ static char p2p_action_name[][32] = {
 #define PUB_ACTION		(0x4)
 #define P2P_ACTION		(0x7f)
 
-#define	PRINT_BUF_LEN		(1 << 10)
-static char print_buf[PRINT_BUF_LEN];
 void sprdwl_cfg80211_dump_frame_prot_info(int send, int freq,
 					  const unsigned char *buf, int len)
 {
 	int idx = 0;
-	int type = ((*buf) & IEEE80211_FCTL_FTYPE) >> 2;
-	int subtype = ((*buf) & IEEE80211_FCTL_STYPE) >> 4;
+	int type, subtype;
 	int action, action_subtype;
+	char print_buf[256];
 	char *p = print_buf;
+
+	if (!buf || len < MAC_LEN)
+		return;
+	type = ((*buf) & IEEE80211_FCTL_FTYPE) >> 2;
+	subtype = ((*buf) & IEEE80211_FCTL_STYPE) >> 4;
 
 	idx += sprintf(p + idx, "[cfg80211] ");
 
@@ -2920,13 +2933,15 @@ void sprdwl_cfg80211_dump_frame_prot_info(int send, int freq,
 			       "%dMHz, not mgmt frame, type=%d, ", freq, type);
 	}
 
-	if (subtype == ACTION_TYPE) {
+	if (subtype == ACTION_TYPE && len > ACTION_SUBTYPE_OFFSET) {
 		action = *(buf + MAC_LEN);
 		action_subtype = *(buf + ACTION_SUBTYPE_OFFSET);
-		if (action == PUB_ACTION)
+		if (action == PUB_ACTION &&
+		    action_subtype < ARRAY_SIZE(pub_action_name))
 			idx += sprintf(p + idx, "PUB:%s ",
 				       pub_action_name[action_subtype]);
-		else if (action == P2P_ACTION)
+		else if (action == P2P_ACTION &&
+			 action_subtype < ARRAY_SIZE(p2p_action_name))
 			idx += sprintf(p + idx, "P2P:%s ",
 				       p2p_action_name[action_subtype]);
 		else
@@ -3034,41 +3049,33 @@ static void sprdwl_cfg80211_mgmt_frame_register(struct wiphy *wiphy,
 						struct mgmt_frame_regs *upd)
 {
 	struct sprdwl_vif *vif = container_of(wdev, struct sprdwl_vif, wdev);
-	struct sprdwl_work *misc_work;
-	struct sprdwl_reg_mgmt *reg_mgmt;
-	u16 mgmt_type;
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0))
-	u16 frame_type = BIT(upd->global_stypes << 4);
-	bool reg = false;
-#endif
+	unsigned int mgmt_type;
 
 	if (vif->mode == SPRDWL_MODE_NONE)
 		return;
 
-	mgmt_type = (frame_type & IEEE80211_FCTL_STYPE) >> 4;
-	if ((reg && test_and_set_bit(mgmt_type, &vif->mgmt_reg)) ||
-	    (!reg && !test_and_clear_bit(mgmt_type, &vif->mgmt_reg))) {
-		wl_ndev_log(L_DBG, wdev->netdev, "%s  mgmt %d has %sreg\n", __func__,
-			   frame_type, reg ? "" : "un");
-		return;
+	/* cfg80211 supplies a bitmap of subtypes for this interface. */
+	for (mgmt_type = 0; mgmt_type < 16; mgmt_type++) {
+		struct sprdwl_work *work;
+		struct sprdwl_reg_mgmt *reg_mgmt;
+		bool reg = !!(upd->interface_stypes & BIT(mgmt_type));
+
+		if (reg == test_bit(mgmt_type, &vif->mgmt_reg))
+			continue;
+		work = sprdwl_alloc_work(sizeof(*reg_mgmt));
+		if (!work)
+			return;
+		work->vif = vif;
+		work->id = SPRDWL_WORK_REG_MGMT;
+		reg_mgmt = (struct sprdwl_reg_mgmt *)work->data;
+		reg_mgmt->type = mgmt_type << 4;
+		reg_mgmt->reg = reg;
+		if (reg)
+			set_bit(mgmt_type, &vif->mgmt_reg);
+		else
+			clear_bit(mgmt_type, &vif->mgmt_reg);
+		sprdwl_queue_work(vif->priv, work);
 	}
-
-	wl_ndev_log(L_DBG, wdev->netdev, "frame_type %d, reg %d\n", frame_type, reg);
-
-	misc_work = sprdwl_alloc_work(sizeof(*reg_mgmt));
-	if (!misc_work) {
-		wl_ndev_log(L_ERR, wdev->netdev, "%s out of memory\n", __func__);
-		return;
-	}
-
-	misc_work->vif = vif;
-	misc_work->id = SPRDWL_WORK_REG_MGMT;
-
-	reg_mgmt = (struct sprdwl_reg_mgmt *)misc_work->data;
-	reg_mgmt->type = frame_type;
-	reg_mgmt->reg = reg;
-
-	sprdwl_queue_work(vif->priv, misc_work);
 }
 
 void sprdwl_report_remain_on_channel_expired(struct sprdwl_vif *vif)
@@ -4240,6 +4247,7 @@ struct sprdwl_priv *sprdwl_core_create(enum sprdwl_hw_type type,
 	wiphy = wiphy_new(&sprdwl_cfg80211_ops, sizeof(*priv));
 	if (!wiphy) {
 		wl_err("failed to allocate wiphy!\n");
+		sprdwl_cmd_deinit();
 		return NULL;
 	}
 	priv = wiphy_priv(wiphy);
@@ -4271,6 +4279,9 @@ struct sprdwl_priv *sprdwl_core_create(enum sprdwl_hw_type type,
 	ret = sprdwl_init_work(priv);
 	if (ret != 0) {
 		wl_err("sprdwl_init_work failed!\n");
+		g_sprdwl_priv = NULL;
+		wiphy_free(wiphy);
+		sprdwl_cmd_deinit();
 		return NULL;
 	}
 

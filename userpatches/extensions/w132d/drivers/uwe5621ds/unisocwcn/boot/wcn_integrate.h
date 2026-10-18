@@ -184,6 +184,7 @@ int wcn_get_module_status_changed(void);
 void wcn_set_module_status_changed(bool status);
 int marlin_reset_register_notify(void *callback_func, void *para);
 int marlin_reset_unregister_notify(void);
+void marlin_reset_notify(void);
 void wcn_set_module_state(bool status);
 
 int wcn_send_force_sleep_cmd(struct wcn_device *wcn_dev);

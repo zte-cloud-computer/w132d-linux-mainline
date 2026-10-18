@@ -86,67 +86,49 @@ static const struct proc_ops lpm_proc_btwrite_fops = {
 	.proc_release = single_release,
 };
 
-/*static int __init bluesleep_init(void)*/
-int  bluesleep_init(void)
+int bluesleep_init(void)
 {
-	int retval;
-	struct proc_dir_entry *ent;
-
 	bluetooth_dir = proc_mkdir("bluetooth", NULL);
-	if (bluetooth_dir == NULL) {
-		pr_info("Unable to create /proc/bluetooth directory");
-		remove_proc_entry("bluetooth", 0);
+	if (!bluetooth_dir)
 		return -ENOMEM;
-	}
 	sleep_dir = proc_mkdir("sleep", bluetooth_dir);
-	if (sleep_dir == NULL) {
-		pr_info("Unable to create /proc/%s directory", PROC_DIR);
-		remove_proc_entry("bluetooth", 0);
-		return -ENOMEM;
-	}
+	if (!sleep_dir)
+		goto remove_proc;
 
-	/* Creating read/write  entry */
-	ent = proc_create("btwrite", S_IRUGO | S_IWUSR | S_IWGRP, sleep_dir,
-		&lpm_proc_btwrite_fops); /*read/write */
-	if (ent == NULL) {
-		pr_info("Unable to create /proc/%s/btwake entry",
-			PROC_DIR);
-		retval = -ENOMEM;
-		goto fail;
-	}
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 16, 0)
-	tx_ws = wakeup_source_create("BT_TX_wakelock");
-	rx_ws = wakeup_source_create("BT_RX_wakelock");
-	wakeup_source_add(tx_ws);
-	wakeup_source_add(rx_ws);
-#endif
+	tx_ws = wakeup_source_register(NULL, "BT_TX_wakelock");
+	if (!tx_ws)
+		goto remove_proc;
+	rx_ws = wakeup_source_register(NULL, "BT_RX_wakelock");
+	if (!rx_ws)
+		goto unregister_tx;
+
+	if (!proc_create("btwrite", 0644, sleep_dir, &lpm_proc_btwrite_fops))
+		goto unregister_rx;
 	return 0;
 
-fail:
-	remove_proc_entry("btwrite", sleep_dir);
-	remove_proc_entry("sleep", bluetooth_dir);
-	remove_proc_entry("bluetooth", 0);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 16, 0)
-	wakeup_source_remove(tx_ws);
-	wakeup_source_remove(rx_ws);
-	wakeup_source_destroy(tx_ws);
-	wakeup_source_destroy(rx_ws);
-#endif
-	return retval;
+unregister_rx:
+	wakeup_source_unregister(rx_ws);
+	rx_ws = NULL;
+unregister_tx:
+	wakeup_source_unregister(tx_ws);
+	tx_ws = NULL;
+remove_proc:
+	proc_remove(bluetooth_dir);
+	bluetooth_dir = NULL;
+	sleep_dir = NULL;
+	return -ENOMEM;
 }
 
-/*static void __exit bluesleep_exit(void)*/
-void  bluesleep_exit(void)
+void bluesleep_exit(void)
 {
-	remove_proc_entry("btwrite", sleep_dir);
-	remove_proc_entry("sleep", bluetooth_dir);
-	remove_proc_entry("bluetooth", 0);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 16, 0)
-	wakeup_source_remove(tx_ws);
-	wakeup_source_remove(rx_ws);
-	wakeup_source_destroy(tx_ws);
-	wakeup_source_destroy(rx_ws);
-#endif
+	/* Removing proc entries drains writes before their wakeup sources go away. */
+	proc_remove(bluetooth_dir);
+	bluetooth_dir = NULL;
+	sleep_dir = NULL;
+	wakeup_source_unregister(rx_ws);
+	wakeup_source_unregister(tx_ws);
+	rx_ws = NULL;
+	tx_ws = NULL;
 }
 
 /*module_init(bluesleep_init);*/

@@ -237,6 +237,9 @@ static void sprdwl_rx_work_queue(struct work_struct *work)
 			pos = sprdwl_get_rx_data(intf, pos, &data, &tran_data,
 						 &len, intf->hif_offset);
 
+			if (len < sizeof(struct sprdwl_common_hdr))
+				goto free_buffer;
+
 			wl_debug("%s: rx type:%d, num = %d\n",
 				__func__, SPRDWL_HEAD_GET_TYPE(data), num);
 
@@ -245,7 +248,7 @@ static void sprdwl_rx_work_queue(struct work_struct *work)
 			 */
 			if (sprdwl_debug_level >= L_DBG) {
 				int print_len =
-					((struct sdiohal_puh *)tran_data)->len;
+					len;
 
 				if (print_len > 100)
 					print_len = 100;
@@ -314,7 +317,7 @@ static void sprdwl_rx_work_queue(struct work_struct *work)
 				if (msg->len > SPRDWL_MAX_CMD_RXLEN)
 					wl_err("err rx cmd too long:%d > %d\n",
 					       len, SPRDWL_MAX_CMD_RXLEN);
-				sprdwl_rx_rsp_process(priv, data);
+				sprdwl_rx_rsp_process(priv, data, len);
 				break;
 			case SPRDWL_TYPE_PKT_LOG:
 				if (sprdwl_pkt_log_save(intf, data) == 1)
@@ -325,7 +328,7 @@ static void sprdwl_rx_work_queue(struct work_struct *work)
 				if (msg->len > SPRDWL_MAX_CMD_RXLEN)
 					wl_err("err rx event too long:%d > %d\n",
 					       len, SPRDWL_MAX_CMD_RXLEN);
-				sprdwl_rx_event_process(priv, data);
+				sprdwl_rx_event_process(priv, data, len);
 				break;
 			case SPRDWL_TYPE_DATA_SPECIAL:
 				debug_ts_leave(RX_SDIO_PORT);
@@ -358,6 +361,7 @@ static void sprdwl_rx_work_queue(struct work_struct *work)
 				break;
 			}
 
+free_buffer:
 			/* Marlin3 should release buffer by ourself */
 			if (tran_data)
 				sprdwl_free_data(tran_data, msg->buffer_type);
@@ -499,7 +503,7 @@ static int sprdwl_netdev_poll_rx(struct napi_struct *napi, int budget)
 			sprdwl_hex_dump("rx data",
 					(unsigned char *)data, print_len);
 
-			if (sprdwl_sdio_process_credit(intf, data))
+			if (sprdwl_sdio_process_credit(intf, data, len))
 				goto free;
 
 			switch (SPRDWL_HEAD_GET_TYPE(data)) {

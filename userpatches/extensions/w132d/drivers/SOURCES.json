@@ -8,6 +8,8 @@
     "changes": [
       "Directly maintain the four imported codec source files.",
       "Keep one ES7202 and two microphone channels for W132D.",
+      "Make ES7202 reprobe safe and release codec clocks after component teardown.",
+      "Propagate ES7202 I2C failures through read-modify-write, mixer controls, mute, resume and component setup.",
       "Add the everest,es7202 binding and guard the optional I2C ID in OF probing."
     ]
   },
@@ -22,8 +24,15 @@
     },
     "changes": [
       "W132D native HCI transport and Marlin3E-only Park policy quirk.",
+      "Restore vendor setup on every Bluetooth power cycle; synchronize RX, reset notifications and SDIO callbacks with teardown, and unwind failed transport initialization.",
       "Firmware buffer ownership, DT device registration and rfkill fixes.",
-      "Management key storage and bounds checks.",
+      "Management key storage and bounds checks; install IGTK independently of data keys and preserve data cipher state.",
+      "Initialize Wi-Fi RX/TX before publishing channels, unwind allocation failures, and drain queued SDIO TX before teardown.",
+      "Handle every Bluetooth SDIO block with unsigned lengths; guard legacy WoBLE parsing and payload sizes, and defer HCI recovery until BSP reset completes.",
+      "Validate firmware ownership, short reads and packed image tables; preserve function-mask offsets when reloading a selected image.",
+      "Synchronize legacy reset callbacks with owner removal; return Wi-Fi TX nodes synchronously and stop the sender before channel rollback.",
+      "Bound Wi-Fi command and connection event parsing by received payload lengths; reject invalid peer indices and bound normal SDIO RX traversal.",
+      "Apply cfg80211 management registration bitmaps per interface; bound management-frame logging and avoid a shared log buffer.",
       "Use compile-time firmware response buffer sizes instead of variable-length kernel stack arrays.",
       "Integrate Linux 6.7 through 7.1 API adaptations; 6.19 changes already present behind version guards.",
       "Omit unused embedded USB firmware and vendor utility programs.",

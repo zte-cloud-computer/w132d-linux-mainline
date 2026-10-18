@@ -96,8 +96,9 @@ struct sprdwl_msg_buf *sprdwl_get_msg_buf(void *pdev,
 					u8 ctx_id);
 void sprdwl_tx_free_msg_buf(void *pdev, struct sprdwl_msg_buf *msg);
 int sprdwl_tx_msg_func(void *pdev, struct sprdwl_msg_buf *msg);
-int sprdwl_sdio_process_credit(void *pdev, void *data);
+int sprdwl_sdio_process_credit(void *pdev, void *data, int len);
 int sprdwl_tx_init(struct sprdwl_intf *dev);
+void sprdwl_tx_stop(struct sprdwl_intf *intf);
 void sprdwl_tx_deinit(struct sprdwl_intf *dev);
 int sprdwl_tx_filter_packet(struct sk_buff *skb, struct net_device *ndev);
 unsigned char sprdwl_find_index_using_addr(struct sprdwl_intf *dev);

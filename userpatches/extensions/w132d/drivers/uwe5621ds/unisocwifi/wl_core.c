@@ -572,6 +572,8 @@ static int wifi_exception_event(void)
 
 static int wifi_reset_callback(struct notifier_block *nb, unsigned long event, void *v)
 {
+	if (event != MARLIN_CP2_STS_ASSERTED)
+		return NOTIFY_DONE;
 	sprdwl_wifi_reset();
 	wifi_exception_event();
 	return NOTIFY_OK;
@@ -674,6 +676,10 @@ static int sprdwl_probe(struct platform_device *pdev)
 		goto err_tx_init;
 	}
 
+	ret = sprdwl_intf_start(intf);
+	if (ret)
+		goto err_intf_start;
+
 	ret = sprdwl_core_init(&pdev->dev, priv);
 	if (ret)
 		goto err_core_init;
@@ -686,22 +692,33 @@ static int sprdwl_probe(struct platform_device *pdev)
 	sprdwl_debugfs_init(intf);
 
 #ifdef CP2_RESET_SUPPORT
-	marlin_reset_callback_register(MARLIN_WIFI, &wifi_reset_notifier);
+	ret = marlin_reset_callback_register(MARLIN_WIFI, &wifi_reset_notifier);
+	if (ret) {
+		sprdwl_debugfs_deinit();
+		sprdwl_core_deinit(priv);
+		goto err_core_init;
+	}
 #endif
 
 	return ret;
 
 err_core_init:
+	sprdwl_tx_stop(intf);
+	sprdwl_intf_stop(intf);
+err_intf_start:
 	sprdwl_tx_deinit(intf);
 err_tx_init:
 	sprdwl_rx_deinit(intf);
 err_rx_init:
 	sprdwl_intf_deinit(intf);
 err_if_init:
-	sprdwl_core_free((struct sprdwl_priv *)intf->priv);
+	sprdwl_core_free(priv);
 err_core_create:
+	platform_set_drvdata(pdev, NULL);
+	sprdwl_dev = NULL;
 	kfree(intf);
 err:
+	stop_marlin(MARLIN_WIFI);
 	return ret;
 }
 
@@ -720,10 +737,14 @@ static int sprdwl_remove(struct platform_device *pdev)
 
 	sprdwl_debugfs_deinit();
 	sprdwl_core_deinit(priv);
-	sprdwl_tx_deinit(intf);
+	sprdwl_tx_stop(intf);
+	sprdwl_intf_stop(intf);
 	sprdwl_rx_deinit(intf);
+	sprdwl_tx_deinit(intf);
 	sprdwl_intf_deinit(intf);
 	sprdwl_core_free(priv);
+	platform_set_drvdata(pdev, NULL);
+	sprdwl_dev = NULL;
 	kfree(intf);
 	stop_marlin(MARLIN_WIFI);
 	wl_info("%s\n", __func__);
@@ -770,18 +791,30 @@ static int __init unisoc_wlan_init(void)
 			return ret;
 		}
 		unisoc_pdev = platform_device_alloc("unisoc_wifi", -1);
-		if (platform_device_add(unisoc_pdev) != 0)
-			wl_err("register platform device unisoc wifi failed\n");
+		if (!unisoc_pdev) {
+			ret = -ENOMEM;
+			goto unregister_driver;
+		}
+		ret = platform_device_add(unisoc_pdev);
+		if (ret) {
+			platform_device_put(unisoc_pdev);
+			unisoc_pdev = NULL;
+			goto unregister_driver;
+		}
 	}
 
+	return ret;
+
+unregister_driver:
+	platform_driver_unregister(&sprdwl_driver);
 	return ret;
 }
 
 static void __exit unisoc_wlan_exit(void)
 {
-    platform_driver_unregister(&sprdwl_driver);
-    if (unisoc_pdev)
-    	platform_device_del(unisoc_pdev);
+	if (unisoc_pdev)
+		platform_device_unregister(unisoc_pdev);
+	platform_driver_unregister(&sprdwl_driver);
 }
 
 module_init(unisoc_wlan_init);

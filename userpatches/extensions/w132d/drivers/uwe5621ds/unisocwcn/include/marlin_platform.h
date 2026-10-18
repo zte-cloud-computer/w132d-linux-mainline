@@ -25,9 +25,8 @@
 #define FALSE								(0)
 #define TRUE								(1)
 
-typedef int (*marlin_reset_callback) (void *para);
-extern marlin_reset_callback marlin_reset_func;
-extern void *marlin_callback_para;
+typedef void (*marlin_reset_callback)(void *para);
+void marlin_reset_notify(void);
 enum marlin_sub_sys {
 	MARLIN_BLUETOOTH = 0,
 	MARLIN_FM,
@@ -84,6 +83,8 @@ enum marlin_wake_host_en {
 
 enum marlin_cp2_status {
 	MARLIN_CP2_STS_ASSERTED = 0,
+	/* BSP has finished stopping both subsystems; recovery may power on. */
+	MARLIN_CP2_STS_RESET_DONE,
 };
 
 enum wcn_hw_type wcn_get_hw_if_type(void);

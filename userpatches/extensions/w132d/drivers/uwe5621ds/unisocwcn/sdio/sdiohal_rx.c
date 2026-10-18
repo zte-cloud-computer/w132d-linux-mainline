@@ -122,60 +122,54 @@ static int sdiohal_rx_list_parser(struct sdiohal_list_t *data_list,
 }
 
 /* for normal dma */
-static int sdiohal_rx_buf_parser(char *data_buf, int valid_len)
+static int sdiohal_rx_buf_parser(char *data_buf, int valid_len, int buf_len)
 {
 	struct sdiohal_data_t *p_data = sdiohal_get_data();
-	struct sdio_puh_t *puh = NULL;
-	struct sdiohal_list_t *data_list = NULL;
-	int inout = 0, channel;
-	unsigned char *p = NULL;
-	unsigned int parse_len;
+	struct sdio_puh_t *puh;
+	struct sdiohal_list_t *data_list;
+	unsigned char *p = (unsigned char *)data_buf;
+	unsigned int parse_len = 0, payload_len, step;
+	int channel;
 
-	puh = (struct sdio_puh_t *)data_buf;
-	for (parse_len = 0; parse_len < valid_len;) {
-		if (puh->eof != 0)
+	if (valid_len < 0 || buf_len < 0)
+		return -EINVAL;
+	while (parse_len < valid_len) {
+		if (buf_len < sizeof(*puh))
+			return -EINVAL;
+		puh = (struct sdio_puh_t *)p;
+		if (puh->eof)
 			break;
+		payload_len = puh->len + (puh->check_sum ? 2 : 0);
+		step = sizeof(*puh) + SDIOHAL_ALIGN_4BYTE(payload_len);
+		if (step > buf_len || payload_len >
+		    MAX_PAC_SIZE - SDIO_PUB_HEADER_SIZE)
+			return -EINVAL;
 
-		p = (unsigned char *)puh;
 		if (puh->type != 0xF) {
-			channel = sdiohal_hwtype_to_channel(inout,
-				puh->type, puh->subtype);
+			if (!payload_len)
+				return -EINVAL;
 			parse_len += puh->len;
-			if (puh->check_sum)
-				puh->len += 2;
-			if ((channel >= SDIO_CHANNEL_NUM) || (puh->len >
-				(MAX_PAC_SIZE - SDIO_PUB_HEADER_SIZE)) ||
-				(puh->len == 0)) {
-				sdiohal_err("%s skip type[%d]sub[%d]len[%d]\n",
-					    __func__, puh->type, puh->subtype,
-					    puh->len);
-				continue;
-			}
-			p_data->rx_packer_cnt++;
-
+			channel = sdiohal_hwtype_to_channel(0, puh->type, puh->subtype);
+			if (channel < 0 || channel >= SDIO_CHANNEL_NUM)
+				goto next;
+			puh->len = payload_len;
 			data_list = sdiohal_get_rx_mbuf_node(1);
 			if (!data_list)
 				return -ENOMEM;
 			data_list->mbuf_head = data_list->mbuf_tail;
-			data_list->mbuf_head->buf = (unsigned char *)puh;
-			data_list->mbuf_head->len = puh->len;
+			data_list->mbuf_head->buf = p;
+			data_list->mbuf_head->len = payload_len;
 			data_list->node_num = 1;
 			p_data->frag_ctl.pagecnt_bias--;
-
-			sdiohal_list_check(data_list, __func__, SDIOHAL_READ);
-			sdiohal_print_list_data(channel, data_list, __func__,
-						SDIOHAL_DATA_LEVEL);
-
-			sdiohal_data_list_assignment(data_list->mbuf_head,
-						     puh, channel);
+			p_data->rx_packer_cnt++;
+			sdiohal_data_list_assignment(data_list->mbuf_head, puh, channel);
 			kfree(data_list);
 		}
-		/* pointer to next packet */
-		p += sizeof(struct sdio_puh_t)
-			+ SDIOHAL_ALIGN_4BYTE(puh->len);
-		puh = (struct sdio_puh_t *)p;
+next:
+		/* Advance even when a packet belongs to an unknown channel. */
+		p += step;
+		buf_len -= step;
 	}
-
 	return 0;
 }
 
@@ -300,7 +294,7 @@ read_again:
 				*((unsigned int *)(rx_buf + (read_len - 8)));
 			sdiohal_debug("%s rx_dtbs:%d,valid len:%d\n",
 				      __func__, rx_dtbs, valid_len);
-			sdiohal_rx_buf_parser(rx_buf, valid_len);
+			sdiohal_rx_buf_parser(rx_buf, valid_len, read_len - 8);
 		}
 
 submit_list:

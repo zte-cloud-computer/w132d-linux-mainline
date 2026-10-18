@@ -3355,6 +3355,8 @@ bool handle_command(int argc, char* argv[], CRKScan *pScan)
 
 int main(int argc, char* argv[])
 {
+	// Deliver each progress line immediately when a launcher captures stdout.
+	setvbuf(stdout, NULL, _IOLBF, 0);
 	// Informational commands must work without USB access or a connected board.
 	if (argc == 1 || (argc == 2 &&
 	    (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h")))) {

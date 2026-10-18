@@ -37,7 +37,9 @@ sudo ./flash.sh
 ./flash.sh
 ```
 
-脚本识别 Loader / MaskROM，加载包内 loader，检查设备容量后按清单写入并完整回读。出现 `FLASH_OK` 后设备自动重启。失败时停止操作并查看[恢复指南](recovery.md)。
+脚本检查包内文件和设备型号，识别 Loader / MaskROM，加载包内 loader 并等待存储就绪，检查容量后按清单写入并完整回读。写入显示 rkdeveloptool 的原生百分比，回读校验显示进度条；出现 `FLASH_OK` 后设备自动重启。命令超时或失败时停止操作，处理方式见[恢复指南](recovery.md)。
+
+加载 loader 后 USB 列表仍可能显示 `Maskrom`，脚本通过实际读取存储信息判断是否就绪。
 
 刷写保留设备的 vendor storage / RKSS 区间，其他系统数据会被替换。
 

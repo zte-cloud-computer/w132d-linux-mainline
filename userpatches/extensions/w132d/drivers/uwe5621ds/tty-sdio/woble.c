@@ -163,60 +163,28 @@ int mtty_bt_read_conf(void)
 
 int woble_data_recv(const unsigned char *buf, int count)
 {
-	unsigned short opcode = 0;
-	unsigned char status = 0;
-	const unsigned char *p = 0;
-	const unsigned char *rxmsg = buf;
-	int left_length = count;
-	int pack_length = 0;
-	int last = 0;
 	int ret = -1;
 
-	if (count < 0) {
-		pr_err("%s count < 0!!!", __func__);
-	}
+	/* Only complete Command Complete/Status events carry an opcode. */
+	while (count >= 3 && buf[0] == HCI_EVT) {
+		unsigned int len = buf[2] + 3;
+		unsigned short opcode;
 
-	do {
-		rxmsg = buf + (count - left_length);
-		switch (rxmsg[PACKET_TYPE]) {
-		case HCI_EVT:
-			if (left_length < 3) {
-				pr_err("%s left_length <3 !!!!!", __func__);
-			}
-			pack_length = rxmsg[EVT_HEADER_SIZE];
-			pack_length += 3;
-
-			if (left_length - pack_length < 0) {
-				pr_err("%s left_length - pack_length <0 !!!!!", __func__);
-
-			}
-			switch (rxmsg[EVT_HEADER_EVENT]) {
-			default:
-			case BT_HCI_EVT_CMD_COMPLETE:
-				p = rxmsg + 4;
-				STREAM_TO_UINT16(opcode, p);
-				STREAM_TO_UINT8(status, p);
-				break;
-
-			case BT_HCI_EVT_CMD_STATUS:
-				p = rxmsg + 5;
-				STREAM_TO_UINT16(opcode, p);
-				status = rxmsg[3];
-				break;
-			}
-			last = left_length;
-			left_length -= pack_length;
+		if (len > count)
 			break;
-		default:
-			left_length = 0;
-			break;
+		if (buf[1] == BT_HCI_EVT_CMD_COMPLETE && len >= 7)
+			opcode = buf[4] | (buf[5] << 8);
+		else if (buf[1] == BT_HCI_EVT_CMD_STATUS && len == 7)
+			opcode = buf[5] | (buf[6] << 8);
+		else
+			opcode = 0;
+
+		if (hci_cmd.opcode && hci_cmd.opcode == opcode) {
+			up(&hci_cmd.wait);
+			ret = 0;
 		}
-	} while (left_length);
-
-	if (hci_cmd.opcode == opcode && hci_cmd.opcode) {
-		pr_info("%s opcode: 0x%04X, status: %d\n", __func__, opcode, status);
-		up(&hci_cmd.wait);
-		ret = 0;
+		buf += len;
+		count -= len;
 	}
 	return ret;
 }
@@ -240,24 +208,23 @@ int hci_cmd_send_sync(unsigned short opcode, struct HC_BT_HDR *py,
 
 	hci_cmd.opcode = opcode;
 	ret = marlin_sdio_write(msg_req, p - msg_req);
-	if (!ret) {
+	if (ret < 0) {
 		hci_cmd.opcode = 0;
-		pr_err("%s marlin_sdio_write fail", __func__);
-		return 0;
+		return ret;
 	}
 
-	if (down_timeout(&hci_cmd.wait, msecs_to_jiffies(CMD_TIMEOUT))) {
-		pr_err("%s CMD_TIMEOUT for CMD: 0x%04X", __func__, opcode);
-	}
+	ret = down_timeout(&hci_cmd.wait, msecs_to_jiffies(CMD_TIMEOUT));
 	hci_cmd.opcode = 0;
-
-	return 0;
+	return ret;
 }
 
 void hci_set_ap_sleep_mode(int is_shutdown, int is_resume)
 {
-	struct HC_BT_HDR *payload = (struct HC_BT_HDR *)vmalloc(sizeof(struct HC_BT_HDR) + 3);
+	struct HC_BT_HDR *payload = (struct HC_BT_HDR *)vmalloc(sizeof(struct HC_BT_HDR) + 6);
 	unsigned char *p;
+
+	if (!payload)
+		return;
 	p = payload->data;
 
 	payload->len = 6;
@@ -284,8 +251,11 @@ void hci_set_ap_sleep_mode(int is_shutdown, int is_resume)
 
 void hci_add_device_to_wakeup_list(mtty_bt_wake_t bt_wakeup_dev)
 {
-	struct HC_BT_HDR *payload = (struct HC_BT_HDR *)vmalloc(sizeof(struct HC_BT_HDR) + 3);
+	struct HC_BT_HDR *payload = (struct HC_BT_HDR *)vmalloc(sizeof(struct HC_BT_HDR) + 10);
 	unsigned char *p;
+
+	if (!payload)
+		return;
 	p = payload->data;
 
 	payload->len = 10;
@@ -307,9 +277,5 @@ void hci_add_device_to_wakeup_list(mtty_bt_wake_t bt_wakeup_dev)
 
 void hci_set_ap_start_sleep(void)
 {
-	struct HC_BT_HDR *payload = (struct HC_BT_HDR *)vmalloc(sizeof(struct HC_BT_HDR) + 3);
-
 	hci_cmd_send_sync(BT_HCI_OP_SET_STARTSLEEP, NULL, NULL);
-	vfree(payload);
-	return;
 }
