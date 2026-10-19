@@ -2953,7 +2953,13 @@ void sprdwl_cfg80211_dump_frame_prot_info(int send, int freq,
 }
 
 /* P2P related stuff */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 2, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 3, 0)
+static int sprdwl_cfg80211_remain_on_channel(struct wiphy *wiphy,
+					     struct wireless_dev *wdev,
+					     struct ieee80211_channel *chan,
+					     unsigned int duration,
+					     u64 cookie, const u8 *rx_addr)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(7, 2, 0)
 static int sprdwl_cfg80211_remain_on_channel(struct wiphy *wiphy,
 					     struct wireless_dev *wdev,
 					     struct ieee80211_channel *chan,
@@ -2972,20 +2978,28 @@ static int sprdwl_cfg80211_remain_on_channel(struct wiphy *wiphy,
 #endif
 	struct sprdwl_vif *vif = container_of(wdev, struct sprdwl_vif, wdev);
 	enum nl80211_channel_type channel_type = 0;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 3, 0)
+	u64 roc_cookie = cookie;
+#else
 	static u64 remain_index;
+	u64 roc_cookie = ++remain_index;
+#endif
 	int ret;
 
-	*cookie = vif->listen_cookie = ++remain_index;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 3, 0)
+	*cookie = roc_cookie;
+#endif
+	vif->listen_cookie = roc_cookie;
 	wl_ndev_log(L_DBG, wdev->netdev, "%s %d for %dms, cookie %lld\n",
-		    __func__, chan->center_freq, duration, *cookie);
+		    __func__, chan->center_freq, duration, roc_cookie);
 	memcpy(&vif->listen_channel, chan, sizeof(struct ieee80211_channel));
 
 	ret = sprdwl_remain_chan(vif->priv, vif->ctx_id, chan,
-				 channel_type, duration, cookie);
+				 channel_type, duration, &roc_cookie);
 	if (ret)
 		return ret;
 
-	cfg80211_ready_on_channel(wdev, *cookie, chan, duration, GFP_KERNEL);
+	cfg80211_ready_on_channel(wdev, roc_cookie, chan, duration, GFP_KERNEL);
 
 	return 0;
 }
@@ -3001,7 +3015,12 @@ static int sprdwl_cfg80211_cancel_remain_on_channel(struct wiphy *wiphy,
 	return sprdwl_cancel_remain_chan(vif->priv, vif->ctx_id, cookie);
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 3, 0)
+static int sprdwl_cfg80211_mgmt_tx(struct wiphy *wiphy,
+				   struct wireless_dev *wdev,
+				   struct cfg80211_mgmt_tx_params *params,
+				   u64 cookie)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0)
 static int sprdwl_cfg80211_mgmt_tx(struct wiphy *wiphy,
 				   struct wireless_dev *wdev,
 				   struct cfg80211_mgmt_tx_params *params,
@@ -3022,11 +3041,18 @@ static int sprdwl_cfg80211_mgmt_tx(struct wiphy *wiphy,
 	unsigned int wait = params->wait;
 	bool dont_wait_for_ack = params->dont_wait_for_ack;
 #endif
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 3, 0)
+	u64 tx_cookie = cookie;
+#else
 	static u64 mgmt_index;
+	u64 tx_cookie = ++mgmt_index;
+#endif
 	int ret = 0;
 
-	*cookie = ++mgmt_index;
-	wl_ndev_log(L_DBG, wdev->netdev, "%s cookie %lld\n", __func__, *cookie);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 3, 0)
+	*cookie = tx_cookie;
+#endif
+	wl_ndev_log(L_DBG, wdev->netdev, "%s cookie %lld\n", __func__, tx_cookie);
 
 	sprdwl_cfg80211_dump_frame_prot_info(1, chan->center_freq, buf, len);
 	/* send tx mgmt */
@@ -3034,10 +3060,10 @@ static int sprdwl_cfg80211_mgmt_tx(struct wiphy *wiphy,
 		ret = sprdwl_tx_mgmt(vif->priv, vif->ctx_id,
 				     ieee80211_frequency_to_channel
 				     (chan->center_freq), dont_wait_for_ack,
-				     wait, cookie, buf, len);
+				     wait, &tx_cookie, buf, len);
 		if (ret)
 			if (!dont_wait_for_ack)
-				cfg80211_mgmt_tx_status(wdev, *cookie, buf, len,
+				cfg80211_mgmt_tx_status(wdev, tx_cookie, buf, len,
 							0, GFP_KERNEL);
 	}
 

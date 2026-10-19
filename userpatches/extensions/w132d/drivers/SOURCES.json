@@ -35,6 +35,7 @@
       "Apply cfg80211 management registration bitmaps per interface; bound management-frame logging and avoid a shared log buffer.",
       "Use compile-time firmware response buffer sizes instead of variable-length kernel stack arrays.",
       "Integrate Linux 6.7 through 7.1 API adaptations; 6.19 changes already present behind version guards.",
+      "Accept cfg80211-assigned remain-on-channel and management TX cookies on Linux 7.3; preserve driver-assigned cookies on older kernels.",
       "Omit unused embedded USB firmware and vendor utility programs.",
       "Use the UWE5621DS source directory and board Kconfig option; preserve wire identifiers and module ABI."
     ],

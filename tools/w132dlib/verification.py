@@ -101,6 +101,10 @@ def patches(lock, jobs=4):
     run(["bash", "scripts/kconfig/merge_config.sh", "-m", ".config",
          ROOT / "userpatches/extensions/w132d/kernel.config"], cwd=tree, env=env)
     run(["make", "olddefconfig"], cwd=tree, env=env)
+    # Compile the maintained modules against the locked kernel API too;
+    # patch application and DT validation cannot catch C callback changes.
+    run(["make", f"-j{jobs}", "drivers/net/wireless/uwe5621ds/", "sound/soc/codecs/w132d/"],
+        cwd=tree, env=env)
     run(["make", f"-j{jobs}", "rockchip/rk3528-w132d.dtb"], cwd=tree, env=env)
     from .packages import check_dtb
     dtb = tree / "arch/arm64/boot/dts/rockchip/rk3528-w132d.dtb"
@@ -133,5 +137,6 @@ def patches(lock, jobs=4):
     strict_apply(uboot, sorted((ROOT / "userpatches/u-boot/w132d").glob("*.patch")))
     dest = ROOT / "out" / lock["version"]
     write_json(dest / "patch-verification.json", {"linux": lock["linux"], "inputs": lock["inputs"],
+                                                 "drivers": "passed",
                                                  "dtb_schema": "passed", "patches": "passed", "uboot_patches": "passed"})
-    print("Strict patches, DTB and maintained schemas passed")
+    print("Strict patches, maintained drivers, DTB and schemas passed")

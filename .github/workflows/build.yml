@@ -99,7 +99,7 @@ jobs:
         run: |
           docker run --rm -e CI=true -v "$PWD:/work" -v "$PWD/cache/check-tools/bin/actionlint:/usr/local/bin/actionlint:ro" w132d-check tools/w132d verify static
           docker run --rm -v "$PWD:/work" w132d-check tools/w132d verify tests
-      - name: Strict patches, DTB and schema gate
+      - name: Strict patches, board drivers, DTB and schema gate
         run: docker run --rm -v "$PWD:/work" w132d-check tools/w132d verify patches --jobs 4
       - uses: actions/upload-artifact@v7
         with:

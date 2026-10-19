@@ -10,6 +10,123 @@ DRIVER = Path(__file__).resolve().parents[1] / 'userpatches/extensions/w132d/dri
 
 @unittest.skipUnless(shutil.which('cc'), 'A host C compiler is required')
 class WifiDriver(unittest.TestCase):
+    def test_cfg80211_cookies_match_firmware_notifications_and_cancellation(self):
+        source = (DRIVER / 'cfg80211.c').read_text()
+        callbacks = source[source.index('/* P2P related stuff */'):
+                           source.index('static void sprdwl_cfg80211_mgmt_frame_register')]
+        code = r'''
+#include <assert.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+typedef uint8_t u8;
+typedef uint64_t u64;
+#define KERNEL_VERSION(a,b,c) (((a)<<16)+((b)<<8)+(c))
+#define GFP_KERNEL 0
+#define wl_ndev_log(...) ((void)0)
+#define container_of(p,t,m) ((t *)((char *)(p)-offsetof(t,m)))
+enum nl80211_channel_type { CHAN_NONE };
+struct wiphy { int unused; };
+struct wireless_dev { void *netdev; };
+struct ieee80211_channel { int center_freq; };
+struct sprdwl_vif {
+    struct wireless_dev wdev; void *priv; int ctx_id;
+    u64 listen_cookie; struct ieee80211_channel listen_channel;
+};
+struct cfg80211_mgmt_tx_params {
+    struct ieee80211_channel *chan; const u8 *buf; size_t len;
+    unsigned int wait; bool dont_wait_for_ack;
+};
+static u64 expected;
+static int command_error,ready,status,tx_calls,cancels;
+static int sprdwl_remain_chan(void *priv,int ctx,struct ieee80211_channel *chan,
+    enum nl80211_channel_type type,unsigned int duration,u64 *cookie) {
+    assert(*cookie==expected && duration==100 && chan->center_freq==2412);
+    return command_error;
+}
+static void cfg80211_ready_on_channel(struct wireless_dev *wdev,u64 cookie,
+    struct ieee80211_channel *chan,unsigned int duration,int flags) {
+    assert(cookie==expected && duration==100); ready++;
+}
+static int sprdwl_cancel_remain_chan(void *priv,int ctx,u64 cookie) {
+    assert(cookie==expected); cancels++; return 0;
+}
+static int ieee80211_frequency_to_channel(int freq) { assert(freq==2412); return 1; }
+static void sprdwl_cfg80211_dump_frame_prot_info(int tx,int freq,const u8 *buf,size_t len) {}
+static int sprdwl_tx_mgmt(void *priv,int ctx,int channel,bool no_ack,
+    unsigned int wait,u64 *cookie,const u8 *buf,size_t len) {
+    assert(*cookie==expected && channel==1 && len==1 && wait==50);
+    tx_calls++; return command_error;
+}
+static void cfg80211_mgmt_tx_status(struct wireless_dev *wdev,u64 cookie,
+    const u8 *buf,size_t len,bool ack,int flags) {
+    assert(cookie==expected && !ack && len==1); status++;
+}
+'''
+        code += callbacks
+        code += r'''
+struct callback_ops {
+    int (*roc)(struct wiphy *,struct wireless_dev *,struct ieee80211_channel *,unsigned int,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7,3,0)
+        u64,const u8 *);
+    int (*tx)(struct wiphy *,struct wireless_dev *,struct cfg80211_mgmt_tx_params *,u64);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(7,2,0)
+        u64 *,const u8 *);
+    int (*tx)(struct wiphy *,struct wireless_dev *,struct cfg80211_mgmt_tx_params *,u64 *);
+#else
+        u64 *);
+    int (*tx)(struct wiphy *,struct wireless_dev *,struct cfg80211_mgmt_tx_params *,u64 *);
+#endif
+};
+static const struct callback_ops ops={sprdwl_cfg80211_remain_on_channel,sprdwl_cfg80211_mgmt_tx};
+int main(void) {
+    struct wiphy wiphy={0}; struct sprdwl_vif vif={0};
+    struct ieee80211_channel chan={2412}; const u8 frame[]={0};
+    struct cfg80211_mgmt_tx_params params={.chan=&chan,.buf=frame,.len=1,.wait=50};
+    for(int i=1;i<=3;i++) {
+        command_error=i==2?-5:0;
+        params.dont_wait_for_ack=i==3;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7,3,0)
+        expected=UINT64_C(0xfedcba9876543200)+i;
+        assert(ops.roc(&wiphy,&vif.wdev,&chan,100,expected,NULL)==command_error);
+#else
+        u64 cookie=0;
+        expected=i;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7,2,0)
+        assert(ops.roc(&wiphy,&vif.wdev,&chan,100,&cookie,NULL)==command_error);
+#else
+        assert(ops.roc(&wiphy,&vif.wdev,&chan,100,&cookie)==command_error);
+#endif
+        assert(cookie==expected);
+#endif
+        assert(vif.listen_cookie==expected && vif.listen_channel.center_freq==2412);
+        assert(!sprdwl_cfg80211_cancel_remain_on_channel(&wiphy,&vif.wdev,expected));
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7,3,0)
+        expected=UINT64_C(0xabcdef0123456700)+i;
+        assert(ops.tx(&wiphy,&vif.wdev,&params,expected)==command_error);
+#else
+        cookie=0;
+        assert(ops.tx(&wiphy,&vif.wdev,&params,&cookie)==command_error);
+        assert(cookie==expected);
+#endif
+    }
+    assert(ready==2 && cancels==3 && tx_calls==3 && status==1);
+    command_error=-5; params.dont_wait_for_ack=true;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7,3,0)
+    assert(ops.tx(&wiphy,&vif.wdev,&params,expected)==-5);
+#else
+    u64 cookie=0; expected=4;
+    assert(ops.tx(&wiphy,&vif.wdev,&params,&cookie)==-5 && cookie==expected);
+#endif
+    assert(tx_calls==4 && status==1);
+    return 0;
+}
+'''
+        for minor in (1, 2, 3):
+            with self.subTest(kernel=f'7.{minor}'):
+                execute(f'#define LINUX_VERSION_CODE KERNEL_VERSION(7,{minor},0)\n' + code)
+
     def test_igtk_is_installed_without_changing_data_ciphers(self):
         code = r'''
 #include <assert.h>

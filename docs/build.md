@@ -62,7 +62,7 @@ docker run --rm -v "$PWD:/work" w132d-check tools/w132d verify tests
 docker run --rm -v "$PWD:/work" w132d-check tools/w132d verify patches --jobs 4
 ```
 
-`patches` 检查使用当前锁定清单，包含严格补丁应用、DTB 编译和 schema 检查。生成目录为 `cache/verify/<version>/`；同版本重复运行前需移除对应目录，或先保留失败现场用于排查。
+`patches` 检查使用当前锁定清单，包含严格补丁应用、板级无线与音频驱动编译、DTB 编译和 schema 检查。生成目录为 `cache/verify/<version>/`；同版本重复运行前需移除对应目录，或先保留失败现场用于排查。
 
 完整包和镜像检查：
 
