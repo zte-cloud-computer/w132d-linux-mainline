@@ -69,18 +69,14 @@ diff --git a/Documentation/devicetree/bindings/sound/rockchip,pdm.yaml b/Documen
 diff --git a/Documentation/devicetree/bindings/arm/rockchip.yaml b/Documentation/devicetree/bindings/arm/rockchip.yaml
 --- a/Documentation/devicetree/bindings/arm/rockchip.yaml
 +++ b/Documentation/devicetree/bindings/arm/rockchip.yaml
-@@ -70,6 +70,11 @@
-         items:
-           - const: ariaboard,photonicat
-           - const: rockchip,rk3568
-+
+@@ -68,2 +68,7 @@
+ 
 +      - description: ZTE Cloud Computer W132D
 +        items:
 +          - const: zte,w132d
 +          - const: rockchip,rk3528
- 
-       - description: ArmSoM Sige1 board
-         items:
++
+       - description: Ariaboard Photonicat
 diff --git a/Documentation/devicetree/bindings/vendor-prefixes.yaml b/Documentation/devicetree/bindings/vendor-prefixes.yaml
 --- a/Documentation/devicetree/bindings/vendor-prefixes.yaml
 +++ b/Documentation/devicetree/bindings/vendor-prefixes.yaml

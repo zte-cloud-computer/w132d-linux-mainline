@@ -359,16 +359,11 @@ YCbCr 4:2:0 and deep-color negotiation remain unsupported.
 
 --- a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
 +++ b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
-@@ -4,7 +4,9 @@
-  */
- 
+@@ -6,2 +6,4 @@
  #include <linux/clk.h>
 +#include <linux/gpio/consumer.h>
- #include <linux/hw_bitfield.h>
 +#include <linux/interrupt.h>
- #include <linux/mfd/syscon.h>
- #include <linux/module.h>
- #include <linux/platform_device.h>
+ #include <linux/hw_bitfield.h>
 @@ -51,6 +53,12 @@
  #define RK3399_GRF_SOC_CON20		0x6250
  #define RK3399_HDMI_LCDC_SEL		BIT(6)
@@ -382,14 +377,12 @@ YCbCr 4:2:0 and deep-color negotiation remain unsupported.
  #define RK3568_GRF_VO_CON1		0x0364
  #define RK3568_HDMI_SDAIN_MSK		BIT(15)
  #define RK3568_HDMI_SCLIN_MSK		BIT(14)
-@@ -80,6 +88,7 @@
- 	struct clk *grf_clk;
+@@ -81,4 +89,5 @@
  	struct dw_hdmi *hdmi;
  	struct phy *phy;
 +	struct gpio_desc *hpd_gpio;
  };
  
- static struct rockchip_hdmi *to_rockchip_hdmi(struct drm_encoder *encoder)
 @@ -409,6 +418,79 @@
  	dw_hdmi_rk3328_read_hpd(dw_hdmi, data);
  }
@@ -831,9 +824,7 @@ YCbCr 4:2:0 and deep-color negotiation remain unsupported.
  
  	if (vcstate->output_mode == ROCKCHIP_OUT_MODE_AAAA &&
  	    !(vp_data->feature & VOP2_VP_FEATURE_OUTPUT_10BIT))
-@@ -1800,7 +1858,12 @@
- 		}
- 	}
+@@ -1802,3 +1860,8 @@
  
 -	clk_set_rate(vp->dclk, clock);
 +	ret = clk_set_rate(vp->dclk, clock);
@@ -842,8 +833,6 @@ YCbCr 4:2:0 and deep-color negotiation remain unsupported.
 +			vp->id, ret);
 +		goto err_standby;
 +	}
- 
- 	vop2_post_config(crtc);
  
 @@ -1812,6 +1875,17 @@
  

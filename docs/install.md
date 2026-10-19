@@ -26,7 +26,7 @@ chmod +x flash.sh tools/*/rkdeveloptool
 
 输出 `FLASH_DRY_RUN_OK` 表示包内文件、布局和工具摘要检查通过，此步骤不访问 USB。
 
-1. 设备断电，按住 HDMI 旁的 Reset 针孔按键。
+1. 设备断电，按住 USB 3.0 口 旁的 Reset 针孔按键。
 2. 保持按住，接通电源并用 USB 数据线直连电脑，约五秒后松开。电脑只连接一台 Rockchip 设备。
 3. 运行对应平台的刷写命令，阅读提示后输入 `yes`。
 
